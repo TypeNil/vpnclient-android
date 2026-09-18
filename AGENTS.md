@@ -12,7 +12,7 @@ before making structural changes.
   user or network data.
 - **Engine isolation**: code outside `core.engine.*` must not reference
   libbox/sing-box (or whichever core is selected — see
-  `docs/adr/ADR-0001-vpn-core.md`) types. The UI talks to `VpnController`
+  `docs/adr/ADR-0001-vpn-core.md`) types. The UI talks to `ConnectionManager`
   and `VpnConnectionState`, never to the core directly.
 - **Treat imported subscriptions as hostile input**: size limits, typed
   parse errors, no eval, no arbitrary file access.

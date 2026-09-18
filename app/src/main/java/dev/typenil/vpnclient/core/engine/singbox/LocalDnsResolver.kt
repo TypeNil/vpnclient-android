@@ -10,6 +10,7 @@ import io.nekohasekai.libbox.LocalDNSTransport
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -37,21 +38,31 @@ class LocalDnsResolver(
         runBlocking {
             suspendCoroutine { continuation ->
                 val signal = CancellationSignal()
+                val resumed = AtomicBoolean(false)
                 ctx.onCancel(CancelFunc {
-                    signal.cancel()
-                    continuation.resumeWithException(CancellationException())
+                    if (resumed.compareAndSet(false, true)) {
+                        signal.cancel()
+                        continuation.resumeWithException(CancellationException())
+                    }
                 })
                 val callback = object : DnsResolver.Callback<ByteArray> {
                     override fun onAnswer(answer: ByteArray, rcode: Int) {
-                        if (rcode == 0) ctx.rawSuccess(answer) else ctx.errorCode(rcode)
-                        continuation.resume(Unit)
+                        if (resumed.compareAndSet(false, true)) {
+                            if (rcode == 0) ctx.rawSuccess(answer) else ctx.errorCode(rcode)
+                            continuation.resume(Unit)
+                        }
                     }
 
                     override fun onError(error: DnsResolver.DnsException) {
-                        (error.cause as? ErrnoException)?.let {
-                            ctx.errnoCode(it.errno)
-                            continuation.resume(Unit)
-                        } ?: continuation.resumeWithException(error)
+                        if (resumed.compareAndSet(false, true)) {
+                            val errno = (error.cause as? ErrnoException)?.errno
+                            if (errno != null) {
+                                ctx.errnoCode(errno)
+                                continuation.resume(Unit)
+                            } else {
+                                continuation.resumeWithException(error)
+                            }
+                        }
                     }
                 }
                 DnsResolver.getInstance().rawQuery(
@@ -92,25 +103,35 @@ class LocalDnsResolver(
         defaultNetwork: android.net.Network,
     ) = suspendCoroutine { continuation ->
         val signal = CancellationSignal()
+        val resumed = AtomicBoolean(false)
         ctx.onCancel(CancelFunc {
-            signal.cancel()
-            continuation.resumeWithException(CancellationException())
+            if (resumed.compareAndSet(false, true)) {
+                signal.cancel()
+                continuation.resumeWithException(CancellationException())
+            }
         })
         val callback = object : DnsResolver.Callback<Collection<InetAddress>> {
             override fun onAnswer(answer: Collection<InetAddress>, rcode: Int) {
-                if (rcode == 0) {
-                    ctx.success(answer.joinToString("\n") { it.hostAddress.orEmpty() })
-                } else {
-                    ctx.errorCode(rcode)
+                if (resumed.compareAndSet(false, true)) {
+                    if (rcode == 0) {
+                        ctx.success(answer.joinToString("\n") { it.hostAddress.orEmpty() })
+                    } else {
+                        ctx.errorCode(rcode)
+                    }
+                    continuation.resume(Unit)
                 }
-                continuation.resume(Unit)
             }
 
             override fun onError(error: DnsResolver.DnsException) {
-                (error.cause as? ErrnoException)?.let {
-                    ctx.errnoCode(it.errno)
-                    continuation.resume(Unit)
-                } ?: continuation.resumeWithException(error)
+                if (resumed.compareAndSet(false, true)) {
+                    val errno = (error.cause as? ErrnoException)?.errno
+                    if (errno != null) {
+                        ctx.errnoCode(errno)
+                        continuation.resume(Unit)
+                    } else {
+                        continuation.resumeWithException(error)
+                    }
+                }
             }
         }
         val type = when {
