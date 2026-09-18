@@ -81,12 +81,17 @@ class ConfigCompilerTest {
     }
 
     @Test
-    fun `missing selection falls back to first node`() {
-        val config = compiler.build(listOf(node("n1"), node("n2")), "gone", true)
+    fun `null selection falls back to first node`() {
+        val config = compiler.build(listOf(node("n1"), node("n2")), null, true)
         val selector = json.parseToJsonElement(config.configJson)
             .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
         assertEquals("n1", selector["default"]!!.jsonPrimitive.content)
         assertNotNull(config.node)
+    }
+
+    @Test(expected = dev.typenil.vpnclient.core.engine.EngineError.InvalidConfig::class)
+    fun `stale selection rejected instead of silent fallback`() {
+        compiler.build(listOf(node("n1"), node("n2")), "gone", true)
     }
 
     @Test(expected = IllegalArgumentException::class)
