@@ -47,6 +47,7 @@ class SubscriptionFetcher @Inject constructor(
     companion object {
         private const val TAG = "SubscriptionFetcher"
         private const val MAX_BODY_BYTES = 8L * 1024 * 1024 // 8 MiB — generous for node lists
+        private const val MAX_REDIRECTS = 5
 
         /**
          * The panel chooses a response format from the path suffix and/or User-Agent.
@@ -57,30 +58,62 @@ class SubscriptionFetcher @Inject constructor(
         const val USER_AGENT = "sing-box/1.13.0 (VPNClient; android)"
     }
 
+    // Redirects are followed manually so HWID headers are only sent to the
+    // original host — OkHttp would otherwise leak them cross-host.
+    private val noRedirectClient by lazy {
+        client.newBuilder().followRedirects(false).build()
+    }
+
     suspend fun fetch(url: String, hwid: String?): FetchedSubscription =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .apply {
-                    if (hwid != null) {
-                        header("x-hwid", hwid)
-                        header("x-device-os", "android")
-                        header("x-ver-os", android.os.Build.VERSION.RELEASE ?: "unknown")
-                        header("x-device-model", android.os.Build.MODEL ?: "unknown")
-                    }
-                }
-                .build()
-
-            val response = try {
-                client.newCall(request).execute()
-            } catch (e: java.net.SocketTimeoutException) {
-                throw SubscriptionError.Timeout
-            } catch (e: IOException) {
-                throw SubscriptionError.Network
+            val origin = try {
+                url.toHttpUrl()
+            } catch (e: Exception) {
+                throw SubscriptionError.ParseFailed("bad url")
             }
+            var current = origin
+            var redirectsLeft = MAX_REDIRECTS
+            while (true) {
+                val sendHwid = hwid != null && current.host == origin.host
+                val request = Request.Builder()
+                    .url(current)
+                    .header("User-Agent", USER_AGENT)
+                    .apply {
+                        if (sendHwid) {
+                            header("x-hwid", hwid!!)
+                            header("x-device-os", "android")
+                            header("x-ver-os", android.os.Build.VERSION.RELEASE ?: "unknown")
+                            header("x-device-model", android.os.Build.MODEL ?: "unknown")
+                        }
+                    }
+                    .build()
 
-            response.use { resp ->
+                val response = try {
+                    noRedirectClient.newCall(request).execute()
+                } catch (e: java.net.SocketTimeoutException) {
+                    throw SubscriptionError.Timeout
+                } catch (e: IOException) {
+                    throw SubscriptionError.Network
+                }
+
+                if (response.isRedirect && redirectsLeft > 0) {
+                    val location = response.header("Location")
+                    response.close()
+                    if (location == null) throw SubscriptionError.Http(response.code, current.host)
+                    current = current.resolve(location)
+                        ?: throw SubscriptionError.Http(response.code, current.host)
+                    redirectsLeft--
+                    continue
+                }
+
+                return@withContext readResponse(response, url)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            error("unreachable")
+        }
+
+    private fun readResponse(response: okhttp3.Response, url: String): FetchedSubscription =
+        response.use { resp ->
                 val headers = resp.headers
                 if (!resp.isSuccessful) {
                     throw mapHttpError(url, resp.code, headers)
@@ -116,11 +149,10 @@ class SubscriptionFetcher @Inject constructor(
                     announce = decodeHeaderValue(headers["announce"]),
                     updateIntervalMinutes = headers["profile-update-interval"]?.toIntOrNull(),
                     hwidHeaders = headers.names()
-                        .filter { it.startsWith("x-hwid") || it.startsWith("X-Hwid") }
+                        .filter { it.lowercase().startsWith("x-hwid") }
                         .associateWith { headers[it]!! },
                 )
             }
-        }
 
     private fun mapHttpError(url: String, code: Int, headers: okhttp3.Headers): SubscriptionError {
         // Remnawave returns 404 both for an unknown subscription and for a missing/invalid

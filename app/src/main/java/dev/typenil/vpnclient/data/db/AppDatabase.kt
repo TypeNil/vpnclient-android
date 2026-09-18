@@ -94,34 +94,42 @@ interface SubscriptionDao {
 }
 
 @Dao
-interface NodeDao {
+abstract class NodeDao {
     @Query("SELECT * FROM nodes WHERE subscriptionId = :subscriptionId ORDER BY position")
-    suspend fun forSubscription(subscriptionId: Long): List<NodeEntity>
+    abstract suspend fun forSubscription(subscriptionId: Long): List<NodeEntity>
 
     @Query(
         """SELECT * FROM nodes WHERE subscriptionId IN
             (SELECT id FROM subscriptions WHERE enabled = 1)
             ORDER BY subscriptionId, position""",
     )
-    fun observeEnabled(): Flow<List<NodeEntity>>
+    abstract fun observeEnabled(): Flow<List<NodeEntity>>
 
     @Query(
         """SELECT * FROM nodes WHERE subscriptionId IN
             (SELECT id FROM subscriptions WHERE enabled = 1)""",
     )
-    suspend fun getEnabled(): List<NodeEntity>
+    abstract suspend fun getEnabled(): List<NodeEntity>
 
     @Query("SELECT * FROM nodes WHERE id = :id")
-    suspend fun get(id: String): NodeEntity?
+    abstract suspend fun get(id: String): NodeEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(nodes: List<NodeEntity>)
+    abstract suspend fun upsertAll(nodes: List<NodeEntity>)
 
     @Query("DELETE FROM nodes WHERE subscriptionId = :subscriptionId")
-    suspend fun deleteForSubscription(subscriptionId: Long)
+    abstract suspend fun deleteForSubscription(subscriptionId: Long)
 
     @Query("SELECT COUNT(*) FROM nodes WHERE subscriptionId = :subscriptionId")
-    suspend fun countForSubscription(subscriptionId: Long): Int
+    abstract suspend fun countForSubscription(subscriptionId: Long): Int
+
+    /** Delete + insert as one transaction — a mid-write failure can't
+     *  leave a subscription with a partial node list. */
+    @Transaction
+    open suspend fun replaceForSubscription(subscriptionId: Long, nodes: List<NodeEntity>) {
+        deleteForSubscription(subscriptionId)
+        upsertAll(nodes)
+    }
 }
 
 @Database(

@@ -35,27 +35,39 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
             ?: throw SubscriptionError.EmptyResult()
 
         val nodes = outbounds.mapNotNull { element ->
-            val obj = element as? JsonObject ?: return@mapNotNull null
-            val type = obj["type"]?.jsonPrimitive?.contentOrNull?.lowercase()
-                ?: return@mapNotNull null
-            val protocol = NODE_TYPES[type] ?: return@mapNotNull null
-            val tag = obj["tag"]?.jsonPrimitive?.contentOrNull
-            val server = obj["server"]?.jsonPrimitive?.contentOrNull ?: ""
-            val port = obj["server_port"]?.jsonPrimitive?.intOrNull ?: 0
-            val id = stableNodeId(subscriptionId, type, server, port, "${tag.orEmpty()}$type$server$port")
-            ProxyNode(
-                id = id,
-                name = tag?.takeIf { it.isNotBlank() } ?: "$server:$port",
-                protocol = protocol,
-                server = server,
-                port = port,
-                outboundJson = JsonObject(obj + ("tag" to JsonPrimitive(id))).toString(),
-                rawUri = null,
-                subscriptionId = subscriptionId,
-            )
+            runCatching { toNode(element, subscriptionId) }.getOrNull()
         }
         if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
         return nodes
+    }
+
+    private fun toNode(element: kotlinx.serialization.json.JsonElement, subscriptionId: Long): ProxyNode? {
+        val obj = element as? JsonObject ?: return null
+        val type = obj["type"]?.jsonPrimitive?.contentOrNull?.lowercase()
+            ?: return null
+        val protocol = NODE_TYPES[type] ?: return null
+        val tag = obj["tag"]?.jsonPrimitive?.contentOrNull
+        val server = obj["server"]?.jsonPrimitive?.contentOrNull ?: ""
+        val port = obj["server_port"]?.jsonPrimitive?.intOrNull
+            ?: obj["server_port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: 0
+        val id = stableNodeId(subscriptionId, type, server, port, "${tag.orEmpty()}$type$server$port")
+        // Strip fields that reference outbounds/DNS servers we don't compile —
+        // a verbatim `detour` or foreign `domain_resolver` would fail checkConfig.
+        val cleaned = JsonObject(
+            obj - "detour" - "domain_resolver" - "default_domain_resolver" +
+                ("tag" to JsonPrimitive(id)),
+        )
+        return ProxyNode(
+            id = id,
+            name = tag?.takeIf { it.isNotBlank() } ?: "$server:$port",
+            protocol = protocol,
+            server = server,
+            port = port,
+            outboundJson = cleaned.toString(),
+            rawUri = null,
+            subscriptionId = subscriptionId,
+        )
     }
 
     private companion object {

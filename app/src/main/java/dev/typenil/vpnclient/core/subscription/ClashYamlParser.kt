@@ -16,7 +16,9 @@ import dev.typenil.vpnclient.core.subscription.parse.vmessOutbound
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.JsonObject
+import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 
 /**
  * Extracts nodes from a Clash/Mihomo config's `proxies:` list and re-emits them
@@ -28,7 +30,9 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
 
     override fun parse(body: String, subscriptionId: Long): List<ProxyNode> {
         val loaded = try {
-            Yaml().load<Any?>(body)
+            // SafeConstructor: subscription YAML is untrusted input — never
+            // instantiate arbitrary classes via !!-tags.
+            Yaml(SafeConstructor(LoaderOptions())).load<Any?>(body)
         } catch (e: Exception) {
             throw SubscriptionError.ParseFailed("invalid clash yaml")
         }
@@ -143,7 +147,12 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             else -> return null
         }
 
-        val id = stableNodeId(subscriptionId, type, server, port, "${name.orEmpty()}$type$server$port")
+        // Include the credential: two nodes differing only by password must
+        // not collide into the same id/tag.
+        val id = stableNodeId(
+            subscriptionId, type, server, port,
+            "${name.orEmpty()}$type$server$port$credential",
+        )
         return ProxyNode(
             id = id,
             name = name ?: "$server:$port",

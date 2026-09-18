@@ -70,8 +70,7 @@ class SubscriptionRepository @Inject constructor(
             val nodes = dispatcher.parse(classified.format, classified.body, id)
             require(nodes.isNotEmpty())
 
-            nodeDao.deleteForSubscription(id)
-            nodeDao.upsertAll(nodes.mapIndexed { index, n ->
+            nodeDao.replaceForSubscription(id, nodes.mapIndexed { index, n ->
                 NodeEntity(
                     id = n.id,
                     subscriptionId = id,
@@ -92,8 +91,9 @@ class SubscriptionRepository @Inject constructor(
                 supportUrl = fetched.supportUrl,
                 updateIntervalMinutes = fetched.updateIntervalMinutes,
             )
-            // Update display name from profile-title if the user didn't set one.
-            if (!fetched.profileTitle.isNullOrBlank()) {
+            // Apply profile-title only when the name is still the auto-derived
+            // host — never overwrite a name the user typed.
+            if (!fetched.profileTitle.isNullOrBlank() && sub.name == deriveName(sub.url)) {
                 subscriptionDao.update(sub.copy(name = fetched.profileTitle))
             }
             SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} fmt=${classified.format}")
@@ -103,9 +103,11 @@ class SubscriptionRepository @Inject constructor(
             subscriptionDao.markAttempt(id, attemptAt, e.safeMessage())
             Result.failure(e)
         } catch (e: Exception) {
-            SecureLog.w(TAG, "refresh failed sub=$id: ${e.message}")
-            subscriptionDao.markAttempt(id, attemptAt, "unexpected: ${e.message}")
-            Result.failure(SubscriptionError.ParseFailed(e.message ?: "unknown"))
+            // e.message can embed the request URL — persist a fixed string
+            // and redact what reaches logcat.
+            SecureLog.w(TAG, "refresh failed sub=$id: ${e.javaClass.simpleName}", e)
+            subscriptionDao.markAttempt(id, attemptAt, "unexpected error")
+            Result.failure(SubscriptionError.ParseFailed(e.javaClass.simpleName))
         }
     }
 
