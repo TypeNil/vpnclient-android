@@ -8,20 +8,25 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- allowBackup=false: the node DB and settings store proxy credentials
+         and subscription URLs — they must not leave the device via backup.
+         usesCleartextTraffic: subscription endpoints are user-supplied and many
+         still serve plain HTTP; it only affects the app's own OkHttp calls
+         (subscription fetch), never TUN-routed traffic. -->
     <application
         android:name=".VpnClientApp"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.VPNClient">
+        android:theme="@style/Theme.VPNClient"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.VPNClient"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
