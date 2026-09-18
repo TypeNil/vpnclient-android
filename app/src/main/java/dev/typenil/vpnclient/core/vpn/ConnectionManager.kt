@@ -63,6 +63,7 @@ class ConnectionManager @Inject constructor(
 
     private var engine: VpnEngine? = null
     private var statsJob: kotlinx.coroutines.Job? = null
+    private var eventsJob: kotlinx.coroutines.Job? = null
 
     /** User pressed Connect. */
     fun connect() {
@@ -72,6 +73,7 @@ class ConnectionManager @Inject constructor(
                     is VpnConnectionState.Connected,
                     is VpnConnectionState.Connecting,
                     is VpnConnectionState.Reconnecting,
+                    is VpnConnectionState.Stopping,
                     -> return@withLock
                     else -> Unit
                 }
@@ -109,6 +111,11 @@ class ConnectionManager @Inject constructor(
         _prepareIntent.value = null
         scope.launch {
             mutex.withLock {
+                // Only a consent we actually requested counts — a duplicate or
+                // stale result must not launch a second service.
+                if (_state.value !is VpnConnectionState.PermissionRequired) {
+                    return@withLock
+                }
                 val config = pendingConfig
                 if (!granted) {
                     pendingConfig = null
@@ -151,14 +158,18 @@ class ConnectionManager @Inject constructor(
     fun attachEngine(engine: VpnEngine) {
         this.engine = engine
         statsJob?.cancel()
+        eventsJob?.cancel()
         val node = (pendingConfig?.node)
         statsJob = scope.launch {
             engine.stats.collect { stats ->
                 val current = _state.value
-                if (current is VpnConnectionState.Connected) {
-                    _state.value = current.copy(stats = stats)
-                } else {
-                    _state.value = VpnConnectionState.Connected(
+                when {
+                    current is VpnConnectionState.Connected -> {
+                        _state.value = current.copy(stats = stats)
+                    }
+                    // Late stats must not resurrect Connected while tearing down.
+                    current is VpnConnectionState.Stopping -> Unit
+                    else -> _state.value = VpnConnectionState.Connected(
                         node = node ?: return@collect,
                         since = Instant.now(),
                         stats = stats,
@@ -166,7 +177,7 @@ class ConnectionManager @Inject constructor(
                 }
             }
         }
-        scope.launch {
+        eventsJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
                     is EngineEvent.Failed -> _state.value = VpnConnectionState.Error(
@@ -181,6 +192,8 @@ class ConnectionManager @Inject constructor(
     fun detachEngine() {
         statsJob?.cancel()
         statsJob = null
+        eventsJob?.cancel()
+        eventsJob = null
         engine = null
     }
 

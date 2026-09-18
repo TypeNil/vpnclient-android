@@ -66,6 +66,7 @@ class NetworkMonitor(
         callback = null
         defaultNetwork = null
         listener = null
+        lastPushedInterface = null
     }
 
     /** Core calls this to (un)register its default-interface listener. */
@@ -74,20 +75,31 @@ class NetworkMonitor(
         pushDefaultInterface(defaultNetwork)
     }
 
+    @Volatile
+    private var lastPushedInterface: String? = null
+
     private fun pushDefaultInterface(network: Network?) {
         val target = listener ?: return
         if (network == null) {
-            target.updateDefaultInterface("", -1, false, false)
+            if (lastPushedInterface != null) {
+                lastPushedInterface = null
+                target.updateDefaultInterface("", -1, false, false)
+            }
             return
         }
         // LinkProperties may lag behind the callback; retry briefly like SFA.
         scope.launch(Dispatchers.IO) {
             repeat(10) {
+                // Re-read the listener — stop() may have detached it while we slept.
+                val current = listener ?: return@launch
                 val interfaceName = connectivity.getLinkProperties(network)?.interfaceName
                 val index = interfaceName
                     ?.let { runCatching { NetworkInterface.getByName(it)?.index }.getOrNull() }
                 if (interfaceName != null && index != null) {
-                    target.updateDefaultInterface(interfaceName, index, false, false)
+                    if (interfaceName != lastPushedInterface) {
+                        lastPushedInterface = interfaceName
+                        current.updateDefaultInterface(interfaceName, index, false, false)
+                    }
                     return@launch
                 }
                 kotlinx.coroutines.delay(100)

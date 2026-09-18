@@ -10,6 +10,8 @@ import dev.typenil.vpnclient.core.engine.CidrAddress
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
+import dev.typenil.vpnclient.core.engine.EngineNotification
+import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.OutboundItemInfo
@@ -50,6 +52,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -65,14 +69,10 @@ class SingBoxEngine(
     private val context: Context,
     private val platform: EnginePlatform,
     private val scope: CoroutineScope,
-    private val notificationSink: NotificationSink,
+    private val notifications: EngineNotificationSink,
 ) : VpnEngine {
 
-    interface NotificationSink {
-        fun send(notification: Notification)
-        fun cancel(identifier: String, typeId: Int)
-    }
-
+    private val lifecycleMutex = Mutex()
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val networkMonitor = NetworkMonitor(connectivity, scope)
     private val localDnsResolver = LocalDnsResolver(networkMonitor)
@@ -96,23 +96,27 @@ class SingBoxEngine(
         }
     }
 
-    override suspend fun start(config: EngineConfig) = withContext(Dispatchers.IO) {
-        val server = try {
-            CommandServer(ServerHandler(), PlatformBridge()).also { it.start() }
-        } catch (e: Exception) {
-            throw EngineError.StartFailed(e.message ?: "command server start failed")
+    override suspend fun start(config: EngineConfig): Unit = lifecycleMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val server = try {
+                CommandServer(ServerHandler(), PlatformBridge()).also { it.start() }
+            } catch (e: Exception) {
+                throw EngineError.StartFailed(e.message ?: "command server start failed")
+            }
+            commandServer = server
+            try {
+                networkMonitor.start()
+                server.startOrReloadService(config.configJson, OverrideOptions())
+            } catch (e: Exception) {
+                runCatching { server.close() }
+                networkMonitor.stop()
+                platform.closeTun()
+                commandServer = null
+                throw EngineError.StartFailed(e.message ?: "sing-box start failed")
+            }
+            connectClient()
+            _events.emit(EngineEvent.Started)
         }
-        commandServer = server
-        try {
-            server.startOrReloadService(config.configJson, OverrideOptions())
-        } catch (e: Exception) {
-            runCatching { server.close() }
-            commandServer = null
-            throw EngineError.StartFailed(e.message ?: "sing-box start failed")
-        }
-        networkMonitor.start()
-        connectClient()
-        _events.emit(EngineEvent.Started)
     }
 
     private fun connectClient() {
@@ -129,18 +133,20 @@ class SingBoxEngine(
         commandClient = client
     }
 
-    override suspend fun stop() = withContext(Dispatchers.IO) {
-        val server = commandServer ?: return@withContext
-        commandServer = null
-        val client = commandClient
-        commandClient = null
-        networkMonitor.stop()
-        client?.let { runCatching { it.disconnect() } }
-        platform.closeTun()
-        runCatching { server.closeService() }
-        runCatching { server.close() }
-        _groups.value = emptyList()
-        _events.emit(EngineEvent.StoppedByCore)
+    override suspend fun stop(): Unit = lifecycleMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val server = commandServer ?: return@withContext
+            commandServer = null
+            val client = commandClient
+            commandClient = null
+            networkMonitor.stop()
+            client?.let { runCatching { it.disconnect() } }
+            runCatching { server.closeService() }
+            runCatching { server.close() }
+            platform.closeTun()
+            _groups.value = emptyList()
+            _events.emit(EngineEvent.StoppedByCore)
+        }
     }
 
     override suspend fun onUnderlyingNetworkChanged(): Unit = withContext(Dispatchers.IO) {
@@ -336,11 +342,21 @@ class SingBoxEngine(
         override fun readWIFIState(): WIFIState? = null
 
         override fun sendNotification(notification: Notification) {
-            notificationSink.send(notification)
+            notifications.send(
+                EngineNotification(
+                    identifier = notification.identifier.orEmpty(),
+                    typeName = notification.typeName.orEmpty(),
+                    typeId = notification.typeID,
+                    title = notification.title.orEmpty(),
+                    subtitle = notification.subtitle.orEmpty(),
+                    body = notification.body.orEmpty(),
+                    openUrl = notification.openURL,
+                ),
+            )
         }
 
         override fun cancelNotification(identifier: String, typeID: Int) {
-            notificationSink.cancel(identifier, typeID)
+            notifications.cancel(identifier, typeID)
         }
 
         override fun registerMyInterface(name: String?) = Unit

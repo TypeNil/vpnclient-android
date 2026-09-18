@@ -26,6 +26,8 @@ class LocalDnsResolver(
     private val networkMonitor: NetworkMonitor,
 ) : LocalDNSTransport {
 
+    private val ioExecutor = Dispatchers.IO.asExecutor()
+
     private class CancelFunc(private val block: () -> Unit) : io.nekohasekai.libbox.Func {
         override fun invoke() = block()
     }
@@ -34,7 +36,12 @@ class LocalDnsResolver(
 
     @RequiresApi(Build.VERSION_CODES.Q)
     override fun exchange(ctx: ExchangeContext, message: ByteArray) {
-        val network = networkMonitor.defaultNetwork ?: error("missing default interface")
+        // Transient "no network" is normal during handover — report it as a
+        // DNS failure instead of throwing a Java exception across JNI.
+        val network = networkMonitor.defaultNetwork ?: run {
+            ctx.errorCode(RCODE_SERVFAIL)
+            return
+        }
         runBlocking {
             suspendCoroutine { continuation ->
                 val signal = CancellationSignal()
@@ -69,7 +76,7 @@ class LocalDnsResolver(
                     network,
                     message,
                     DnsResolver.FLAG_NO_RETRY,
-                    Dispatchers.IO.asExecutor(),
+                    ioExecutor,
                     signal,
                     callback,
                 )
@@ -78,7 +85,10 @@ class LocalDnsResolver(
     }
 
     override fun lookup(ctx: ExchangeContext, network: String, domain: String) {
-        val defaultNetwork = networkMonitor.defaultNetwork ?: error("missing default interface")
+        val defaultNetwork = networkMonitor.defaultNetwork ?: run {
+            ctx.errorCode(RCODE_SERVFAIL)
+            return
+        }
         runBlocking {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 lookupModern(ctx, network, domain, defaultNetwork)
@@ -142,17 +152,18 @@ class LocalDnsResolver(
         if (type != null) {
             DnsResolver.getInstance().query(
                 defaultNetwork, domain, type, DnsResolver.FLAG_NO_RETRY,
-                Dispatchers.IO.asExecutor(), signal, callback,
+                ioExecutor, signal, callback,
             )
         } else {
             DnsResolver.getInstance().query(
                 defaultNetwork, domain, DnsResolver.FLAG_NO_RETRY,
-                Dispatchers.IO.asExecutor(), signal, callback,
+                ioExecutor, signal, callback,
             )
         }
     }
 
     private companion object {
         const val RCODE_NXDOMAIN = 3
+        const val RCODE_SERVFAIL = 2
     }
 }

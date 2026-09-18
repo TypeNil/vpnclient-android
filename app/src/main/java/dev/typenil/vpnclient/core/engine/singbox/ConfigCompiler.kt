@@ -52,7 +52,13 @@ class ConfigCompiler @Inject constructor() {
         ipv6Enabled: Boolean,
     ): EngineConfig {
         require(nodes.isNotEmpty()) { "no nodes to compile" }
-        val selected = nodes.firstOrNull { it.id == selectedNodeId } ?: nodes.first()
+        // A stale selection (node removed by a refresh) must fail loudly —
+        // silently connecting to a different server surprises the user.
+        val selected = when {
+            selectedNodeId == null -> nodes.first()
+            else -> nodes.firstOrNull { it.id == selectedNodeId }
+                ?: throw EngineError.InvalidConfig("selected node no longer exists")
+        }
         val nodeTags = nodes.map { it.id }
 
         val outbounds = buildJsonArray {

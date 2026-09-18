@@ -8,6 +8,8 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dev.typenil.vpnclient.core.engine.VpnEngineFactory
+import dev.typenil.vpnclient.core.engine.singbox.SingBoxEngineFactory
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.data.NodeConfigProviderImpl
@@ -64,4 +66,8 @@ abstract class AppBindsModule {
     @Binds
     @Singleton
     abstract fun bindNodeConfigProvider(impl: NodeConfigProviderImpl): NodeConfigProvider
+
+    @Binds
+    @Singleton
+    abstract fun bindVpnEngineFactory(impl: SingBoxEngineFactory): VpnEngineFactory
 }

@@ -15,17 +15,19 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.EngineConfig
+import dev.typenil.vpnclient.core.engine.EngineNotification
+import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.TunRequest
 import dev.typenil.vpnclient.core.engine.VpnEngine
-import dev.typenil.vpnclient.core.engine.singbox.SingBoxEngine
-import io.nekohasekai.libbox.Notification
+import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The app's [VpnService]. Owns the TUN fd lifecycle and the foreground
@@ -41,6 +43,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
         private const val TAG = "ClientVpnService"
         private const val ACTION_CONNECT = "dev.typenil.vpnclient.action.CONNECT"
         private const val ACTION_DISCONNECT = "dev.typenil.vpnclient.action.DISCONNECT"
+        private const val ON_DESTROY_STOP_TIMEOUT_MS = 3_000L
 
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
@@ -52,6 +55,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
     @Inject
     lateinit var connectionManager: ConnectionManager
 
+    @Inject
+    lateinit var engineFactory: VpnEngineFactory
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val notification = VpnNotification(this)
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -59,9 +65,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var engine: VpnEngine? = null
     private var tunFd: ParcelFileDescriptor? = null
     private var underlyingCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastUnderlyingNetwork: Network? = null
 
-    private val notificationSink = object : SingBoxEngine.NotificationSink {
-        override fun send(notification: Notification) = Unit
+    // The core rarely raises user-facing notifications; forwarded for
+    // observability, not rendered (we own the single VPN notification).
+    private val notificationSink = object : EngineNotificationSink {
+        override fun send(notification: EngineNotification) {
+            SecureLog.d(TAG, "core notification: ${notification.typeName}")
+        }
+
         override fun cancel(identifier: String, typeId: Int) = Unit
     }
 
@@ -75,6 +87,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     private fun startTunnel() {
+        if (engine != null) {
+            SecureLog.w(TAG, "start requested while engine already running")
+            return
+        }
         val config = connectionManager.pendingConfig
         if (config == null) {
             SecureLog.e(TAG, "start requested with no pending config")
@@ -91,19 +107,28 @@ class ClientVpnService : VpnService(), EnginePlatform {
         registerUnderlyingNetworkCallback()
         scope.launch {
             try {
-                val created = SingBoxEngine(
+                val created = engineFactory.create(
                     context = this@ClientVpnService,
                     platform = this@ClientVpnService,
                     scope = scope,
-                    notificationSink = notificationSink,
+                    notifications = notificationSink,
                 )
                 engine = created
                 connectionManager.attachEngine(created)
                 created.start(config)
                 // start() returned → openTun succeeded inside it; tunnel is up.
+                if (engine !== created) {
+                    // A disconnect raced us while start() was suspended.
+                    runCatching { created.stop() }
+                    cleanup()
+                    connectionManager.onServiceStopped()
+                    stopSelf()
+                    return@launch
+                }
                 connectionManager.onServiceStarted()
             } catch (e: Exception) {
                 SecureLog.e(TAG, "engine start failed", e)
+                engine = null
                 cleanup()
                 connectionManager.onServiceFailed(
                     if (e is dev.typenil.vpnclient.core.engine.EngineError) {
@@ -135,12 +160,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     override fun onDestroy() {
-        if (engine != null) {
-            val current = engine
-            engine = null
-            // Engine stop is suspend-based; fire and rely on closeTun for fd.
+        val current = engine
+        engine = null
+        // Close the fd synchronously (cheap), bound the Go teardown so we
+        // never block the main thread for longer than the watchdog budget.
+        runCatching { closeTun() }
+        if (current != null) {
             kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                runCatching { current?.stop() }
+                withTimeoutOrNull(ON_DESTROY_STOP_TIMEOUT_MS) {
+                    runCatching { current.stop() }
+                }
             }
         }
         cleanup()
@@ -195,8 +224,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
             } else {
                 request.inet4Routes.ifEmpty { listOf(dev.typenil.vpnclient.core.engine.CidrAddress("0.0.0.0", 0)) }
                     .forEach { builder.addRoute(it.address, it.prefix) }
-                request.inet6Routes.ifEmpty { listOf(dev.typenil.vpnclient.core.engine.CidrAddress("::", 0)) }
-                    .forEach { builder.addRoute(it.address, it.prefix) }
+                // Only route v6 when the tunnel actually has a v6 address,
+                // otherwise we'd blackhole IPv6 into an IPv4-only interface.
+                if (request.inet6Addresses.isNotEmpty()) {
+                    request.inet6Routes.ifEmpty {
+                        listOf(dev.typenil.vpnclient.core.engine.CidrAddress("::", 0))
+                    }.forEach { builder.addRoute(it.address, it.prefix) }
+                }
+                // excludeRoute() doesn't exist below API 33 — excluded routes
+                // are silently ignored there.
             }
 
             request.includedPackages.forEach { pkg ->
@@ -260,12 +296,22 @@ class ClientVpnService : VpnService(), EnginePlatform {
             runCatching { connectivity.unregisterNetworkCallback(it) }
         }
         underlyingCallback = null
+        lastUnderlyingNetwork = null
     }
 
     private fun updateUnderlyingNetworks() {
-        val active = connectivity.activeNetwork ?: return
+        val active = connectivity.activeNetwork
+            ?.takeIf { network ->
+                // Never feed the tunnel its own interface as "underlying".
+                val caps = connectivity.getNetworkCapabilities(network)
+                caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            }
+        if (active == lastUnderlyingNetwork) return
+        lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            runCatching { setUnderlyingNetworks(arrayOf(active)) }
+            runCatching {
+                setUnderlyingNetworks(if (active != null) arrayOf(active) else null)
+            }
         }
         scope.launch { engine?.onUnderlyingNetworkChanged() }
     }
