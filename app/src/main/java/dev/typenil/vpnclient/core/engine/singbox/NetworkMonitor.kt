@@ -36,22 +36,43 @@ class NetworkMonitor(
 
     private var callback: ConnectivityManager.NetworkCallback? = null
 
+    /**
+     * The default network the core should dial out on — never the VPN
+     * interface itself. Once the tunnel is up, `registerDefaultNetworkCallback`
+     * reports the VPN network (the app's own traffic is VPN-subject); pushing
+     * it to the core makes outbounds bind to tun and loop into themselves.
+     */
+    private fun physicalNetwork(candidate: Network?): Network? {
+        if (candidate != null && !isVpn(candidate)) return candidate
+        return connectivity.allNetworks.firstOrNull { network ->
+            val caps = connectivity.getNetworkCapabilities(network) ?: return@firstOrNull false
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+    }
+
+    private fun isVpn(network: Network): Boolean =
+        connectivity.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+
     fun start() {
         if (callback != null) return
-        defaultNetwork = connectivity.activeNetwork
+        defaultNetwork = physicalNetwork(connectivity.activeNetwork)
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                defaultNetwork = network
-                pushDefaultInterface(network)
+                val physical = physicalNetwork(network) ?: return
+                defaultNetwork = physical
+                pushDefaultInterface(physical)
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
                 pushDefaultInterface(network)
             }
 
             override fun onLost(network: Network) {
-                if (defaultNetwork == network) {
-                    defaultNetwork = connectivity.activeNetwork
+                if (defaultNetwork == network || defaultNetwork == null) {
+                    defaultNetwork = physicalNetwork(connectivity.activeNetwork)
                     pushDefaultInterface(defaultNetwork)
                 }
             }

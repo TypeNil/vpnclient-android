@@ -122,7 +122,7 @@ class ConfigCompiler @Inject constructor() {
                     }
                     put("auto_route", true)
                     put("strict_route", false)
-                    put("stack", "system")
+                    put("stack", "gvisor")
                     put("endpoint_independent_nat", true)
                 }
             }

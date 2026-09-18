@@ -249,6 +249,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     SecureLog.w(TAG, "addDisallowedApplication failed for package")
                 }
             }
+
+            // Our own process hosts the proxy core: without this, its outbound
+            // sockets would route back into the TUN and loop into themselves
+            // (same as sing-box-for-android excluding its own package).
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (e: PackageManager.NameNotFoundException) {
+                SecureLog.w(TAG, "addDisallowedApplication failed for own package")
+            }
         }
 
         val pfd = builder.establish()
