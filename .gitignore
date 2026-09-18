@@ -1,0 +1,28 @@
+# Android / Gradle
+*.iml
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+*.apk
+*.aab
+*.aar
+!libs/*.aar
+
+# Signing — never commit keystores or credentials
+*.keystore
+*.jks
+keystore.properties
+secrets.properties
+
+# IDE
+.idea/
+.DS_Store
+Thumbs.db
+
+# NDK / native artifacts fetched at build time
+app/libs/
+core-native/
