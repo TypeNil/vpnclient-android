@@ -1,0 +1,45 @@
+package dev.typenil.vpnclient.ui.settings
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.data.settings.SettingsRepository
+import javax.inject.Inject
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+data class SettingsUiState(
+    val reconnectOnNetworkChange: Boolean = true,
+    val ipv6Enabled: Boolean = true,
+)
+
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val settings: SettingsRepository,
+) : ViewModel() {
+
+    val uiState: StateFlow<SettingsUiState> = combine(
+        settings.reconnectOnNetworkChange,
+        settings.ipv6Enabled,
+    ) { reconnect, ipv6 ->
+        SettingsUiState(
+            reconnectOnNetworkChange = reconnect,
+            ipv6Enabled = ipv6,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = SettingsUiState(),
+    )
+
+    fun setReconnectOnNetworkChange(enabled: Boolean) {
+        viewModelScope.launch { settings.setReconnectOnNetworkChange(enabled) }
+    }
+
+    fun setIpv6Enabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setIpv6Enabled(enabled) }
+    }
+}
