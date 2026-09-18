@@ -1,3 +1,14 @@
 <resources>
     <string name="app_name">VPN Client</string>
+
+    <string name="notification_channel_vpn">VPN status</string>
+    <string name="notification_connecting">Connecting…</string>
+    <string name="notification_connected">Connected</string>
+    <string name="notification_reconnecting">Reconnecting…</string>
+    <string name="action_disconnect">Disconnect</string>
+
+    <string name="nav_home">Home</string>
+    <string name="nav_servers">Servers</string>
+    <string name="nav_subscriptions">Subscriptions</string>
+    <string name="nav_settings">Settings</string>
 </resources>
