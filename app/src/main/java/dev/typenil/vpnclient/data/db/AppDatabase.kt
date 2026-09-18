@@ -1,0 +1,135 @@
+package dev.typenil.vpnclient.data.db
+
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Index
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.RoomDatabase
+import androidx.room.Transaction
+import androidx.room.Update
+import kotlinx.coroutines.flow.Flow
+
+@Entity(tableName = "subscriptions")
+data class SubscriptionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** Full subscription URL — sensitive; never log or export. */
+    val url: String,
+    val createdAtEpochMs: Long,
+    val lastUpdatedAtEpochMs: Long?,
+    val lastAttemptAtEpochMs: Long?,
+    val lastError: String?,
+    val enabled: Boolean = true,
+    val userInfoJson: String?,
+    val supportUrl: String?,
+    val updateIntervalMinutes: Int?,
+)
+
+@Entity(
+    tableName = "nodes",
+    indices = [Index("subscriptionId")],
+)
+data class NodeEntity(
+    /** Stable id: parser-computed hash (protocol+server+port+credential). */
+    @PrimaryKey val id: String,
+    val subscriptionId: Long,
+    val name: String,
+    val protocol: String,
+    val server: String,
+    val port: Int,
+    /** Engine-native outbound object as JSON — opaque to the app. */
+    val outboundJson: String,
+    /** Original share link when parsed from a URI list — sensitive. */
+    val rawUri: String?,
+    val position: Int,
+)
+
+@Dao
+interface SubscriptionDao {
+    @Query("SELECT * FROM subscriptions ORDER BY createdAtEpochMs")
+    fun observeAll(): Flow<List<SubscriptionEntity>>
+
+    @Query("SELECT * FROM subscriptions WHERE id = :id")
+    suspend fun get(id: Long): SubscriptionEntity?
+
+    @Insert
+    suspend fun insert(entity: SubscriptionEntity): Long
+
+    @Update
+    suspend fun update(entity: SubscriptionEntity)
+
+    @Query("DELETE FROM subscriptions WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query(
+        """UPDATE subscriptions SET
+            lastAttemptAtEpochMs = :attemptAt,
+            lastError = :error
+        WHERE id = :id""",
+    )
+    suspend fun markAttempt(id: Long, attemptAt: Long, error: String?)
+
+    @Query(
+        """UPDATE subscriptions SET
+            lastUpdatedAtEpochMs = :updatedAt,
+            lastAttemptAtEpochMs = :attemptAt,
+            lastError = NULL,
+            userInfoJson = :userInfoJson,
+            supportUrl = :supportUrl,
+            updateIntervalMinutes = :updateIntervalMinutes
+        WHERE id = :id""",
+    )
+    suspend fun markSuccess(
+        id: Long,
+        updatedAt: Long,
+        attemptAt: Long,
+        userInfoJson: String?,
+        supportUrl: String?,
+        updateIntervalMinutes: Int?,
+    )
+}
+
+@Dao
+interface NodeDao {
+    @Query("SELECT * FROM nodes WHERE subscriptionId = :subscriptionId ORDER BY position")
+    suspend fun forSubscription(subscriptionId: Long): List<NodeEntity>
+
+    @Query(
+        """SELECT * FROM nodes WHERE subscriptionId IN
+            (SELECT id FROM subscriptions WHERE enabled = 1)
+            ORDER BY subscriptionId, position""",
+    )
+    fun observeEnabled(): Flow<List<NodeEntity>>
+
+    @Query(
+        """SELECT * FROM nodes WHERE subscriptionId IN
+            (SELECT id FROM subscriptions WHERE enabled = 1)""",
+    )
+    suspend fun getEnabled(): List<NodeEntity>
+
+    @Query("SELECT * FROM nodes WHERE id = :id")
+    suspend fun get(id: String): NodeEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(nodes: List<NodeEntity>)
+
+    @Query("DELETE FROM nodes WHERE subscriptionId = :subscriptionId")
+    suspend fun deleteForSubscription(subscriptionId: Long)
+
+    @Query("SELECT COUNT(*) FROM nodes WHERE subscriptionId = :subscriptionId")
+    suspend fun countForSubscription(subscriptionId: Long): Int
+}
+
+@Database(
+    entities = [SubscriptionEntity::class, NodeEntity::class],
+    version = 1,
+    exportSchema = false,
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun subscriptionDao(): SubscriptionDao
+    abstract fun nodeDao(): NodeDao
+}
