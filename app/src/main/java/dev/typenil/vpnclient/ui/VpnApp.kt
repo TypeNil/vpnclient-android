@@ -34,6 +34,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
+import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
 import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
@@ -45,6 +46,7 @@ object Routes {
     const val SERVERS = "servers"
     const val SUBSCRIPTIONS = "subscriptions"
     const val SETTINGS = "settings"
+    const val APP_FILTER = "app_filter"
 }
 
 private data class TopLevelDestination(
@@ -127,7 +129,14 @@ fun VpnApp(connectionManager: ConnectionManager) {
                 composable(Routes.SUBSCRIPTIONS) {
                     SubscriptionsScreen(snackbarHostState = snackbarHostState)
                 }
-                composable(Routes.SETTINGS) { SettingsScreen() }
+                composable(Routes.SETTINGS) {
+                    SettingsScreen(
+                        onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                    )
+                }
+                composable(Routes.APP_FILTER) {
+                    AppFilterScreen(onBack = { navController.popBackStack() })
+                }
             }
         }
     }

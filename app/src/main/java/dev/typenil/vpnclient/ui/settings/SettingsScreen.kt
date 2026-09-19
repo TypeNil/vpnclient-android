@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +43,7 @@ private const val CORE_VERSION = "sing-box libbox 1.14.1"
 
 @Composable
 fun SettingsScreen(
+    onOpenAppFilter: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -64,6 +66,22 @@ fun SettingsScreen(
             checked = ui.ipv6Enabled,
             onCheckedChange = viewModel::setIpv6Enabled,
         )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenAppFilter)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Per-app VPN", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Choose which apps use the tunnel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         SwitchRow(
             title = "Auto-refresh subscriptions",
             subtitle = if (ui.autoRefreshEnabled) {

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
@@ -34,6 +35,9 @@ class SettingsRepository @Inject constructor(
         val DESIRED_VPN_RUNNING = booleanPreferencesKey("desired_vpn_running")
         /** -1 = manual only, 0 = provider interval (default), >0 = user override. */
         val SUBSCRIPTION_REFRESH_MINUTES = intPreferencesKey("subscription_refresh_minutes")
+        /** PerAppMode.ordinal: 0 = all, 1 = include selected, 2 = exclude selected. */
+        val PER_APP_MODE = intPreferencesKey("per_app_mode")
+        val PER_APP_PACKAGES = stringSetPreferencesKey("per_app_packages")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -98,6 +102,24 @@ class SettingsRepository @Inject constructor(
         context.settingsStore.edit {
             it[Keys.SUBSCRIPTION_REFRESH_MINUTES] = minutes.coerceAtLeast(-1)
         }
+    }
+
+    /** Per-app routing mode — see [dev.typenil.vpnclient.core.vpn.PerAppMode]. */
+    val perAppMode: Flow<Int> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.PER_APP_MODE] ?: 0 }
+
+    suspend fun setPerAppMode(mode: Int) {
+        context.settingsStore.edit { it[Keys.PER_APP_MODE] = mode.coerceIn(0, 2) }
+    }
+
+    /** Packages the include/exclude list applies to. */
+    val perAppPackages: Flow<Set<String>> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.PER_APP_PACKAGES] ?: emptySet() }
+
+    suspend fun setPerAppPackages(packages: Set<String>) {
+        context.settingsStore.edit { it[Keys.PER_APP_PACKAGES] = packages }
     }
 
     internal companion object {

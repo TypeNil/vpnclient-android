@@ -66,6 +66,18 @@ A failed refresh never touches stored nodes (last-known-good).
   prevents the loop on outbound server names
 - route: `sniff` → `hijack-dns` → private-IP bypass → `final: proxy`
 
+### Per-app routing
+
+- `PerAppMode` (`ALL` / `INCLUDE` / `EXCLUDE`) + a package set, persisted in
+  DataStore; picked via Settings → Per-app VPN (launcher apps only, exposed by
+  the manifest `<queries>` MAIN+LAUNCHER declaration — no `QUERY_ALL_PACKAGES`).
+- Applied at `openTun` time through `resolvePerAppPlan`: `VpnService.Builder`
+  rejects mixing `addAllowed`/`addDisallowed` calls, so the plan fills exactly
+  one side — include-mode wins when any allowed package exists, and our own
+  package is never allowed (its core sockets would loop back into the TUN).
+- Changes take effect on the next tunnel establish; a running tunnel keeps
+  the plan it was built with.
+
 Validated with `Libbox.checkConfig` in `ConnectionManager.connect()` **before**
 requesting VPN permission.
 
@@ -111,7 +123,8 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 
 - Room: `subscriptions` + `nodes` tables (nodes keyed by stable content hash id).
 - DataStore preferences: selected node id, HWID, reconnect/IPv6 flags,
-  `desiredVpnRunning`, `subscriptionRefreshMinutes`.
+  `desiredVpnRunning`, `subscriptionRefreshMinutes`, `perAppMode`,
+  `perAppPackages`.
 - Secrets stay in Room (`url`, `rawUri`, `outboundJson`) — local-only, never exported;
   `SecureLog` + `Redactor` scrub logs.
 

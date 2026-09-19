@@ -8,6 +8,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Per-app VPN picker lists launcher apps — this query grants that
+         visibility without the restricted QUERY_ALL_PACKAGES permission. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <!-- allowBackup=false: the node DB and settings store proxy credentials
          and subscription URLs — they must not leave the device via backup.
          usesCleartextTraffic stays true only because subscriptions can opt in

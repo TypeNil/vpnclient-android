@@ -29,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * The app's [VpnService]. Owns the TUN fd lifecycle and the foreground
@@ -318,28 +319,35 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // are silently ignored there.
             }
 
-            request.includedPackages.forEach { pkg ->
+            // Builder rejects mixing allowed+disallowed calls; the resolver
+            // guarantees exactly one side is populated. Our own package is
+            // never allowed — its core sockets would loop back into the TUN.
+            // Blocking read is fine: openTun already runs on an engine thread
+            // doing binder calls.
+            val (mode, packages) = runBlocking {
+                PerAppMode.fromOrdinal(settings.perAppMode.first()) to
+                    settings.perAppPackages.first()
+            }
+            val plan = resolvePerAppPlan(
+                mode = mode,
+                selected = packages,
+                selfPackage = packageName,
+                coreInclude = request.includedPackages,
+                coreExclude = request.excludedPackages,
+            )
+            plan.allowed.forEach { pkg ->
                 try {
                     builder.addAllowedApplication(pkg)
                 } catch (e: PackageManager.NameNotFoundException) {
                     SecureLog.w(TAG, "addAllowedApplication failed for package")
                 }
             }
-            request.excludedPackages.forEach { pkg ->
+            plan.disallowed.forEach { pkg ->
                 try {
                     builder.addDisallowedApplication(pkg)
                 } catch (e: PackageManager.NameNotFoundException) {
                     SecureLog.w(TAG, "addDisallowedApplication failed for package")
                 }
-            }
-
-            // Our own process hosts the proxy core: without this, its outbound
-            // sockets would route back into the TUN and loop into themselves
-            // (same as sing-box-for-android excluding its own package).
-            try {
-                builder.addDisallowedApplication(packageName)
-            } catch (e: PackageManager.NameNotFoundException) {
-                SecureLog.w(TAG, "addDisallowedApplication failed for own package")
             }
         }
 
