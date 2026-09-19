@@ -94,6 +94,11 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   `EnginePlatform.openTun` → `Builder.establish()` → fd. `onServiceStarted(gen)`
   flips state to `Connected`; stats may only mutate a `Connected` payload —
   telemetry never creates or resurrects lifecycle state.
+- Live outbound control: `ConnectionManager.groups` mirrors the engine's
+  outbound groups (generation-guarded, cleared on detach); `selectOutbound`
+  switches the `proxy` selector without reconnecting, `urlTest` refreshes
+  per-node delays shown in the server list. Selection resolves to the first
+  selectable group containing the node tag.
 - Disconnect: notification action / UI → `disconnect` intent → `engine.stop()` →
   `closeTun` → `stopSelf` → `onServiceStopped(gen)` → `Idle`.
 - Unexpected engine termination (`Failed` / `StoppedUnexpectedly`) is recorded,

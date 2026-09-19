@@ -2,6 +2,7 @@ package dev.typenil.vpnclient.ui.servers
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +59,20 @@ fun ServersScreen(
     }
 
     LazyColumn(modifier = modifier.fillMaxSize()) {
+        if (ui.connected) {
+            item(key = "actions") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = viewModel::testLatency) {
+                        Text("Test latency")
+                    }
+                }
+            }
+        }
         ui.groups.forEach { group ->
             item(key = "header-${group.subscriptionId}") {
                 Text(
@@ -78,6 +94,7 @@ fun ServersScreen(
                 ServerRow(
                     node = node,
                     selected = node.id == ui.selectedNodeId,
+                    delayMs = ui.delays[node.id],
                     onClick = { viewModel.select(node.id) },
                 )
             }
@@ -89,6 +106,7 @@ fun ServersScreen(
 private fun ServerRow(
     node: NodeEntity,
     selected: Boolean,
+    delayMs: Int?,
     onClick: () -> Unit,
 ) {
     Row(
@@ -117,6 +135,18 @@ private fun ServerRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (delayMs != null) {
+            Text(
+                text = "$delayMs ms",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (delayMs < 800) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+            Spacer(Modifier.width(8.dp))
         }
         if (selected) {
             Spacer(Modifier.width(8.dp))

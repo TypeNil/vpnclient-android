@@ -5,6 +5,7 @@ import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
+import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import java.time.Instant
@@ -86,6 +87,11 @@ class ConnectionManager @Inject constructor(
     private var engine: VpnEngine? = null
     private var statsJob: Job? = null
     private var eventsJob: Job? = null
+    private var groupsJob: Job? = null
+
+    /** Live outbound groups from the running engine; empty while detached. */
+    private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
+    val groups: StateFlow<List<OutboundGroupInfo>> = _groups
 
     /** User pressed Connect. */
     fun connect() {
@@ -194,6 +200,12 @@ class ConnectionManager @Inject constructor(
         this.engine = engine
         statsJob?.cancel()
         eventsJob?.cancel()
+        groupsJob?.cancel()
+        groupsJob = scope.launch {
+            engine.groups.collect { groups ->
+                if (generation == sessionGeneration) _groups.value = groups
+            }
+        }
         statsJob = scope.launch {
             engine.stats.collect { stats ->
                 if (generation != sessionGeneration) return@collect
@@ -224,7 +236,24 @@ class ConnectionManager @Inject constructor(
         statsJob = null
         eventsJob?.cancel()
         eventsJob = null
+        groupsJob?.cancel()
+        groupsJob = null
+        _groups.value = emptyList()
         engine = null
+    }
+
+    /**
+     * Live-switch the active outbound inside [groupTag] — the selector stays
+     * consistent with the persisted selection for the next connect.
+     * No-op while detached or if the call fails (engine logs it).
+     */
+    suspend fun selectOutbound(groupTag: String, outboundTag: String) {
+        engine?.selectOutbound(groupTag, outboundTag)
+    }
+
+    /** Ask the engine to run urltest on [groupTag]; results arrive via [groups]. */
+    suspend fun urlTest(groupTag: String) {
+        engine?.urlTest(groupTag)
     }
 
     /**

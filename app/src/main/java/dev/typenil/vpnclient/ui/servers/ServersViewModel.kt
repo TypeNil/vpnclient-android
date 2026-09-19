@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.ui.servers
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -29,12 +30,24 @@ data class ServersUiState(
     val groups: List<ServerGroup> = emptyList(),
     val selectedNodeId: String? = null,
     val connected: Boolean = false,
+    /** Outbound tag → last measured delay; feeds the latency badges. */
+    val delays: Map<String, Int> = emptyMap(),
 )
+
+/**
+ * The group a node tag should be selected in: the first selectable group
+ * that actually contains it. Falls back to null when the engine hasn't
+ * reported groups yet — selection stays persisted-only until reconnect.
+ */
+internal fun resolveSelectionTarget(
+    groups: List<OutboundGroupInfo>,
+    tag: String,
+): String? = groups.firstOrNull { g -> g.selectable && g.items.any { it.tag == tag } }?.tag
 
 @HiltViewModel
 class ServersViewModel @Inject constructor(
     private val settings: SettingsRepository,
-    connectionManager: ConnectionManager,
+    private val connectionManager: ConnectionManager,
     nodeDao: NodeDao,
     subscriptions: SubscriptionRepository,
 ) : ViewModel() {
@@ -48,9 +61,10 @@ class ServersViewModel @Inject constructor(
         subscriptions.profiles,
         settings.selectedNodeId,
         connectionManager.state,
-    ) { nodes, profiles, selectedId, state ->
+        connectionManager.groups,
+    ) { nodes, profiles, selectedId, state, groups ->
         val names = profiles.associate { it.id to it.name }
-        val groups = nodes
+        val serverGroups = nodes
             .groupBy { it.subscriptionId }
             .map { (subId, groupNodes) ->
                 ServerGroup(
@@ -60,9 +74,14 @@ class ServersViewModel @Inject constructor(
                 )
             }
         ServersUiState(
-            groups = groups,
+            groups = serverGroups,
             selectedNodeId = selectedId,
-            connected = state is VpnConnectionState.Connected,
+            connected = state is VpnConnectionState.Connected ||
+                state is VpnConnectionState.Reconnecting,
+            delays = groups
+                .flatMap { it.items }
+                .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
+                .toMap(),
         )
     }.stateIn(
         scope = viewModelScope,
@@ -71,11 +90,23 @@ class ServersViewModel @Inject constructor(
     )
 
     fun select(nodeId: String) {
-        viewModelScope.launch { settings.setSelectedNodeId(nodeId) }
-        if (uiState.value.connected) {
-            // MVP: selection persists but the running tunnel keeps its node
-            // until the user reconnects.
-            _messages.tryEmit("Reconnect to apply the new server")
+        viewModelScope.launch {
+            settings.setSelectedNodeId(nodeId)
+            if (uiState.value.connected) {
+                // Live-switch the running tunnel; if the engine hasn't
+                // reported groups yet the persisted choice still wins on
+                // the next connect.
+                resolveSelectionTarget(connectionManager.groups.value, nodeId)
+                    ?.let { connectionManager.selectOutbound(it, nodeId) }
+                    ?: _messages.tryEmit("Reconnect to apply the new server")
+            }
+        }
+    }
+
+    /** Trigger a latency probe across all reported groups. */
+    fun testLatency() {
+        viewModelScope.launch {
+            connectionManager.groups.value.forEach { connectionManager.urlTest(it.tag) }
         }
     }
 }
