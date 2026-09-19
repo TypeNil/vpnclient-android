@@ -154,12 +154,14 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val p = link.params
         val network = p.param("type", "network") ?: "tcp"
         if (isUnsupportedNetwork(network)) return null
-        // Trojan is TLS-only — always emit the tls block.
+        // Trojan is TLS-only — always emit the tls block (incl. REALITY params).
         val tls = tlsBlock(
             serverName = p["sni"] ?: link.host,
             insecure = truthyParam(p.param("allowInsecure", "allow_insecure", "insecure")),
             alpn = commaList(p["alpn"]),
             fingerprint = p["fp"],
+            realityPublicKey = if (p["security"]?.lowercase() == "reality") p["pbk"] else null,
+            realityShortId = p["sid"],
         )
         val transport = transportBlock(
             network = network,
