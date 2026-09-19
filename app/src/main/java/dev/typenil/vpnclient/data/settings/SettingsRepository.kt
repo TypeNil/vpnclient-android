@@ -28,6 +28,9 @@ class SettingsRepository @Inject constructor(
         val HWID = stringPreferencesKey("remnawave_hwid")
         val RECONNECT_ON_NETWORK_CHANGE = booleanPreferencesKey("reconnect_on_network_change")
         val IPV6_ENABLED = booleanPreferencesKey("ipv6_enabled")
+        /** "User wants the tunnel up" — survives process death; drives
+         *  START_STICKY rebuilds. Cleared on every intentional/failed teardown. */
+        val DESIRED_VPN_RUNNING = booleanPreferencesKey("desired_vpn_running")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -72,6 +75,15 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setIpv6Enabled(enabled: Boolean) {
         context.settingsStore.edit { it[Keys.IPV6_ENABLED] = enabled }
+    }
+
+    /** Persisted "user wants the tunnel running" flag for service restarts. */
+    val desiredVpnRunning: Flow<Boolean> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.DESIRED_VPN_RUNNING] ?: false }
+
+    suspend fun setDesiredVpnRunning(running: Boolean) {
+        context.settingsStore.edit { it[Keys.DESIRED_VPN_RUNNING] = running }
     }
 
     internal companion object {

@@ -289,6 +289,28 @@ class ConnectionManagerTest {
     }
 
     @Test
+    fun `adopted session gets its own generation and reports Connected`() =
+        testScope.runTest {
+            // Service-driven restart (process death / always-on): no
+            // connect() call, generation comes from adoptSession.
+            val generation = manager.adoptSession(node)
+            manager.attachEngine(engine, generation)
+            advanceUntilIdle()
+            manager.onServiceStarted(generation)
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+
+            // The adopted generation guards telemetry like a normal one.
+            engine.statsFlow.emit(stats(777))
+            advanceUntilIdle()
+            val state = manager.state.value as VpnConnectionState.Connected
+            assertEquals(777L, state.stats?.uplinkBytesPerSec)
+
+            // And a stale pre-adoption generation is still rejected.
+            manager.onServiceStopped(generation - 1)
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
     fun `permission denied reports PermissionDenied`() = testScope.runTest {
         serviceControl.permissionIntent = Intent()
         manager.connect()

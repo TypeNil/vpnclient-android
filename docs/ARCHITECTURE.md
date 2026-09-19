@@ -72,6 +72,11 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   app-requested disconnect never emits a terminal engine event.
 - `onRevoke` (settings "disconnect"/another VPN takes over) → `onServiceRevoked()`
   → `Error(PermissionRevoked)`.
+- Durability: `desiredVpnRunning` (DataStore) records user intent. `CONNECT` sets
+  it and returns `START_STICKY`; `DISCONNECT`/`onRevoke`/start-failure clear it
+  and return `NOT_STICKY`. A null-intent restart (process death) or system
+  start rebuilds the config from Room/DataStore via `NodeConfigProvider` and
+  adopts a fresh session generation — no `pendingSession` handoff needed.
 - Network change: `ConnectivityManager.NetworkCallback` → `engine.onUnderlyingNetworkChanged()`
   → `commandServer.updateNetwork()` + `DefaultNetworkMonitor` notifies libbox.
 

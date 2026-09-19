@@ -227,6 +227,17 @@ class ConnectionManager @Inject constructor(
         engine = null
     }
 
+    /**
+     * Allocates the session generation for a service-driven start (process
+     * restart, always-on) that has no `pendingSession`. The service tags all
+     * subsequent callbacks with it.
+     */
+    fun adoptSession(node: NodeSummary): Long {
+        val generation = ++sessionGeneration
+        sessionNode = node
+        return generation
+    }
+
     private fun onEngineTerminated(error: VpnError) {
         // Only meaningful while a session is alive; teardown converges through
         // the service so TUN/collectors are cleaned before the error is shown.

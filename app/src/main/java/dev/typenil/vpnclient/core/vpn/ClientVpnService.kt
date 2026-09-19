@@ -21,13 +21,14 @@ import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.TunRequest
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
+import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The app's [VpnService]. Owns the TUN fd lifecycle and the foreground
@@ -35,6 +36,13 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Commands arrive as start-intents; state is reported upward through the
  * injected [ConnectionManager] (same-process singleton).
+ *
+ * The service is self-sufficient: `START_STICKY` restarts and system
+ * (always-on) starts rebuild the config from Room/DataStore via
+ * `NodeConfigProvider` — no in-memory handoff required. The `desiredRunning`
+ * flag is persisted: set on CONNECT, cleared on DISCONNECT/revoke/start
+ * failure, so a restart loop can't form and a crashed session doesn't
+ * silently come back.
  */
 @AndroidEntryPoint
 class ClientVpnService : VpnService(), EnginePlatform {
@@ -43,7 +51,6 @@ class ClientVpnService : VpnService(), EnginePlatform {
         private const val TAG = "ClientVpnService"
         private const val ACTION_CONNECT = "dev.typenil.vpnclient.action.CONNECT"
         private const val ACTION_DISCONNECT = "dev.typenil.vpnclient.action.DISCONNECT"
-        private const val ON_DESTROY_STOP_TIMEOUT_MS = 3_000L
 
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
@@ -58,6 +65,17 @@ class ClientVpnService : VpnService(), EnginePlatform {
     @Inject
     lateinit var engineFactory: VpnEngineFactory
 
+    @Inject
+    lateinit var configProvider: NodeConfigProvider
+
+    @Inject
+    lateinit var settings: SettingsRepository
+
+    /** Process-wide scope for fire-and-forget teardown in onDestroy —
+     *  the service's own scope is cancelled on destroy. */
+    @Inject
+    lateinit var applicationScope: CoroutineScope
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val notification = VpnNotification(this)
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -68,6 +86,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var lastUnderlyingNetwork: Network? = null
     /** Session generation this service instance is serving; -1 = none yet. */
     private var activeGeneration: Long = -1L
+    /** A teardown was requested while a start was still in flight. */
+    private var stopRequested = false
 
     // The core rarely raises user-facing notifications; forwarded for
     // observability, not rendered (we own the single VPN notification).
@@ -81,11 +101,32 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_CONNECT -> startTunnel()
-            ACTION_DISCONNECT -> stopTunnel()
-            else -> stopSelf()
+            ACTION_CONNECT -> {
+                // User asked for the tunnel — remember it across process death.
+                scope.launch { settings.setDesiredVpnRunning(true) }
+                startTunnel()
+                return START_STICKY
+            }
+            ACTION_DISCONNECT -> {
+                scope.launch { settings.setDesiredVpnRunning(false) }
+                stopTunnel()
+                return START_NOT_STICKY
+            }
+            else -> {
+                // System restart (null intent) or always-on boot: rebuild only
+                // if the user previously wanted the tunnel running.
+                scope.launch {
+                    if (settings.desiredVpnRunning.first()) {
+                        SecureLog.i(TAG, "rebuilding tunnel after service restart")
+                        startTunnel()
+                    } else {
+                        stopSelf()
+                    }
+                }
+                // Worst case the flag read fails and we stop cleanly.
+                return START_STICKY
+            }
         }
-        return START_NOT_STICKY
     }
 
     private fun startTunnel() {
@@ -93,23 +134,44 @@ class ClientVpnService : VpnService(), EnginePlatform {
             SecureLog.w(TAG, "start requested while engine already running")
             return
         }
+        stopRequested = false
         val session = connectionManager.pendingSession
-        if (session == null) {
-            SecureLog.e(TAG, "start requested with no pending session")
-            connectionManager.onServiceFailed(VpnError.NoNodeSelected, activeGeneration)
-            stopSelf()
-            return
-        }
-        val config = session.config
-        activeGeneration = session.generation
+        // FGS contract: foreground notification before any suspend work.
         showNotification(
             title = getString(R.string.notification_connecting),
-            text = config.node.name,
-            node = config.node,
+            text = session?.config?.node?.name ?: getString(R.string.app_name),
+            node = session?.config?.node,
             showDisconnect = true,
         )
         registerUnderlyingNetworkCallback()
         scope.launch {
+            // Same-process fast path uses the handed-off session; after a
+            // process death the service rebuilds from persisted state itself.
+            val config = session?.config
+                ?: runCatching { configProvider.compileSelected() }
+                    .onFailure { SecureLog.w(TAG, "config rebuild failed: ${it.message}") }
+                    .getOrNull()
+            if (config == null) {
+                connectionManager.onServiceFailed(VpnError.NoNodeSelected, -1L)
+                cleanup()
+                stopSelf()
+                return@launch
+            }
+            if (stopRequested) {
+                connectionManager.onServiceStopped(-1L)
+                cleanup()
+                stopSelf()
+                return@launch
+            }
+            val generation = session?.generation
+                ?: connectionManager.adoptSession(config.node)
+            activeGeneration = generation
+            showNotification(
+                title = getString(R.string.notification_connecting),
+                text = config.node.name,
+                node = config.node,
+                showDisconnect = true,
+            )
             try {
                 val created = engineFactory.create(
                     context = this@ClientVpnService,
@@ -118,29 +180,32 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     notifications = notificationSink,
                 )
                 engine = created
-                connectionManager.attachEngine(created, session.generation)
+                connectionManager.attachEngine(created, generation)
                 created.start(config)
                 // start() returned → openTun succeeded inside it; tunnel is up.
-                if (engine !== created) {
+                if (engine !== created || stopRequested) {
                     // A disconnect raced us while start() was suspended.
                     runCatching { created.stop() }
                     cleanup()
-                    connectionManager.onServiceStopped(session.generation)
+                    connectionManager.onServiceStopped(generation)
                     stopSelf()
                     return@launch
                 }
-                connectionManager.onServiceStarted(session.generation)
+                connectionManager.onServiceStarted(generation)
             } catch (e: Exception) {
                 SecureLog.e(TAG, "engine start failed", e)
                 engine = null
                 cleanup()
+                // A start failure must not become a restart loop: clear the
+                // desire flag so a STICKY restart doesn't retry forever.
+                settings.setDesiredVpnRunning(false)
                 connectionManager.onServiceFailed(
                     if (e is dev.typenil.vpnclient.core.engine.EngineError) {
                         VpnError.fromEngine(e)
                     } else {
                         VpnError.Unexpected(e.message ?: "engine start failed")
                     },
-                    session.generation,
+                    generation,
                 )
                 stopSelf()
             }
@@ -148,6 +213,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     private fun stopTunnel() {
+        stopRequested = true
         val current = engine
         engine = null
         val generation = activeGeneration
@@ -167,16 +233,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     override fun onDestroy() {
+        stopRequested = true
         val current = engine
         engine = null
-        // Close the fd synchronously (cheap), bound the Go teardown so we
-        // never block the main thread for longer than the watchdog budget.
+        // Close the fd synchronously (cheap). The Go teardown is handed to the
+        // application scope — the service scope is cancelled below and
+        // blocking the main thread here risks an ANR on system teardown.
         runCatching { closeTun() }
         if (current != null) {
-            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                withTimeoutOrNull(ON_DESTROY_STOP_TIMEOUT_MS) {
-                    runCatching { current.stop() }
-                }
+            applicationScope.launch(Dispatchers.IO) {
+                runCatching { current.stop() }
             }
         }
         cleanup()
@@ -192,9 +258,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
     /** VPN permission revoked while running — tunnel is already dead. */
     override fun onRevoke() {
         SecureLog.w(TAG, "vpn permission revoked")
+        stopRequested = true
         val current = engine
         engine = null
         scope.launch {
+            settings.setDesiredVpnRunning(false)
             runCatching { current?.stop() }
             connectionManager.onServiceRevoked()
             cleanup()
