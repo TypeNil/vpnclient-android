@@ -117,6 +117,20 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   + coalesced `engine.onUnderlyingNetworkChanged()` → `commandServer.resetNetwork()`.
   The engine's `NetworkMonitor` additionally feeds libbox internals.
 
+### Entry points
+
+- **QS tile** (`VpnTileService`): mirrors `ConnectionManager.state`; tap on an
+  active session disconnects directly, otherwise launches `MainActivity` with
+  `EXTRA_CONNECT` so the consent flow stays in the UI layer.
+- **Boot receiver** (`BootReceiver`): `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED` →
+  restarts the tunnel only when `desiredVpnRunning` is set AND
+  `VpnService.prepare` reports consent is still granted.
+- **Import funnel** (`MainActivity` → `ImportUrlExtractor`): `sing-box://
+  import-remote-profile?url=`, `clash://install-config?url=`,
+  `clashmeta://install-config?url=`, and `text/plain` shares carrying a bare
+  `http(s)` URL. The URL lands prefilled in the add-subscription dialog —
+  nothing is imported without user confirmation.
+
 ## Threading
 
 - Engine: dedicated `CoroutineScope(SupervisorJob() + Dispatchers.Default)` owned

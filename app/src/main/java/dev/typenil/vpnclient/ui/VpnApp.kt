@@ -33,6 +33,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.typenil.vpnclient.R
+import kotlinx.coroutines.flow.StateFlow
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
@@ -69,10 +70,19 @@ private val topLevelDestinations = listOf(
  * visible when [ConnectionManager.prepareIntent] is posted.
  */
 @Composable
-fun VpnApp(connectionManager: ConnectionManager) {
+fun VpnApp(
+    connectionManager: ConnectionManager,
+    importUrl: StateFlow<String?>,
+    onImportConsumed: () -> Unit,
+) {
     VPNClientTheme {
         val navController = rememberNavController()
         val snackbarHostState = remember { SnackbarHostState() }
+
+        val pendingImport by importUrl.collectAsStateWithLifecycle()
+        LaunchedEffect(pendingImport) {
+            if (pendingImport != null) navController.navigate(Routes.SUBSCRIPTIONS)
+        }
 
         val prepareIntent by connectionManager.prepareIntent.collectAsStateWithLifecycle()
         val vpnConsentLauncher = rememberLauncherForActivityResult(
@@ -127,7 +137,11 @@ fun VpnApp(connectionManager: ConnectionManager) {
                     ServersScreen(snackbarHostState = snackbarHostState)
                 }
                 composable(Routes.SUBSCRIPTIONS) {
-                    SubscriptionsScreen(snackbarHostState = snackbarHostState)
+                    SubscriptionsScreen(
+                        snackbarHostState = snackbarHostState,
+                        importUrl = pendingImport,
+                        onImportConsumed = onImportConsumed,
+                    )
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(

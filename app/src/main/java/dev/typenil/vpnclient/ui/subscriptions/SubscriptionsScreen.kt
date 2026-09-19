@@ -58,11 +58,24 @@ private fun redactedHost(url: String): String =
 fun SubscriptionsScreen(
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
+    importUrl: String? = null,
+    onImportConsumed: () -> Unit = {},
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
+    var importPrefill by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<SubscriptionProfile?>(null) }
+
+    // Deep-link/share funnel: open the add dialog prefilled — the user still
+    // confirms; nothing is imported silently.
+    LaunchedEffect(importUrl) {
+        if (importUrl != null) {
+            importPrefill = importUrl
+            showAddDialog = true
+            onImportConsumed()
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
@@ -112,7 +125,11 @@ fun SubscriptionsScreen(
 
     if (showAddDialog) {
         AddSubscriptionDialog(
-            onDismiss = { showAddDialog = false },
+            initialUrl = importPrefill.orEmpty(),
+            onDismiss = {
+                showAddDialog = false
+                importPrefill = null
+            },
             onConfirm = { url, name, allowInsecure ->
                 showAddDialog = false
                 viewModel.add(url, name, allowInsecure)
@@ -229,8 +246,9 @@ private fun SubscriptionCard(
 private fun AddSubscriptionDialog(
     onDismiss: () -> Unit,
     onConfirm: (url: String, name: String?, allowInsecure: Boolean) -> Unit,
+    initialUrl: String = "",
 ) {
-    var url by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf(initialUrl) }
     var name by remember { mutableStateOf("") }
     var allowInsecure by remember { mutableStateOf(false) }
 
