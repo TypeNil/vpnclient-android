@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -27,6 +28,11 @@ data class SubscriptionEntity(
     val userInfoJson: String?,
     val supportUrl: String?,
     val updateIntervalMinutes: Int?,
+    /**
+     * Explicit per-subscription opt-in for cleartext HTTP fetches.
+     * HTTPS is the default; an https→http redirect is never followed.
+     */
+    @ColumnInfo(defaultValue = "0") val allowInsecureHttp: Boolean = false,
 )
 
 @Entity(
@@ -134,10 +140,22 @@ abstract class NodeDao {
 
 @Database(
     entities = [SubscriptionEntity::class, NodeEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun subscriptionDao(): SubscriptionDao
     abstract fun nodeDao(): NodeDao
+
+    companion object {
+        /** v2: per-subscription cleartext opt-in. */
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE subscriptions " +
+                        "ADD COLUMN allowInsecureHttp INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+    }
 }

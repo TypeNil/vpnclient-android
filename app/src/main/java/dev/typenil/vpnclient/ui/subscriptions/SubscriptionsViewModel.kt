@@ -52,9 +52,9 @@ class SubscriptionsViewModel @Inject constructor(
         initialValue = SubscriptionsUiState(),
     )
 
-    fun add(url: String, requestedName: String?) {
+    fun add(url: String, requestedName: String?, allowInsecureHttp: Boolean = false) {
         viewModelScope.launch {
-            repository.add(url, requestedName?.trim()?.ifEmpty { null })
+            repository.add(url, requestedName?.trim()?.ifEmpty { null }, allowInsecureHttp)
                 .onFailure { _messages.emit(it.message ?: "Failed to add subscription") }
         }
     }

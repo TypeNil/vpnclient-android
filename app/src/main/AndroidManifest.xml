@@ -10,9 +10,10 @@
 
     <!-- allowBackup=false: the node DB and settings store proxy credentials
          and subscription URLs — they must not leave the device via backup.
-         usesCleartextTraffic: subscription endpoints are user-supplied and many
-         still serve plain HTTP; it only affects the app's own OkHttp calls
-         (subscription fetch), never TUN-routed traffic. -->
+         usesCleartextTraffic stays true only because subscriptions can opt in
+         to plain HTTP per source (off by default); policy is enforced in
+         SubscriptionFetcher — HTTPS-first, no https→http downgrades. It only
+         affects the app's own OkHttp calls, never TUN-routed traffic. -->
     <application
         android:name=".VpnClientApp"
         android:allowBackup="false"

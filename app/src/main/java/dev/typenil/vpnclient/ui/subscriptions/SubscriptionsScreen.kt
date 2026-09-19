@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -112,9 +113,9 @@ fun SubscriptionsScreen(
     if (showAddDialog) {
         AddSubscriptionDialog(
             onDismiss = { showAddDialog = false },
-            onConfirm = { url, name ->
+            onConfirm = { url, name, allowInsecure ->
                 showAddDialog = false
-                viewModel.add(url, name)
+                viewModel.add(url, name, allowInsecure)
             },
         )
     }
@@ -227,10 +228,11 @@ private fun SubscriptionCard(
 @Composable
 private fun AddSubscriptionDialog(
     onDismiss: () -> Unit,
-    onConfirm: (url: String, name: String?) -> Unit,
+    onConfirm: (url: String, name: String?, allowInsecure: Boolean) -> Unit,
 ) {
     var url by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    var allowInsecure by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -252,11 +254,24 @@ private fun AddSubscriptionDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Checkbox(
+                        checked = allowInsecure,
+                        onCheckedChange = { allowInsecure = it },
+                    )
+                    Text(
+                        text = "Allow insecure HTTP (not recommended)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(url.trim(), name.trim().ifEmpty { null }) },
+                onClick = { onConfirm(url.trim(), name.trim().ifEmpty { null }, allowInsecure) },
                 enabled = url.isNotBlank(),
             ) {
                 Text("Add")

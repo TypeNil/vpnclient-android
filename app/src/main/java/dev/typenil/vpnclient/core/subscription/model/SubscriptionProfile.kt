@@ -17,6 +17,8 @@ data class SubscriptionProfile(
     val userInfo: SubscriptionUserInfo?,
     val supportUrl: String?,
     val updateIntervalMinutes: Int?,
+    /** User opted this source into cleartext HTTP fetches. */
+    val allowInsecureHttp: Boolean,
 )
 
 /** `subscription-userinfo` header data (bytes; expire is epoch seconds). */
@@ -62,6 +64,11 @@ sealed class SubscriptionError : Exception() {
      *  a working subscription. */
     data object ConfigRejected : SubscriptionError() {
         override val message = "nodes rejected by engine validation"
+    }
+    /** Cleartext HTTP used without the per-subscription opt-in, or an
+     *  https→http downgrade redirect. */
+    data object InsecureTransport : SubscriptionError() {
+        override val message = "insecure transport not allowed for this subscription"
     }
     /** Remnawave HWID device-limit rejection. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()

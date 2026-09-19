@@ -155,6 +155,8 @@ class SubscriptionRepositoryTest {
             userInfoJson = null,
             supportUrl = null,
             updateIntervalMinutes = null,
+            // MockWebServer speaks plain HTTP — opt the fixture in.
+            allowInsecureHttp = true,
         )
     }
 
@@ -252,6 +254,28 @@ class SubscriptionRepositoryTest {
 
         assertTrue(repository.refresh(1).isSuccess)
         assertEquals(old.id, settings.selected.value)
+    }
+
+    @Test
+    fun `add rejects cleartext url without opt-in`() = runTest {
+        val result = repository.add(server.url("/sub").toString(), null)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is SubscriptionError.InsecureTransport)
+        assertTrue(subscriptionDao.subs.isEmpty())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `add accepts cleartext url with opt-in`() = runTest {
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        val result = repository.add(
+            server.url("/sub").toString(), null, allowInsecureHttp = true,
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, subscriptionDao.subs.size)
     }
 
     @Test

@@ -64,17 +64,26 @@ class SubscriptionFetcher @Inject constructor(
         client.newBuilder().followRedirects(false).build()
     }
 
-    suspend fun fetch(url: String, hwid: String?): FetchedSubscription =
+    suspend fun fetch(
+        url: String,
+        hwid: String?,
+        allowInsecure: Boolean = false,
+    ): FetchedSubscription =
         withContext(Dispatchers.IO) {
             val origin = try {
                 url.toHttpUrl()
             } catch (e: Exception) {
                 throw SubscriptionError.ParseFailed("bad url")
             }
+            if (!isAllowedTransport(origin, origin, allowInsecure)) {
+                throw SubscriptionError.InsecureTransport
+            }
             var current = origin
             var redirectsLeft = MAX_REDIRECTS
             while (true) {
-                val sendHwid = hwid != null && current.host == origin.host
+                // HWID headers go only to the exact origin (scheme+host+port) —
+                // a same-host redirect on another port/scheme must not see them.
+                val sendHwid = hwid != null && current.sameOriginAs(origin)
                 val request = Request.Builder()
                     .url(current)
                     .header("User-Agent", USER_AGENT)
@@ -102,6 +111,9 @@ class SubscriptionFetcher @Inject constructor(
                     if (location == null) throw SubscriptionError.Http(response.code, current.host)
                     current = current.resolve(location)
                         ?: throw SubscriptionError.Http(response.code, current.host)
+                    if (!isAllowedTransport(origin, current, allowInsecure)) {
+                        throw SubscriptionError.InsecureTransport
+                    }
                     redirectsLeft--
                     continue
                 }
@@ -194,4 +206,18 @@ class SubscriptionFetcher @Inject constructor(
 
     private fun String.hostOrNull(): String =
         runCatching { this.toHttpUrl().host }.getOrNull() ?: "unknown"
+
+    /**
+     * Cleartext policy: http is allowed only when the user opted this
+     * subscription in AND the entered URL was already http. An https→http
+     * redirect is a downgrade and is never followed, opt-in or not.
+     */
+    internal fun isAllowedTransport(
+        origin: okhttp3.HttpUrl,
+        current: okhttp3.HttpUrl,
+        allowInsecure: Boolean,
+    ): Boolean = current.isHttps || (allowInsecure && origin.scheme == "http")
+
+    private fun okhttp3.HttpUrl.sameOriginAs(other: okhttp3.HttpUrl): Boolean =
+        scheme == other.scheme && host == other.host && port == other.port
 }

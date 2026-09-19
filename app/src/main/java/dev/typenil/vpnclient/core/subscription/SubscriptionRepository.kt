@@ -47,11 +47,23 @@ class SubscriptionRepository @Inject constructor(
     val profiles: Flow<List<SubscriptionProfile>> =
         subscriptionDao.observeAll().map { list -> list.map { it.toDomain() } }
 
-    suspend fun add(url: String, requestedName: String?): Result<Long> {
+    suspend fun add(
+        url: String,
+        requestedName: String?,
+        allowInsecureHttp: Boolean = false,
+    ): Result<Long> {
         val trimmed = url.trim()
+        val parsed = runCatching { trimmed.toHttpUrl() }.getOrNull()
+            ?: return Result.failure(SubscriptionError.ParseFailed("bad url"))
+        // Reject a cleartext URL before a row exists — a subscription that can
+        // never fetch should not be persisted at all.
+        if (!parsed.isHttps && !allowInsecureHttp) {
+            return Result.failure(SubscriptionError.InsecureTransport)
+        }
         val entity = SubscriptionEntity(
             name = requestedName?.trim().orEmpty().ifEmpty { deriveName(trimmed) },
             url = trimmed,
+            allowInsecureHttp = allowInsecureHttp,
             createdAtEpochMs = Instant.now().toEpochMilli(),
             lastUpdatedAtEpochMs = null,
             lastAttemptAtEpochMs = null,
@@ -71,7 +83,7 @@ class SubscriptionRepository @Inject constructor(
         val attemptAt = Instant.now().toEpochMilli()
         return try {
             val hwid = settings.getOrCreateHwid()
-            val fetched = fetcher.fetch(sub.url, hwid)
+            val fetched = fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
             val classified = classifier.classify(fetched.body, fetched.contentType)
             val nodes = dispatcher.parse(classified.format, classified.body, id)
             if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
@@ -154,6 +166,7 @@ class SubscriptionRepository @Inject constructor(
         is SubscriptionError.ParseFailed -> "parse failed"
         is SubscriptionError.EmptyResult -> "no usable nodes"
         is SubscriptionError.ConfigRejected -> "rejected by engine"
+        is SubscriptionError.InsecureTransport -> "https required"
         is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
         is SubscriptionError.RemnawaveError -> "panel status $statusCode"
     }
@@ -171,6 +184,7 @@ class SubscriptionRepository @Inject constructor(
         userInfo = userInfoJson?.let { runCatching { json.decodeFromString<SubscriptionUserInfo>(it) }.getOrNull() },
         supportUrl = supportUrl,
         updateIntervalMinutes = updateIntervalMinutes,
+        allowInsecureHttp = allowInsecureHttp,
     )
 
     private companion object {
