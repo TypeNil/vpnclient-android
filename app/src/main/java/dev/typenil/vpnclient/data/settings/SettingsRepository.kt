@@ -47,12 +47,11 @@ class SettingsRepository @Inject constructor(
     suspend fun getOrCreateHwid(): String {
         var existing: String? = null
         context.settingsStore.edit { prefs ->
-            existing = prefs[Keys.HWID]
-            if (existing == null) {
-                // 32 hex chars — inside Remnawave's /^[a-zA-Z0-9=-]{10,64}$/ rule.
-                val generated = java.util.UUID.randomUUID().toString().replace("-", "")
-                prefs[Keys.HWID] = generated
-                existing = generated
+            existing = when (val stored = prefs[Keys.HWID]) {
+                null -> java.util.UUID.randomUUID().toString().also { prefs[Keys.HWID] = it }
+                // Legacy installs stored an undashed 32-hex id; panels that validate
+                // HWID format reject it — rewrite to dashed UUID spelling (same id).
+                else -> normalizeHwid(stored)?.also { prefs[Keys.HWID] = it } ?: stored
             }
         }
         return existing!!
@@ -72,5 +71,16 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setIpv6Enabled(enabled: Boolean) {
         context.settingsStore.edit { it[Keys.IPV6_ENABLED] = enabled }
+    }
+
+    internal companion object {
+        private val HEX32 = Regex("[0-9a-fA-F]{32}")
+
+        /** Reformats an undashed 32-hex HWID to dashed UUID form; null if already fine. */
+        fun normalizeHwid(stored: String): String? {
+            if (!HEX32.matches(stored)) return null
+            return "${stored.substring(0, 8)}-${stored.substring(8, 12)}-" +
+                "${stored.substring(12, 16)}-${stored.substring(16, 20)}-${stored.substring(20)}"
+        }
     }
 }
