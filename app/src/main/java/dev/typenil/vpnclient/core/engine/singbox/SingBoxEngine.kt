@@ -79,6 +79,7 @@ class SingBoxEngine(
 
     private var commandServer: CommandServer? = null
     private var commandClient: CommandClient? = null
+    private var closing = false
 
     private val _stats = MutableSharedFlow<TrafficStats>(replay = 1)
     private val _events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 64)
@@ -105,6 +106,7 @@ class SingBoxEngine(
             }
             commandServer = server
             try {
+                closing = false
                 networkMonitor.start()
                 server.startOrReloadService(config.configJson, OverrideOptions())
             } catch (e: Exception) {
@@ -136,6 +138,9 @@ class SingBoxEngine(
     override suspend fun stop(): Unit = lifecycleMutex.withLock {
         withContext(Dispatchers.IO) {
             val server = commandServer ?: return@withContext
+            // Intentional teardown: serviceStop() callbacks firing while we
+            // close the server must not surface as StoppedUnexpectedly.
+            closing = true
             commandServer = null
             val client = commandClient
             commandClient = null
@@ -145,7 +150,8 @@ class SingBoxEngine(
             runCatching { server.close() }
             platform.closeTun()
             _groups.value = emptyList()
-            _events.emit(EngineEvent.StoppedByCore)
+            // No terminal event here — app-requested stops are reported by
+            // the service lifecycle (onServiceStopped), not the engine.
         }
     }
 
@@ -172,7 +178,8 @@ class SingBoxEngine(
 
     private inner class ServerHandler : CommandServerHandler {
         override fun serviceStop() {
-            scope.launch { _events.emit(EngineEvent.StoppedByCore) }
+            if (closing) return
+            scope.launch { _events.emit(EngineEvent.StoppedUnexpectedly) }
         }
 
         override fun serviceReload() {

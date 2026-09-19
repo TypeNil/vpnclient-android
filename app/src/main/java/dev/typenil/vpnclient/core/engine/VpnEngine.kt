@@ -42,8 +42,8 @@ data class OutboundItemInfo(
 sealed interface EngineEvent {
     data object Started : EngineEvent
     data class Failed(val error: EngineError) : EngineEvent
-    /** Core asked us to stop (e.g. fatal error, config reload). */
-    data object StoppedByCore : EngineEvent
+    /** Core terminated on its own — never emitted for an app-requested stop(). */
+    data object StoppedUnexpectedly : EngineEvent
     data class Log(val level: Int, val message: String) : EngineEvent
     data class GroupsUpdated(val groups: List<OutboundGroupInfo>) : EngineEvent
 }

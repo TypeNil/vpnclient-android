@@ -1,10 +1,6 @@
 package dev.typenil.vpnclient.core.vpn
 
-import android.content.Context
 import android.content.Intent
-import android.net.VpnService
-import androidx.core.content.ContextCompat
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
@@ -16,6 +12,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,12 +36,26 @@ interface NodeConfigProvider {
  *
  * Same-process wiring: the service injects this singleton and reports engine
  * lifecycle; the UI calls [connect]/[disconnect].
+ *
+ * Invariants:
+ * - every connect attempt gets a [sessionGeneration]; service callbacks and
+ *   collector emissions tagged with an older generation are ignored, so a
+ *   stale session can never corrupt current state;
+ * - telemetry (stats/groups) may only mutate an existing `Connected` payload —
+ *   it never creates or resurrects lifecycle state;
+ * - engine terminal events are recorded and teardown converges through the
+ *   service; the terminal error is published by [onServiceStopped];
+ * - `pendingSession` is an in-memory handoff only (durable recovery is
+ *   handled at the service level in a later slice).
  */
 @Singleton
 class ConnectionManager @Inject constructor(
-    @ApplicationContext private val app: Context,
+    private val serviceControl: ServiceControl,
     private val configProvider: NodeConfigProvider,
 ) {
+
+    /** Engine config + session generation handed to the service (too big for extras). */
+    class PendingSession(val config: EngineConfig, val generation: Long)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutex = Mutex()
@@ -52,18 +63,29 @@ class ConnectionManager @Inject constructor(
     private val _state = MutableStateFlow<VpnConnectionState>(VpnConnectionState.Idle)
     val state: StateFlow<VpnConnectionState> = _state
 
-    /** Consent intent from [VpnService.prepare] the UI must launch. */
+    /** Consent intent the UI must launch. */
     private val _prepareIntent = MutableStateFlow<Intent?>(null)
     val prepareIntent: StateFlow<Intent?> = _prepareIntent
 
-    /** Config handed to the service via the pending field (too big for extras). */
     @Volatile
-    var pendingConfig: EngineConfig? = null
+    var pendingSession: PendingSession? = null
         private set
 
+    /** Monotonic in-process session id; incremented once per connect attempt. */
+    private var sessionGeneration = 0L
+    private var sessionNode: NodeSummary? = null
+
+    /**
+     * Terminal error observed while a session was running; published by
+     * [onServiceStopped] once the service finished teardown. A VPN that is
+     * "failing but still up" is reported as failed only after TUN/core are
+     * actually cleaned.
+     */
+    private var pendingTerminalError: VpnError? = null
+
     private var engine: VpnEngine? = null
-    private var statsJob: kotlinx.coroutines.Job? = null
-    private var eventsJob: kotlinx.coroutines.Job? = null
+    private var statsJob: Job? = null
+    private var eventsJob: Job? = null
 
     /** User pressed Connect. */
     fun connect() {
@@ -80,25 +102,29 @@ class ConnectionManager @Inject constructor(
                 val config = try {
                     configProvider.compileSelected()
                 } catch (e: EngineError) {
-                    _state.value = VpnConnectionState.Error(VpnError.fromEngine(e), null)
+                    publish(VpnConnectionState.Error(VpnError.fromEngine(e), null))
                     return@withLock
                 } catch (e: Exception) {
-                    _state.value = VpnConnectionState.Error(
-                        VpnError.Unexpected(e.message ?: "config build failed"), null,
+                    publish(
+                        VpnConnectionState.Error(
+                            VpnError.Unexpected(e.message ?: "config build failed"), null,
+                        ),
                     )
                     return@withLock
                 }
                 if (config == null) {
-                    _state.value = VpnConnectionState.Error(VpnError.NoNodeSelected, null)
+                    publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
                     return@withLock
                 }
-                _state.value = VpnConnectionState.Preparing(config.node)
+                val generation = ++sessionGeneration
+                pendingSession = PendingSession(config, generation)
+                sessionNode = config.node
+                publish(VpnConnectionState.Preparing(config.node))
 
-                pendingConfig = config
-                val prepare = VpnService.prepare(app)
+                val prepare = serviceControl.prepareVpn()
                 if (prepare != null) {
                     _prepareIntent.value = prepare
-                    _state.value = VpnConnectionState.PermissionRequired
+                    publish(VpnConnectionState.PermissionRequired)
                     return@withLock
                 }
                 launchService(config)
@@ -116,19 +142,21 @@ class ConnectionManager @Inject constructor(
                 if (_state.value !is VpnConnectionState.PermissionRequired) {
                     return@withLock
                 }
-                val config = pendingConfig
+                val session = pendingSession
                 if (!granted) {
-                    pendingConfig = null
-                    _state.value = VpnConnectionState.Error(
-                        VpnError.PermissionDenied, config?.node,
+                    pendingSession = null
+                    publish(
+                        VpnConnectionState.Error(
+                            VpnError.PermissionDenied, session?.config?.node,
+                        ),
                     )
                     return@withLock
                 }
-                if (config == null) {
-                    _state.value = VpnConnectionState.Error(VpnError.NoNodeSelected, null)
+                if (session == null) {
+                    publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
                     return@withLock
                 }
-                launchService(config)
+                launchService(session.config)
             }
         }
     }
@@ -141,48 +169,50 @@ class ConnectionManager @Inject constructor(
                 ) {
                     return@withLock
                 }
-                _state.value = VpnConnectionState.Stopping
-                app.startService(ClientVpnService.disconnectIntent(app))
+                // User intent supersedes any pending terminal error — a normal
+                // disconnect must land on Idle, not on a stale failure.
+                pendingTerminalError = null
+                publish(VpnConnectionState.Stopping)
+                serviceControl.startDisconnectService()
             }
         }
     }
 
     private fun launchService(config: EngineConfig) {
-        _state.value = VpnConnectionState.Connecting(config.node)
-        ContextCompat.startForegroundService(app, ClientVpnService.connectIntent(app))
+        publish(VpnConnectionState.Connecting(config.node))
+        serviceControl.startConnectService()
     }
 
     // region service callbacks (same process)
 
-    /** Service created the engine — collect its outputs into state. */
-    fun attachEngine(engine: VpnEngine) {
+    /**
+     * Service created the engine — collect its outputs into state.
+     * [generation] tags the session the engine belongs to; emissions tagged
+     * with a stale generation are dropped.
+     */
+    fun attachEngine(engine: VpnEngine, generation: Long) {
         this.engine = engine
         statsJob?.cancel()
         eventsJob?.cancel()
-        val node = (pendingConfig?.node)
         statsJob = scope.launch {
             engine.stats.collect { stats ->
+                if (generation != sessionGeneration) return@collect
+                // Telemetry mutates a Connected payload only — it is never
+                // evidence that a session is alive.
                 val current = _state.value
-                when {
-                    current is VpnConnectionState.Connected -> {
-                        _state.value = current.copy(stats = stats)
-                    }
-                    // Late stats must not resurrect Connected while tearing down.
-                    current is VpnConnectionState.Stopping -> Unit
-                    else -> _state.value = VpnConnectionState.Connected(
-                        node = node ?: return@collect,
-                        since = Instant.now(),
-                        stats = stats,
-                    )
+                if (current is VpnConnectionState.Connected) {
+                    _state.value = current.copy(stats = stats)
                 }
             }
         }
         eventsJob = scope.launch {
             engine.events.collect { event ->
+                if (generation != sessionGeneration) return@collect
                 when (event) {
-                    is EngineEvent.Failed -> _state.value = VpnConnectionState.Error(
-                        VpnError.fromEngine(event.error), node,
-                    )
+                    is EngineEvent.Failed ->
+                        onEngineTerminated(VpnError.fromEngine(event.error))
+                    is EngineEvent.StoppedUnexpectedly ->
+                        onEngineTerminated(VpnError.EngineFailed("core terminated unexpectedly"))
                     else -> Unit
                 }
             }
@@ -197,29 +227,76 @@ class ConnectionManager @Inject constructor(
         engine = null
     }
 
+    private fun onEngineTerminated(error: VpnError) {
+        // Only meaningful while a session is alive; teardown converges through
+        // the service so TUN/collectors are cleaned before the error is shown.
+        when (_state.value) {
+            is VpnConnectionState.Connecting,
+            is VpnConnectionState.Connected,
+            is VpnConnectionState.Reconnecting,
+            -> {
+                if (pendingTerminalError == null) pendingTerminalError = error
+                serviceControl.startDisconnectService()
+            }
+            else -> Unit
+        }
+    }
+
     /** Engine + tunnel up (openTun succeeded during start). */
-    fun onServiceStarted() {
-        val config = pendingConfig ?: return
-        _state.value = VpnConnectionState.Connected(config.node, Instant.now(), null)
+    fun onServiceStarted(generation: Long) {
+        if (!isCurrent(generation)) return
+        val node = sessionNode ?: pendingSession?.config?.node ?: return
+        pendingSession = null
+        publish(VpnConnectionState.Connected(node, Instant.now(), null))
     }
 
-    fun onServiceFailed(error: VpnError) {
-        val node = pendingConfig?.node
-        pendingConfig = null
-        _state.value = VpnConnectionState.Error(error, node)
+    fun onServiceFailed(error: VpnError, generation: Long) {
+        if (!isCurrent(generation)) return
+        pendingSession = null
+        publish(VpnConnectionState.Error(error, sessionNode))
     }
 
-    fun onServiceStopped() {
-        pendingConfig = null
-        _state.value = VpnConnectionState.Idle
+    fun onServiceStopped(generation: Long) {
+        if (!isCurrent(generation)) return
+        detachEngine()
+        pendingSession = null
+        val error = pendingTerminalError
+        pendingTerminalError = null
+        val current = _state.value
+        val next = when {
+            error != null -> VpnConnectionState.Error(error, sessionNode)
+            // A failure was already published (onServiceFailed / onRevoke) —
+            // teardown completion must not regress it to Idle.
+            current is VpnConnectionState.Error -> return
+            else -> VpnConnectionState.Idle
+        }
+        publish(next)
     }
 
     /** onRevoke — the tunnel is already gone. */
     fun onServiceRevoked() {
-        pendingConfig = null
+        pendingSession = null
+        pendingTerminalError = null
         detachEngine()
-        _state.value = VpnConnectionState.Error(VpnError.PermissionRevoked, null)
+        publish(VpnConnectionState.Error(VpnError.PermissionRevoked, sessionNode))
     }
 
     // endregion
+
+    /**
+     * A callback applies only to the session that produced it. [generation]
+     * `-1` means the service had no session to tag (e.g. stray start) — those
+     * are lifecycle events worth reporting regardless.
+     */
+    private fun isCurrent(generation: Long): Boolean =
+        generation < 0 || generation == sessionGeneration
+
+    private fun publish(next: VpnConnectionState) {
+        SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}")
+        _state.value = next
+    }
+
+    private companion object {
+        const val TAG = "ConnectionManager"
+    }
 }

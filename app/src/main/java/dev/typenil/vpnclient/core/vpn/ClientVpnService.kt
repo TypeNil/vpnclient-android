@@ -66,6 +66,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var tunFd: ParcelFileDescriptor? = null
     private var underlyingCallback: ConnectivityManager.NetworkCallback? = null
     private var lastUnderlyingNetwork: Network? = null
+    /** Session generation this service instance is serving; -1 = none yet. */
+    private var activeGeneration: Long = -1L
 
     // The core rarely raises user-facing notifications; forwarded for
     // observability, not rendered (we own the single VPN notification).
@@ -91,13 +93,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
             SecureLog.w(TAG, "start requested while engine already running")
             return
         }
-        val config = connectionManager.pendingConfig
-        if (config == null) {
-            SecureLog.e(TAG, "start requested with no pending config")
-            connectionManager.onServiceFailed(VpnError.NoNodeSelected)
+        val session = connectionManager.pendingSession
+        if (session == null) {
+            SecureLog.e(TAG, "start requested with no pending session")
+            connectionManager.onServiceFailed(VpnError.NoNodeSelected, activeGeneration)
             stopSelf()
             return
         }
+        val config = session.config
+        activeGeneration = session.generation
         showNotification(
             title = getString(R.string.notification_connecting),
             text = config.node.name,
@@ -114,18 +118,18 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     notifications = notificationSink,
                 )
                 engine = created
-                connectionManager.attachEngine(created)
+                connectionManager.attachEngine(created, session.generation)
                 created.start(config)
                 // start() returned → openTun succeeded inside it; tunnel is up.
                 if (engine !== created) {
                     // A disconnect raced us while start() was suspended.
                     runCatching { created.stop() }
                     cleanup()
-                    connectionManager.onServiceStopped()
+                    connectionManager.onServiceStopped(session.generation)
                     stopSelf()
                     return@launch
                 }
-                connectionManager.onServiceStarted()
+                connectionManager.onServiceStarted(session.generation)
             } catch (e: Exception) {
                 SecureLog.e(TAG, "engine start failed", e)
                 engine = null
@@ -136,6 +140,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     } else {
                         VpnError.Unexpected(e.message ?: "engine start failed")
                     },
+                    session.generation,
                 )
                 stopSelf()
             }
@@ -145,11 +150,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private fun stopTunnel() {
         val current = engine
         engine = null
+        val generation = activeGeneration
+        activeGeneration = -1L
         scope.launch {
             runCatching { current?.stop() }
             connectionManager.detachEngine()
             cleanup()
-            connectionManager.onServiceStopped()
+            connectionManager.onServiceStopped(generation)
             stopSelf()
         }
     }
@@ -173,6 +180,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
         }
         cleanup()
+        // Safety net: if the service dies without a disconnect intent (system
+        // kill, always-on teardown), the state machine must not keep claiming
+        // a live tunnel. Idempotent with the normal stopTunnel report.
+        connectionManager.onServiceStopped(activeGeneration)
+        activeGeneration = -1L
         scope.cancel()
         super.onDestroy()
     }

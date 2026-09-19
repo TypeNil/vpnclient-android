@@ -40,6 +40,11 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        // Let JVM unit tests construct lightweight android.jar stubs
+        // (e.g. an empty Intent) without Robolectric.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 // libbox AAR is fetched from the singbox-android/libbox GitHub release and

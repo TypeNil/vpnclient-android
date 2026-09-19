@@ -56,13 +56,20 @@ requesting VPN permission.
 `VpnConnectionState`: `Idle → Preparing → PermissionRequired? → Connecting →
 Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 
-- `connect()`: compile config → `checkConfig` → `VpnService.prepare()` →
-  (consent intent → UI launcher → `onPermissionResult`) → `startForegroundService`.
+- `connect()`: compile config → `VpnService.prepare()` → (consent intent →
+  UI launcher → `onPermissionResult`) → `startForegroundService`. Each attempt
+  gets a monotonically increasing session generation; every service callback
+  and collector emission is tagged with it and stale generations are dropped.
 - `ClientVpnService` builds the engine, calls `start(config)`; libbox calls back
-  `EnginePlatform.openTun` → `Builder.establish()` → fd. `onServiceStarted()`
-  flips state to `Connected`; stats flow updates counters.
+  `EnginePlatform.openTun` → `Builder.establish()` → fd. `onServiceStarted(gen)`
+  flips state to `Connected`; stats may only mutate a `Connected` payload —
+  telemetry never creates or resurrects lifecycle state.
 - Disconnect: notification action / UI → `disconnect` intent → `engine.stop()` →
-  `closeTun` → `stopSelf` → `onServiceStopped()` → `Idle`.
+  `closeTun` → `stopSelf` → `onServiceStopped(gen)` → `Idle`.
+- Unexpected engine termination (`Failed` / `StoppedUnexpectedly`) is recorded,
+  teardown converges through the service, and the error is published by
+  `onServiceStopped(gen)` once TUN/collectors are cleaned. `stop()` for an
+  app-requested disconnect never emits a terminal engine event.
 - `onRevoke` (settings "disconnect"/another VPN takes over) → `onServiceRevoked()`
   → `Error(PermissionRevoked)`.
 - Network change: `ConnectivityManager.NetworkCallback` → `engine.onUnderlyingNetworkChanged()`

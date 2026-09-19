@@ -10,8 +10,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import dev.typenil.vpnclient.core.engine.singbox.SingBoxEngineFactory
+import dev.typenil.vpnclient.core.vpn.AndroidServiceControl
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
+import dev.typenil.vpnclient.core.vpn.ServiceControl
 import dev.typenil.vpnclient.data.NodeConfigProviderImpl
 import dev.typenil.vpnclient.data.db.AppDatabase
 import dev.typenil.vpnclient.data.db.NodeDao
@@ -54,14 +56,18 @@ object AppModule {
     @Provides
     @Singleton
     fun provideConnectionManager(
-        @ApplicationContext context: Context,
+        serviceControl: ServiceControl,
         configProvider: NodeConfigProvider,
-    ): ConnectionManager = ConnectionManager(context, configProvider)
+    ): ConnectionManager = ConnectionManager(serviceControl, configProvider)
 }
 
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class AppBindsModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindServiceControl(impl: AndroidServiceControl): ServiceControl
 
     @Binds
     @Singleton
