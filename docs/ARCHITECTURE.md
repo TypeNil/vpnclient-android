@@ -116,6 +116,15 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   `setUnderlyingNetworks` + `ConnectionManager` (`Connected`↔`Reconnecting`)
   + coalesced `engine.onUnderlyingNetworkChanged()` → `commandServer.resetNetwork()`.
   The engine's `NetworkMonitor` additionally feeds libbox internals.
+- Doze: a service-owned `ACTION_DEVICE_IDLE_MODE_CHANGED` receiver forwards
+  `onDeviceIdle` to the engine (`commandServer.pause()`/`wake()`), but only
+  when the opt-in `dozePowerSave` setting is on — `pause()` drops open TCP
+  connections.
+- Diagnostics: `LibboxRuntime.init` calls `promoteOOMDraft()` +
+  `promotePowerReportDraft()` so platform bugreports carry core state.
+- Release: R8 optimization is on for release builds (the AAR ships consumer
+  keep rules for `go.**`/`io.nekohasekai.**`); the Room schema is exported to
+  `app/schemas/` for migration history.
 
 ### Entry points
 
@@ -141,7 +150,7 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 ## Storage
 
 - Room: `subscriptions` + `nodes` tables (nodes keyed by stable content hash id).
-- DataStore preferences: selected node id, HWID, reconnect/IPv6 flags,
+- DataStore preferences: selected node id, HWID, reconnect/IPv6/doze flags,
   `desiredVpnRunning`, `subscriptionRefreshMinutes`, `perAppMode`,
   `perAppPackages`.
 - Secrets stay in Room (`url`, `rawUri`, `outboundJson`) — local-only, never exported;

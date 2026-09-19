@@ -28,7 +28,7 @@ android {
     buildTypes {
         release {
             optimization {
-                enable = false
+                enable = true
             }
         }
     }
@@ -45,6 +45,11 @@ android {
         // (e.g. an empty Intent) without Robolectric.
         unitTests.isReturnDefaultValues = true
     }
+}
+
+ksp {
+    // Exported schema JSON is committed under app/schemas/ — migration history.
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 // libbox AAR is fetched from the singbox-android/libbox GitHub release and

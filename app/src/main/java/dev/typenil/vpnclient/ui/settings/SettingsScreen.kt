@@ -66,6 +66,12 @@ fun SettingsScreen(
             checked = ui.ipv6Enabled,
             onCheckedChange = viewModel::setIpv6Enabled,
         )
+        SwitchRow(
+            title = "Doze power save",
+            subtitle = "Pause the core when the device idles — drops open connections",
+            checked = ui.dozePowerSave,
+            onCheckedChange = viewModel::setDozePowerSave,
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()

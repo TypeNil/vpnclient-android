@@ -36,5 +36,9 @@ object LibboxRuntime {
         )
         Libbox.setLocale(Locale.getDefault().toLanguageTag())
         Libbox.prepareCrashSignalHandlers()
+        // Platform diagnostics drafts — surfaced in bugreports/OOM analysis
+        // (same calls sing-box-for-android makes at setup).
+        runCatching { Libbox.promoteOOMDraft() }
+        runCatching { Libbox.promotePowerReportDraft() }
     }
 }

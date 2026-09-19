@@ -144,7 +144,7 @@ abstract class NodeDao {
 @Database(
     entities = [SubscriptionEntity::class, NodeEntity::class],
     version = 2,
-    exportSchema = false,
+    exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun subscriptionDao(): SubscriptionDao

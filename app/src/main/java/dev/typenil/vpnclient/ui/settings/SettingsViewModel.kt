@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val reconnectOnNetworkChange: Boolean = true,
     val ipv6Enabled: Boolean = true,
+    val dozePowerSave: Boolean = false,
     /** <0 = manual only, 0 = provider-driven, >0 = fixed minutes. */
     val autoRefreshMinutes: Int = 0,
 ) {
@@ -28,11 +29,13 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = combine(
         settings.reconnectOnNetworkChange,
         settings.ipv6Enabled,
+        settings.dozePowerSave,
         settings.autoRefreshMinutes,
-    ) { reconnect, ipv6, refreshMinutes ->
+    ) { reconnect, ipv6, doze, refreshMinutes ->
         SettingsUiState(
             reconnectOnNetworkChange = reconnect,
             ipv6Enabled = ipv6,
+            dozePowerSave = doze,
             autoRefreshMinutes = refreshMinutes,
         )
     }.stateIn(
@@ -47,6 +50,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setIpv6Enabled(enabled: Boolean) {
         viewModelScope.launch { settings.setIpv6Enabled(enabled) }
+    }
+
+    fun setDozePowerSave(enabled: Boolean) {
+        viewModelScope.launch { settings.setDozePowerSave(enabled) }
     }
 
     fun setAutoRefreshEnabled(enabled: Boolean) {

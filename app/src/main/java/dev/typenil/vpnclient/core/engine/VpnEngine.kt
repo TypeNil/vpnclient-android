@@ -78,6 +78,9 @@ interface VpnEngine {
     /** Push a network-change signal (wifi↔cellular, default network loss). */
     suspend fun onUnderlyingNetworkChanged()
 
+    /** Device idle (Doze) hint; engines may pause background work when true. */
+    suspend fun onDeviceIdle(idle: Boolean) = Unit
+
     val stats: Flow<TrafficStats>
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>

@@ -1,7 +1,9 @@
 package dev.typenil.vpnclient.core.vpn
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
@@ -11,6 +13,8 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.log.SecureLog
@@ -85,6 +89,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var tunFd: ParcelFileDescriptor? = null
     private var underlyingCallback: ConnectivityManager.NetworkCallback? = null
     private var lastUnderlyingNetwork: Network? = null
+    private var dozeReceiverRegistered = false
+
+    /** Forwards Doze transitions to the engine (opt-in — pause drops TCP). */
+    private val dozeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val pm = context.getSystemService(PowerManager::class.java)
+            val idle = pm.isDeviceIdleMode
+            val activeEngine = engine ?: return
+            scope.launch {
+                if (settings.dozePowerSave.first()) activeEngine.onDeviceIdle(idle)
+            }
+        }
+    }
     /** Session generation this service instance is serving; -1 = none yet. */
     private var activeGeneration: Long = -1L
     /** A teardown was requested while a start was still in flight. */
@@ -185,6 +202,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 )
                 engine = created
                 connectionManager.attachEngine(created, generation)
+                registerDozeReceiver()
                 created.start(config)
                 // start() returned → openTun succeeded inside it; tunnel is up.
                 if (engine !== created || stopRequested) {
@@ -234,6 +252,23 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private fun cleanup() {
         runCatching { closeTun() }
         unregisterUnderlyingNetworkCallback()
+        unregisterDozeReceiver()
+    }
+
+    private fun registerDozeReceiver() {
+        if (dozeReceiverRegistered) return
+        ContextCompat.registerReceiver(
+            this, dozeReceiver,
+            IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        dozeReceiverRegistered = true
+    }
+
+    private fun unregisterDozeReceiver() {
+        if (!dozeReceiverRegistered) return
+        runCatching { unregisterReceiver(dozeReceiver) }
+        dozeReceiverRegistered = false
     }
 
     override fun onDestroy() {

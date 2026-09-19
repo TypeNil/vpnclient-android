@@ -182,6 +182,16 @@ class SingBoxEngine(
         Unit
     }
 
+    /**
+     * Doze: `pause()` stops the core's background timers — it also drops open
+     * TCP connections, so callers only opt in via the Doze power-save setting.
+     */
+    override suspend fun onDeviceIdle(idle: Boolean): Unit = withContext(Dispatchers.IO) {
+        runCatching { if (idle) commandServer?.pause() else commandServer?.wake() }
+            .onFailure { SecureLog.w(TAG, "pause/wake failed: ${it.message}") }
+        Unit
+    }
+
     override suspend fun selectOutbound(groupTag: String, outboundTag: String): Unit =
         withContext(Dispatchers.IO) {
             runCatching { commandClient?.selectOutbound(groupTag, outboundTag) }

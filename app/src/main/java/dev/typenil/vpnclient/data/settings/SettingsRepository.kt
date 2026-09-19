@@ -38,6 +38,8 @@ class SettingsRepository @Inject constructor(
         /** PerAppMode.ordinal: 0 = all, 1 = include selected, 2 = exclude selected. */
         val PER_APP_MODE = intPreferencesKey("per_app_mode")
         val PER_APP_PACKAGES = stringSetPreferencesKey("per_app_packages")
+        /** Opt-in: pause the core in Doze (drops open TCP connections). */
+        val DOZE_POWER_SAVE = booleanPreferencesKey("doze_power_save")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -120,6 +122,15 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setPerAppPackages(packages: Set<String>) {
         context.settingsStore.edit { it[Keys.PER_APP_PACKAGES] = packages }
+    }
+
+    /** Pause the engine in Doze — saves battery but drops open connections. */
+    val dozePowerSave: Flow<Boolean> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.DOZE_POWER_SAVE] ?: false }
+
+    suspend fun setDozePowerSave(enabled: Boolean) {
+        context.settingsStore.edit { it[Keys.DOZE_POWER_SAVE] = enabled }
     }
 
     internal companion object {
