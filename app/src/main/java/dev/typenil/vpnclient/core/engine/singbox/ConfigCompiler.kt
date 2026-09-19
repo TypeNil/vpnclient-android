@@ -105,11 +105,13 @@ class ConfigCompiler @Inject constructor() {
                         put("type", "https")
                         put("tag", "remote")
                         put("server", "1.1.1.1")
+                        // DoH dials like an outbound: without a detour it goes
+                        // direct, leaking DNS past the selected proxy.
+                        put("detour", SELECTOR_TAG)
                     }
                 }
                 put("final", "remote")
                 put("strategy", if (ipv6Enabled) "prefer_ipv4" else "ipv4_only")
-                put("independent_cache", true)
             }
             putJsonArray("inbounds") {
                 addJsonObject {
@@ -122,8 +124,9 @@ class ConfigCompiler @Inject constructor() {
                     }
                     put("auto_route", true)
                     put("strict_route", false)
+                    // gvisor is required on pinned libbox 1.14.1 (system stack
+                    // fails inbound TCP there); revisit on a 1.15+ upgrade.
                     put("stack", "gvisor")
-                    put("endpoint_independent_nat", true)
                 }
             }
             put("outbounds", outbounds)

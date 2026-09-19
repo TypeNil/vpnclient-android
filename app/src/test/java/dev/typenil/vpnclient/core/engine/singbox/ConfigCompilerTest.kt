@@ -72,6 +72,32 @@ class ConfigCompilerTest {
     }
 
     @Test
+    fun `remote DoH is detoured through the selected proxy`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true)
+        val servers = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+        val remote = servers.first {
+            it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
+        }.jsonObject
+        assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `deprecated sing-box fields are absent on pinned core`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true)
+        val root = json.parseToJsonElement(config.configJson).jsonObject
+
+        val tun = root["inbounds"]!!.jsonArray[0].jsonObject
+        assertTrue("endpoint_independent_nat must not be emitted", "endpoint_independent_nat" !in tun)
+        // gvisor stays while the pinned core is 1.14.x — removal is gated on a
+        // 1.15+ upgrade with device regression (see docs/UPSTREAM_RESEARCH.md).
+        assertEquals("gvisor", tun["stack"]!!.jsonPrimitive.content)
+
+        val dns = root["dns"]!!.jsonObject
+        assertTrue("independent_cache is deprecated in 1.14", "independent_cache" !in dns)
+    }
+
+    @Test
     fun `ipv6 disabled drops v6 address and uses ipv4_only`() {
         val config = compiler.build(listOf(node("n1")), "n1", false)
         val root = json.parseToJsonElement(config.configJson).jsonObject

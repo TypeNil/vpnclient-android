@@ -40,8 +40,10 @@ A failed refresh never touches stored nodes (last-known-good).
 - `selector` group `proxy` (default = selected node) — runtime-switchable via
   `CommandClient.selectOutbound`
 - `urltest` group `auto` over all nodes — `urlTest` latency measurement
-- `tun` inbound (mtu 9000, `auto_route`, `stack: system`, IPv6 optional)
-- `dns`: `local` (platform, via LocalDnsResolver) + `remote` (https://1.1.1.1);
+- `tun` inbound (mtu 9000, `auto_route`, `stack: gvisor` — required on pinned
+  libbox 1.14.1; IPv6 optional)
+- `dns`: `local` (platform, via LocalDnsResolver) + `remote` (https://1.1.1.1
+  with `detour: proxy` so DoH follows the selected node, not the direct path);
   route rule `hijack-dns` captures tunneled DNS; `default_domain_resolver: local`
   prevents the loop on outbound server names
 - route: `sniff` → `hijack-dns` → private-IP bypass → `final: proxy`
