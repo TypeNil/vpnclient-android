@@ -38,6 +38,7 @@ class SubscriptionRepository @Inject constructor(
     private val dispatcher: SubscriptionParserDispatcher,
     private val validator: SubscriptionCandidateValidator,
     private val transactions: DbTransactionRunner,
+    private val scheduler: SubscriptionRefreshScheduler,
     private val settings: SubscriptionSettings,
 ) {
 
@@ -134,6 +135,14 @@ class SubscriptionRepository @Inject constructor(
             if (!fetched.profileTitle.isNullOrBlank() && sub.name == deriveName(sub.url)) {
                 subscriptionDao.update(sub.copy(name = fetched.profileTitle))
             }
+            // (Re)register background refresh — the provider interval may have
+            // changed, and a removed/re-added job must be reconciled.
+            scheduler.schedule(
+                subscriptionId = id,
+                providerMinutes = fetched.updateIntervalMinutes,
+                userOverrideMinutes = settings.autoRefreshMinutes.first(),
+                enabled = sub.enabled,
+            )
             SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} fmt=${classified.format}")
             Result.success(Unit)
         } catch (e: SubscriptionError) {
@@ -150,6 +159,7 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun remove(id: Long) {
+        scheduler.cancel(id)
         nodeDao.deleteForSubscription(id)
         subscriptionDao.delete(id)
     }

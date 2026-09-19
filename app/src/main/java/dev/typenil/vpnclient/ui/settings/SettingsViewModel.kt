@@ -14,7 +14,11 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val reconnectOnNetworkChange: Boolean = true,
     val ipv6Enabled: Boolean = true,
-)
+    /** <0 = manual only, 0 = provider-driven, >0 = fixed minutes. */
+    val autoRefreshMinutes: Int = 0,
+) {
+    val autoRefreshEnabled: Boolean get() = autoRefreshMinutes >= 0
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -24,10 +28,12 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = combine(
         settings.reconnectOnNetworkChange,
         settings.ipv6Enabled,
-    ) { reconnect, ipv6 ->
+        settings.autoRefreshMinutes,
+    ) { reconnect, ipv6, refreshMinutes ->
         SettingsUiState(
             reconnectOnNetworkChange = reconnect,
             ipv6Enabled = ipv6,
+            autoRefreshMinutes = refreshMinutes,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -41,5 +47,14 @@ class SettingsViewModel @Inject constructor(
 
     fun setIpv6Enabled(enabled: Boolean) {
         viewModelScope.launch { settings.setIpv6Enabled(enabled) }
+    }
+
+    fun setAutoRefreshEnabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setAutoRefreshMinutes(if (enabled) 0 else -1) }
+    }
+
+    /** Persist a user override interval; 0/blank falls back to the provider hint. */
+    fun setAutoRefreshMinutes(minutes: Int) {
+        viewModelScope.launch { settings.setAutoRefreshMinutes(minutes.coerceAtLeast(0)) }
     }
 }

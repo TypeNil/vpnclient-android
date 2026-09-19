@@ -159,7 +159,10 @@ class SubscriptionFetcher @Inject constructor(
                     userInfo = parseUserInfo(headers["subscription-userinfo"]),
                     supportUrl = headers["profile-web-page-url"] ?: headers["support-url"],
                     announce = decodeHeaderValue(headers["announce"]),
-                    updateIntervalMinutes = headers["profile-update-interval"]?.toIntOrNull(),
+                    // Convention (Remnawave/Streisand): the header value is
+                    // in HOURS; normalize to minutes for scheduling.
+                    updateIntervalMinutes = headers["profile-update-interval"]
+                        ?.toIntOrNull()?.takeIf { it > 0 }?.let { it * 60 },
                     hwidHeaders = headers.names()
                         .filter { it.lowercase().startsWith("x-hwid") }
                         .associateWith { headers[it]!! },

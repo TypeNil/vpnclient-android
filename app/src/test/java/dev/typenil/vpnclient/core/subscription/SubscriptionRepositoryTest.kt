@@ -39,6 +39,7 @@ class SubscriptionRepositoryTest {
 
         override fun observeAll() = flowOf(subs.values.toList())
         override suspend fun get(id: Long) = subs[id]
+        override suspend fun getAll() = subs.values.toList()
         override suspend fun insert(entity: SubscriptionEntity): Long {
             subs[entity.id] = entity
             return entity.id
@@ -109,15 +110,38 @@ class SubscriptionRepositoryTest {
 
     private class FakeSettings : SubscriptionSettings {
         val selected = MutableStateFlow<String?>(null)
+        val autoRefresh = MutableStateFlow(0)
         override suspend fun getOrCreateHwid() = "00000000-0000-0000-0000-000000000000"
         override val selectedNodeId: Flow<String?> get() = selected
         override suspend fun setSelectedNodeId(id: String?) { selected.value = id }
+        override val autoRefreshMinutes: Flow<Int> get() = autoRefresh
+    }
+
+    private class FakeScheduler : SubscriptionRefreshScheduler {
+        data class Call(
+            val id: Long,
+            val providerMinutes: Int?,
+            val userOverride: Int,
+            val enabled: Boolean,
+        )
+        val scheduled = mutableListOf<Call>()
+        val cancelled = mutableListOf<Long>()
+        override suspend fun schedule(
+            subscriptionId: Long,
+            providerMinutes: Int?,
+            userOverrideMinutes: Int,
+            enabled: Boolean,
+        ) {
+            scheduled.add(Call(subscriptionId, providerMinutes, userOverrideMinutes, enabled))
+        }
+        override fun cancel(subscriptionId: Long) { cancelled.add(subscriptionId) }
     }
 
     private lateinit var subscriptionDao: FakeSubscriptionDao
     private lateinit var nodeDao: FakeNodeDao
     private lateinit var validator: FakeValidator
     private lateinit var settings: FakeSettings
+    private lateinit var scheduler: FakeScheduler
     private lateinit var repository: SubscriptionRepository
 
     private val uriParser = UriListParser()
@@ -166,6 +190,7 @@ class SubscriptionRepositoryTest {
         nodeDao = FakeNodeDao()
         validator = FakeValidator(nodeDao)
         settings = FakeSettings()
+        scheduler = FakeScheduler()
         repository = SubscriptionRepository(
             subscriptionDao = subscriptionDao,
             nodeDao = nodeDao,
@@ -176,6 +201,7 @@ class SubscriptionRepositoryTest {
             ),
             validator = validator,
             transactions = FakeTransactions(),
+            scheduler = scheduler,
             settings = settings,
         )
     }
@@ -291,5 +317,39 @@ class SubscriptionRepositoryTest {
         assertEquals(0, nodeDao.replaceCalls)
         assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
         assertEquals("HTTP 500", subscriptionDao.lastAttemptError)
+    }
+
+    @Test
+    fun `successful refresh registers scheduled auto-update`() = runTest {
+        seedSubscription()
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("profile-update-interval", "2"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(1, scheduler.scheduled.size)
+        val call = scheduler.scheduled.single()
+        assertEquals(1L, call.id)
+        assertEquals(120, call.providerMinutes)
+        assertEquals(0, call.userOverride)
+        assertTrue(call.enabled)
+    }
+
+    @Test
+    fun `failed refresh does not touch the scheduler`() = runTest {
+        seedSubscription()
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        assertTrue(repository.refresh(1).isFailure)
+        assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `remove cancels the scheduled job`() = runTest {
+        seedSubscription()
+        repository.remove(1)
+        assertEquals(listOf(1L), scheduler.cancelled)
     }
 }

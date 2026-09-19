@@ -11,6 +11,7 @@ import dagger.hilt.components.SingletonComponent
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import dev.typenil.vpnclient.core.engine.singbox.SingBoxEngineFactory
 import dev.typenil.vpnclient.core.subscription.SubscriptionCandidateValidator
+import dev.typenil.vpnclient.core.subscription.SubscriptionRefreshScheduler
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.vpn.AndroidServiceControl
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
@@ -21,6 +22,7 @@ import dev.typenil.vpnclient.data.NodeConfigProviderImpl
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.RoomDbTransactionRunner
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import dev.typenil.vpnclient.data.work.WorkManagerRefreshScheduler
 import dev.typenil.vpnclient.data.db.AppDatabase
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -85,6 +87,12 @@ abstract class AppBindsModule {
     @Binds
     @Singleton
     abstract fun bindDbTransactionRunner(impl: RoomDbTransactionRunner): DbTransactionRunner
+
+    @Binds
+    @Singleton
+    abstract fun bindSubscriptionRefreshScheduler(
+        impl: WorkManagerRefreshScheduler,
+    ): SubscriptionRefreshScheduler
 
     @Binds
     @Singleton

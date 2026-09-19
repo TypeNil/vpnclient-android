@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,6 +32,8 @@ class SettingsRepository @Inject constructor(
         /** "User wants the tunnel up" — survives process death; drives
          *  START_STICKY rebuilds. Cleared on every intentional/failed teardown. */
         val DESIRED_VPN_RUNNING = booleanPreferencesKey("desired_vpn_running")
+        /** -1 = manual only, 0 = provider interval (default), >0 = user override. */
+        val SUBSCRIPTION_REFRESH_MINUTES = intPreferencesKey("subscription_refresh_minutes")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -84,6 +87,17 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setDesiredVpnRunning(running: Boolean) {
         context.settingsStore.edit { it[Keys.DESIRED_VPN_RUNNING] = running }
+    }
+
+    /** See [SubscriptionSettings.autoRefreshMinutes] for the encoding. */
+    override val autoRefreshMinutes: Flow<Int> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.SUBSCRIPTION_REFRESH_MINUTES] ?: 0 }
+
+    suspend fun setAutoRefreshMinutes(minutes: Int) {
+        context.settingsStore.edit {
+            it[Keys.SUBSCRIPTION_REFRESH_MINUTES] = minutes.coerceAtLeast(-1)
+        }
     }
 
     internal companion object {

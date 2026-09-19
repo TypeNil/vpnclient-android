@@ -6,16 +6,55 @@ import android.app.NotificationManager
 import dagger.hilt.android.HiltAndroidApp
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.singbox.LibboxRuntime
+import dev.typenil.vpnclient.core.subscription.SubscriptionRefreshScheduler
 import dev.typenil.vpnclient.core.vpn.VpnNotification
+import dev.typenil.vpnclient.data.db.SubscriptionDao
+import dev.typenil.vpnclient.data.settings.SettingsRepository
+import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class VpnClientApp : Application() {
+
+    @Inject
+    lateinit var applicationScope: CoroutineScope
+
+    @Inject
+    lateinit var subscriptionDao: SubscriptionDao
+
+    @Inject
+    lateinit var settings: SettingsRepository
+
+    @Inject
+    lateinit var refreshScheduler: SubscriptionRefreshScheduler
 
     override fun onCreate() {
         super.onCreate()
         SecureLog.debugEnabled = BuildConfig.DEBUG
         createNotificationChannels()
         LibboxRuntime.init(this)
+        reconcileRefreshJobs()
+    }
+
+    /**
+     * Reconcile scheduled refresh work with persisted subscriptions — covers
+     * jobs lost to a reinstall/restore, and re-registers them whenever the
+     * user override interval changes (DataStore emits on startup too).
+     */
+    private fun reconcileRefreshJobs() {
+        applicationScope.launch {
+            settings.autoRefreshMinutes.collect { userOverride ->
+                subscriptionDao.getAll().forEach { sub ->
+                    refreshScheduler.schedule(
+                        subscriptionId = sub.id,
+                        providerMinutes = sub.updateIntervalMinutes,
+                        userOverrideMinutes = userOverride,
+                        enabled = sub.enabled,
+                    )
+                }
+            }
+        }
     }
 
     private fun createNotificationChannels() {

@@ -62,6 +62,9 @@ interface SubscriptionDao {
     @Query("SELECT * FROM subscriptions WHERE id = :id")
     suspend fun get(id: Long): SubscriptionEntity?
 
+    @Query("SELECT * FROM subscriptions")
+    suspend fun getAll(): List<SubscriptionEntity>
+
     @Insert
     suspend fun insert(entity: SubscriptionEntity): Long
 

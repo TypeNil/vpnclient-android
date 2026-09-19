@@ -32,6 +32,24 @@ SubscriptionRepository.refresh(id)
 
 A failed refresh never touches stored nodes (last-known-good).
 
+### Auto-refresh (WorkManager)
+
+- One unique `PeriodicWorkRequest` per subscription (`subscription-refresh-<id>`),
+  `ExistingPeriodicWorkPolicy.UPDATE`, `NetworkType.CONNECTED`, exponential
+  backoff; `Result.retry` only on transient errors (`Network`/`Timeout`),
+  bounded at 3 attempts — permanent failures are already recorded by the
+  repository's `lastError` metadata.
+- Interval precedence: user override (Settings) > `profile-update-interval`
+  header (hours → minutes) > manual-only. Floored at the 15-min platform
+  minimum. `autoRefreshMinutes`: `-1` = off, `0` = provider, `>0` = override.
+- Re-registration: after every successful refresh (provider hint may change),
+  on `remove()` (cancel), and on app start — `VpnClientApp` collects
+  `autoRefreshMinutes` and reconciles all jobs, so a settings change
+  re-registers everything.
+- The `SubscriptionRefreshScheduler` contract lives in `core.subscription`
+  (JVM-testable); `WorkManagerRefreshScheduler`/`SubscriptionRefreshWorker`
+  live in `data.work` and reach the repository via a Hilt `EntryPoint`.
+
 ## Config compilation
 
 `NodeConfigProviderImpl.compileSelected()` → `ConfigCompiler.compile(nodes, selectedId, ipv6)`:
@@ -92,7 +110,8 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 ## Storage
 
 - Room: `subscriptions` + `nodes` tables (nodes keyed by stable content hash id).
-- DataStore preferences: selected node id, HWID, reconnect/IPv6 flags.
+- DataStore preferences: selected node id, HWID, reconnect/IPv6 flags,
+  `desiredVpnRunning`, `subscriptionRefreshMinutes`.
 - Secrets stay in Room (`url`, `rawUri`, `outboundJson`) — local-only, never exported;
   `SecureLog` + `Redactor` scrub logs.
 
