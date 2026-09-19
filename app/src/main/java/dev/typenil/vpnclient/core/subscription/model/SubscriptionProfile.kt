@@ -58,6 +58,11 @@ sealed class SubscriptionError : Exception() {
     data class UnsupportedFormat(val detail: String) : SubscriptionError()
     data class ParseFailed(override val message: String) : SubscriptionError()
     data class EmptyResult(override val message: String = "no usable nodes in subscription") : SubscriptionError()
+    /** Parsed nodes fail engine validation — the candidate must not replace
+     *  a working subscription. */
+    data object ConfigRejected : SubscriptionError() {
+        override val message = "nodes rejected by engine validation"
+    }
     /** Remnawave HWID device-limit rejection. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()
     data class RemnawaveError(val statusCode: Int, override val message: String) : SubscriptionError()

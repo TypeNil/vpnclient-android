@@ -1,18 +1,20 @@
 package dev.typenil.vpnclient.core.subscription
 
 import dev.typenil.vpnclient.core.common.log.SecureLog
+import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
+import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
-import dev.typenil.vpnclient.data.settings.SettingsRepository
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,7 +24,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 /**
  * Orchestrates add/refresh/remove for subscriptions.
  *
- * Refresh is atomic-ish: parse fully succeeds before any DB rows change, and a failure
+ * Refresh commits only a fully validated candidate: fetch → classify → parse →
+ * engine validation must all succeed before any DB row changes, and the node
+ * swap + success metadata land in a single transaction. A failure anywhere
  * leaves the previously persisted nodes untouched (last-known-good).
  */
 @Singleton
@@ -32,7 +36,9 @@ class SubscriptionRepository @Inject constructor(
     private val fetcher: SubscriptionFetcher,
     private val classifier: SubscriptionClassifier,
     private val dispatcher: SubscriptionParserDispatcher,
-    private val settings: SettingsRepository,
+    private val validator: SubscriptionCandidateValidator,
+    private val transactions: DbTransactionRunner,
+    private val settings: SubscriptionSettings,
 ) {
 
     private val refreshMutex = Mutex()
@@ -68,9 +74,17 @@ class SubscriptionRepository @Inject constructor(
             val fetched = fetcher.fetch(sub.url, hwid)
             val classified = classifier.classify(fetched.body, fetched.contentType)
             val nodes = dispatcher.parse(classified.format, classified.body, id)
-            require(nodes.isNotEmpty())
+            if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
 
-            nodeDao.replaceForSubscription(id, nodes.mapIndexed { index, n ->
+            // Validate the candidate against the engine BEFORE touching the DB:
+            // parsed-but-unusable nodes must never replace a working set.
+            try {
+                validator.validate(nodes)
+            } catch (e: EngineError) {
+                throw SubscriptionError.ConfigRejected
+            }
+
+            val entities = nodes.mapIndexed { index, n ->
                 NodeEntity(
                     id = n.id,
                     subscriptionId = id,
@@ -82,15 +96,27 @@ class SubscriptionRepository @Inject constructor(
                     rawUri = n.rawUri,
                     position = index,
                 )
-            })
-            subscriptionDao.markSuccess(
-                id = id,
-                updatedAt = Instant.now().toEpochMilli(),
-                attemptAt = attemptAt,
-                userInfoJson = fetched.userInfo?.let { json.encodeToString(it) },
-                supportUrl = fetched.supportUrl,
-                updateIntervalMinutes = fetched.updateIntervalMinutes,
-            )
+            }
+            // Node swap + success metadata commit atomically — a crash between
+            // them can't leave nodes updated but the subscription flagged stale.
+            transactions.run {
+                nodeDao.replaceForSubscription(id, entities)
+                subscriptionDao.markSuccess(
+                    id = id,
+                    updatedAt = Instant.now().toEpochMilli(),
+                    attemptAt = attemptAt,
+                    userInfoJson = fetched.userInfo?.let { json.encodeToString(it) },
+                    supportUrl = fetched.supportUrl,
+                    updateIntervalMinutes = fetched.updateIntervalMinutes,
+                )
+            }
+            // If the selected node vanished in this refresh, drop the selection
+            // so the next connect picks a sane default instead of failing.
+            val selected = settings.selectedNodeId.first()
+            if (selected != null && nodeDao.get(selected) == null) {
+                settings.setSelectedNodeId(null)
+                SecureLog.i(TAG, "cleared selection — selected node vanished in refresh")
+            }
             // Apply profile-title only when the name is still the auto-derived
             // host — never overwrite a name the user typed.
             if (!fetched.profileTitle.isNullOrBlank() && sub.name == deriveName(sub.url)) {
@@ -127,6 +153,7 @@ class SubscriptionRepository @Inject constructor(
         is SubscriptionError.UnsupportedFormat -> "unsupported format"
         is SubscriptionError.ParseFailed -> "parse failed"
         is SubscriptionError.EmptyResult -> "no usable nodes"
+        is SubscriptionError.ConfigRejected -> "rejected by engine"
         is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
         is SubscriptionError.RemnawaveError -> "panel status $statusCode"
     }

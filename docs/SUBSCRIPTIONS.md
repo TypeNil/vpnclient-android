@@ -30,8 +30,16 @@ opaque and embeds it verbatim into the compiled config.
 
 Typed errors only (`SubscriptionError` sealed class): `Http(code)`, `Network`,
 `Timeout`, `TooLarge`, `UnsupportedFormat`, `ParseFailed`, `EmptyResult`,
-`DeviceLimitReached`, `RemnawaveError`. Failed refresh → `lastError` recorded on
-the profile, stored nodes untouched (last-known-good).
+`ConfigRejected`, `DeviceLimitReached`, `RemnawaveError`. Failed refresh →
+`lastError` recorded on the profile, stored nodes untouched (last-known-good).
+
+## Commit rule
+
+A refresh commits only after fetch → classify → parse → **engine validation**
+(`Libbox.checkConfig` on the full compiled config via
+`SubscriptionCandidateValidator`) all succeed. Node swap and success metadata
+land in one Room transaction. If the refresh removed the currently selected
+node, the selection is cleared so the next connect picks a valid default.
 
 ## Limits
 

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +21,7 @@ private val Context.settingsStore by preferencesDataStore(name = "settings")
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-) {
+) : SubscriptionSettings {
 
     private object Keys {
         val SELECTED_NODE_ID = stringPreferencesKey("selected_node_id")
@@ -29,11 +30,11 @@ class SettingsRepository @Inject constructor(
         val IPV6_ENABLED = booleanPreferencesKey("ipv6_enabled")
     }
 
-    val selectedNodeId: Flow<String?> = context.settingsStore.data
+    override val selectedNodeId: Flow<String?> = context.settingsStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map { it[Keys.SELECTED_NODE_ID] }
 
-    suspend fun setSelectedNodeId(id: String?) {
+    override suspend fun setSelectedNodeId(id: String?) {
         context.settingsStore.edit { prefs ->
             if (id == null) prefs.remove(Keys.SELECTED_NODE_ID) else prefs[Keys.SELECTED_NODE_ID] = id
         }
@@ -44,7 +45,7 @@ class SettingsRepository @Inject constructor(
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map { it[Keys.HWID] }
 
-    suspend fun getOrCreateHwid(): String {
+    override suspend fun getOrCreateHwid(): String {
         var existing: String? = null
         context.settingsStore.edit { prefs ->
             existing = when (val stored = prefs[Keys.HWID]) {

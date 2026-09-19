@@ -10,11 +10,17 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import dev.typenil.vpnclient.core.engine.singbox.SingBoxEngineFactory
+import dev.typenil.vpnclient.core.subscription.SubscriptionCandidateValidator
+import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.vpn.AndroidServiceControl
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.core.vpn.ServiceControl
+import dev.typenil.vpnclient.data.CandidateValidatorImpl
 import dev.typenil.vpnclient.data.NodeConfigProviderImpl
+import dev.typenil.vpnclient.data.db.DbTransactionRunner
+import dev.typenil.vpnclient.data.db.RoomDbTransactionRunner
+import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.data.db.AppDatabase
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -68,6 +74,20 @@ abstract class AppBindsModule {
     @Binds
     @Singleton
     abstract fun bindServiceControl(impl: AndroidServiceControl): ServiceControl
+
+    @Binds
+    @Singleton
+    abstract fun bindSubscriptionCandidateValidator(
+        impl: CandidateValidatorImpl,
+    ): SubscriptionCandidateValidator
+
+    @Binds
+    @Singleton
+    abstract fun bindDbTransactionRunner(impl: RoomDbTransactionRunner): DbTransactionRunner
+
+    @Binds
+    @Singleton
+    abstract fun bindSubscriptionSettings(impl: SettingsRepository): SubscriptionSettings
 
     @Binds
     @Singleton
