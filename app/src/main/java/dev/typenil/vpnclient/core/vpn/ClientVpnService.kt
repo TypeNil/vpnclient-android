@@ -88,6 +88,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var activeGeneration: Long = -1L
     /** A teardown was requested while a start was still in flight. */
     private var stopRequested = false
+    /** Coalesced network-change notification to the engine. */
+    private var networkNotifyJob: kotlinx.coroutines.Job? = null
+    private var networkDirty = false
 
     // The core rarely raises user-facing notifications; forwarded for
     // observability, not rendered (we own the single VPN notification).
@@ -402,7 +405,33 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 setUnderlyingNetworks(if (active != null) arrayOf(active) else null)
             }
         }
-        scope.launch { engine?.onUnderlyingNetworkChanged() }
+        // Feed the state machine: loss while Connected → Reconnecting;
+        // a new network while Reconnecting → Connected.
+        if (active == null) {
+            connectionManager.onUnderlyingNetworkLost()
+        } else {
+            connectionManager.onUnderlyingNetworkAvailable()
+        }
+        notifyEngineNetworkChanged()
+    }
+
+    /**
+     * resetNetwork() re-reads platform state at call time, so coalescing to a
+     * single in-flight call is enough — changes that arrive during it are
+     * covered by one bounded re-run.
+     */
+    private fun notifyEngineNetworkChanged() {
+        if (networkNotifyJob?.isActive == true) {
+            networkDirty = true
+            return
+        }
+        networkNotifyJob = scope.launch {
+            var runs = 0
+            do {
+                networkDirty = false
+                engine?.onUnderlyingNetworkChanged()
+            } while (networkDirty && ++runs < 4)
+        }
     }
 
     private fun showNotification(

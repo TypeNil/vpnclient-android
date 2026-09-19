@@ -289,6 +289,52 @@ class ConnectionManagerTest {
     }
 
     @Test
+    fun `network loss transitions Connected to Reconnecting and back`() =
+        testScope.runTest {
+            connectToRunning()
+
+            manager.onUnderlyingNetworkLost()
+            val reconnecting = manager.state.value
+            assertTrue(reconnecting is VpnConnectionState.Reconnecting)
+            assertEquals(node, (reconnecting as VpnConnectionState.Reconnecting).node)
+
+            // Stats during Reconnecting don't leak into the payload.
+            engine.statsFlow.emit(stats(555))
+            advanceUntilIdle()
+            assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+            manager.onUnderlyingNetworkAvailable()
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
+    fun `network callbacks are no-ops outside the relevant states`() =
+        testScope.runTest {
+            manager.onUnderlyingNetworkLost()
+            assertTrue(manager.state.value is VpnConnectionState.Idle)
+            manager.onUnderlyingNetworkAvailable()
+            assertTrue(manager.state.value is VpnConnectionState.Idle)
+
+            connectToRunning()
+            manager.onUnderlyingNetworkAvailable()
+            // Already Connected — no spurious transition.
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
+    fun `engine failure during Reconnecting converges to Error`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.onUnderlyingNetworkLost()
+        assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+        engine.eventsFlow.emit(EngineEvent.Failed(EngineError.CoreError("boom")))
+        advanceUntilIdle()
+        assertEquals(1, serviceControl.disconnectStarts)
+        manager.onServiceStopped(generation)
+        assertTrue(manager.state.value is VpnConnectionState.Error)
+    }
+
+    @Test
     fun `adopted session gets its own generation and reports Connected`() =
         testScope.runTest {
             // Service-driven restart (process death / always-on): no

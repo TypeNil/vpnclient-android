@@ -77,8 +77,10 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   and return `NOT_STICKY`. A null-intent restart (process death) or system
   start rebuilds the config from Room/DataStore via `NodeConfigProvider` and
   adopts a fresh session generation — no `pendingSession` handoff needed.
-- Network change: `ConnectivityManager.NetworkCallback` → `engine.onUnderlyingNetworkChanged()`
-  → `commandServer.updateNetwork()` + `DefaultNetworkMonitor` notifies libbox.
+- Network change: one `ConnectivityManager.NetworkCallback` (service-owned) →
+  `setUnderlyingNetworks` + `ConnectionManager` (`Connected`↔`Reconnecting`)
+  + coalesced `engine.onUnderlyingNetworkChanged()` → `commandServer.resetNetwork()`.
+  The engine's `NetworkMonitor` additionally feeds libbox internals.
 
 ## Threading
 

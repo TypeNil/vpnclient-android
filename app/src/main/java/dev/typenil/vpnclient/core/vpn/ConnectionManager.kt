@@ -284,6 +284,29 @@ class ConnectionManager @Inject constructor(
         publish(next)
     }
 
+    /**
+     * Physical network lost while Connected → Reconnecting (the tunnel is up
+     * but starved). Called by the service's single network observer.
+     */
+    fun onUnderlyingNetworkLost() {
+        val current = _state.value
+        if (current is VpnConnectionState.Connected) {
+            publish(
+                VpnConnectionState.Reconnecting(
+                    current.node, "network unavailable", attempt = 1,
+                ),
+            )
+        }
+    }
+
+    /** A usable underlying network is back → resume Connected. */
+    fun onUnderlyingNetworkAvailable() {
+        val current = _state.value
+        if (current is VpnConnectionState.Reconnecting) {
+            publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+        }
+    }
+
     /** onRevoke — the tunnel is already gone. */
     fun onServiceRevoked() {
         pendingSession = null

@@ -51,6 +51,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -129,8 +131,27 @@ class SingBoxEngine(
         }
         val client = CommandClient(ClientHandler(), options)
         scope.launch(Dispatchers.IO) {
-            runCatching { client.connect() }
-                .onFailure { SecureLog.w(TAG, "command client connect failed: ${it.message}") }
+            var attempt = 0
+            while (isActive) {
+                attempt++
+                try {
+                    client.connect()
+                    return@launch
+                } catch (e: Exception) {
+                    if (attempt >= COMMAND_CONNECT_MAX_ATTEMPTS) {
+                        // Bounded retry: the tunnel works without the control
+                        // channel (stats/selection degrade), so this stays
+                        // non-fatal — but it must be observable.
+                        SecureLog.w(TAG, "command client connect failed after $attempt attempts")
+                        _events.tryEmit(
+                            EngineEvent.Log(5, "control channel unavailable"),
+                        )
+                        return@launch
+                    }
+                    SecureLog.d(TAG, "command client connect retry $attempt")
+                    delay(COMMAND_CONNECT_DELAY_MS * attempt)
+                }
+            }
         }
         commandClient = client
     }
@@ -395,6 +416,8 @@ class SingBoxEngine(
     companion object {
         private const val TAG = "SingBoxEngine"
         private const val STATUS_INTERVAL_NS = 1_000_000_000L
+        private const val COMMAND_CONNECT_MAX_ATTEMPTS = 3
+        private const val COMMAND_CONNECT_DELAY_MS = 300L
     }
 }
 
