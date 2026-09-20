@@ -79,10 +79,10 @@ fun AppFilterScreen(
         }
 
         if (ui.mode != PerAppMode.ALL) {
-            // The plan is baked into the TUN at openTun — be honest that a
-            // running tunnel won't pick up edits until reconnect.
+            // The plan is baked into the TUN fd — a live tunnel rebuilds it
+            // in place, which briefly interrupts traffic.
             Text(
-                "Changes apply on the next connect",
+                "Changes reconnect the tunnel briefly",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

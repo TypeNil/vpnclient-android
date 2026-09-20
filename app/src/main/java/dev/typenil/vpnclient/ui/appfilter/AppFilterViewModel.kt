@@ -60,7 +60,7 @@ class AppFilterViewModel @Inject constructor(
         loading,
     ) { mode, selected, appList, q, isLoading ->
         AppFilterUiState(
-            mode = PerAppMode.fromOrdinal(mode),
+            mode = mode,
             selected = selected,
             apps = appList,
             query = q,
@@ -87,7 +87,7 @@ class AppFilterViewModel @Inject constructor(
     }
 
     fun setMode(mode: PerAppMode) {
-        viewModelScope.launch { settings.setPerAppMode(mode.ordinal) }
+        viewModelScope.launch { settings.setPerAppMode(mode) }
     }
 
     fun toggle(packageName: String) {

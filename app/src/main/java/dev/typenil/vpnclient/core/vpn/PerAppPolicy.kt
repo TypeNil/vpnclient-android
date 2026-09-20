@@ -1,15 +1,25 @@
 package dev.typenil.vpnclient.core.vpn
 
-/** Per-app VPN routing mode persisted in DataStore as [ordinal]. */
-enum class PerAppMode {
+/**
+ * Per-app VPN routing mode.
+ *
+ * Persisted in DataStore as [key] — never ordinal, so reordering or
+ * renaming entries can't silently reinterpret a stored preference.
+ */
+enum class PerAppMode(val key: String) {
     /** Every app's traffic goes through the tunnel (self excluded). */
-    ALL,
+    ALL("all"),
     /** Only the selected packages use the tunnel. */
-    INCLUDE,
+    INCLUDE("include"),
     /** Everything except the selected packages uses the tunnel. */
-    EXCLUDE;
+    EXCLUDE("exclude");
 
     companion object {
+        /** Unknown/absent keys fall back to [ALL] — the safest default. */
+        fun fromKey(value: String?): PerAppMode =
+            entries.firstOrNull { it.key == value } ?: ALL
+
+        /** Maps a legacy ordinal-stored value (pre-v2 DataStore key). */
         fun fromOrdinal(value: Int): PerAppMode =
             entries.getOrElse(value) { ALL }
     }

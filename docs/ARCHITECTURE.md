@@ -78,15 +78,19 @@ A failed refresh never touches stored nodes (last-known-good).
 
 ### Per-app routing
 
-- `PerAppMode` (`ALL` / `INCLUDE` / `EXCLUDE`) + a package set, persisted in
-  DataStore; picked via Settings → Per-app VPN (launcher apps only, exposed by
-  the manifest `<queries>` MAIN+LAUNCHER declaration — no `QUERY_ALL_PACKAGES`).
+- `PerAppMode` (`ALL` / `INCLUDE` / `EXCLUDE`, string-keyed in DataStore) +
+  a package set; picked via Settings → Per-app VPN (launcher apps only,
+  exposed by the manifest `<queries>` MAIN+LAUNCHER declaration — no
+  `QUERY_ALL_PACKAGES`).
 - Applied at `openTun` time through `resolvePerAppPlan`: `VpnService.Builder`
   rejects mixing `addAllowed`/`addDisallowed` calls, so the plan fills exactly
   one side — include-mode wins when any allowed package exists, and our own
   package is never allowed (its core sockets would loop back into the TUN).
-- Changes take effect on the next tunnel establish; a running tunnel keeps
-  the plan it was built with.
+- The package lists are baked into the TUN fd, so a policy change can't be
+  hot-swapped: while Connected, a debounced watcher in `ClientVpnService`
+  restarts the engine inside the same session (stop → start → `openTun`
+  re-runs with the new plan). The UI sees a brief `Reconnecting`; changes
+  landing in other states are picked up by the next `openTun`.
 
 Validated with `Libbox.checkConfig` in `ConnectionManager.connect()` **before**
 requesting VPN permission.

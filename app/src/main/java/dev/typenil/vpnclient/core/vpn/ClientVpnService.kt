@@ -36,6 +36,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -61,6 +64,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
         private const val TAG = "ClientVpnService"
         private const val ACTION_CONNECT = "dev.typenil.vpnclient.action.CONNECT"
         private const val ACTION_DISCONNECT = "dev.typenil.vpnclient.action.DISCONNECT"
+        /** Quiet window before a per-app change triggers a TUN rebuild —
+         *  rapid toggle bursts collapse into a single rebuild. */
+        private const val PER_APP_REBUILD_DEBOUNCE_MS = 800L
+        /** Bounded re-runs for changes landing mid-rebuild (dirty flag). */
+        private const val MAX_TUNNEL_REBUILDS = 4
 
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
@@ -114,6 +122,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
     /** Session generation this service instance is serving; -1 = none yet. */
     private var activeGeneration: Long = -1L
+    /** Config the live session was started with — reused by in-session
+     *  rebuilds (per-app policy changes re-establish the TUN, they don't
+     *  recompile the profile). */
+    private var activeConfig: EngineConfig? = null
     /** A teardown was requested while a start was still in flight. */
     private var stopRequested = false
     /** onDestroy ran — reject new starts on this doomed instance. */
@@ -124,7 +136,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
      *  the ConnectivityManager callback is registered on the main Handler. */
     private var networkNotifyJob: Job? = null
     private var networkDirty = false
+    /** In-session tunnel rebuild (per-app policy change). Same coalescing
+     *  protocol as the network-change path — main-thread confined. */
+    private var rebuildJob: Job? = null
+    private var rebuildDirty = false
 
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
     override fun onCreate() {
         super.onCreate()
         // Cache settings the callback paths need synchronously; also push the
@@ -138,6 +155,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 val pm = getSystemService(PowerManager::class.java)
                 engine?.onDeviceIdle(enabled && pm.isDeviceIdleMode)
             }
+        }
+        // Per-app policy changes while Connected must rebuild the TUN — the
+        // allowed/disallowed package lists are baked into the fd at
+        // establish() time and can't be hot-swapped.
+        // drop(1): the initial snapshot isn't a change. distinctUntilChanged:
+        // unrelated settings writes re-emit the DataStore flow with equal
+        // values. debounce: a toggle burst collapses into one rebuild.
+        scope.launch {
+            settings.perAppPolicy
+                .drop(1)
+                .distinctUntilChanged()
+                .debounce(PER_APP_REBUILD_DEBOUNCE_MS)
+                .collect { requestTunnelRebuild() }
         }
     }
 
@@ -241,74 +271,149 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 return@launch
             }
             activeGeneration = generation
+            activeConfig = config
             showNotification(
                 title = getString(R.string.notification_connecting),
                 text = config.node.name,
                 node = config.node,
                 showDisconnect = true,
             )
-            var created: VpnEngine? = null
-            try {
-                created = engineFactory.create(
-                    context = this@ClientVpnService,
-                    platform = this@ClientVpnService,
-                    scope = scope,
-                    notifications = notificationSink,
-                )
-                engine = created
-                connectionManager.attachEngine(created, generation)
-                registerDozeReceiver()
-                created.start(config)
-                // start() returned → openTun succeeded inside it; tunnel is up.
-                if (engine !== created || stopRequested) {
-                    // A disconnect raced us while start() was suspended.
-                    runCatching { created.stop() }
-                    cleanup()
-                    connectionManager.onServiceStopped(generation)
-                    stopSelf()
-                    return@launch
-                }
-                connectionManager.onServiceStarted(generation)
-                // A network loss during start() left no further callbacks —
-                // re-evaluate so we don't publish Connected while offline.
-                if (lastUnderlyingNetwork == null) {
-                    connectionManager.onUnderlyingNetworkLost()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                SecureLog.e(TAG, "engine start failed", e)
-                if (engine === created) engine = null
-                // start() may have failed after the core came up — make sure
-                // the partially-started engine is actually torn down.
-                if (created != null) {
-                    pendingTeardown.add(created)
-                    try {
-                        runCatching { created.stop() }
-                    } finally {
-                        pendingTeardown.remove(created)
-                    }
-                }
-                cleanup()
-                // A start failure must not become a restart loop: clear the
-                // desire flag so a STICKY restart doesn't retry forever.
-                settings.setDesiredVpnRunning(false)
-                if (stopRequested) {
-                    // A disconnect raced the failure — converge to stopped,
-                    // not a spurious error over the user's Idle.
-                    connectionManager.onServiceStopped(generation)
-                } else {
-                    connectionManager.onServiceFailed(
-                        if (e is dev.typenil.vpnclient.core.engine.EngineError) {
-                            VpnError.fromEngine(e)
-                        } else {
-                            VpnError.Unexpected(e.message ?: "engine start failed")
-                        },
-                        generation,
-                    )
-                }
-                stopSelf()
+            if (!launchEngine(config, generation)) return@launch
+            connectionManager.onServiceStarted(generation)
+            // A network loss during start() left no further callbacks —
+            // re-evaluate so we don't publish Connected while offline.
+            if (lastUnderlyingNetwork == null) {
+                connectionManager.onUnderlyingNetworkLost()
             }
+        }
+    }
+
+    /**
+     * Create + start an engine for [generation] and attach its collectors.
+     * Returns true once the tunnel is up (openTun succeeded inside start());
+     * false when a teardown raced us or the start failed — both already
+     * converged to stopped/error here, so the caller just aborts.
+     */
+    private suspend fun launchEngine(config: EngineConfig, generation: Long): Boolean {
+        var created: VpnEngine? = null
+        try {
+            created = engineFactory.create(
+                context = this@ClientVpnService,
+                platform = this@ClientVpnService,
+                scope = scope,
+                notifications = notificationSink,
+            )
+            engine = created
+            connectionManager.attachEngine(created, generation)
+            registerDozeReceiver()
+            created.start(config)
+            // start() returned → openTun succeeded inside it; tunnel is up.
+            if (engine !== created || stopRequested) {
+                // A disconnect raced us while start() was suspended.
+                runCatching { created.stop() }
+                cleanup()
+                connectionManager.onServiceStopped(generation)
+                stopSelf()
+                return false
+            }
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SecureLog.e(TAG, "engine start failed", e)
+            if (engine === created) engine = null
+            // start() may have failed after the core came up — make sure
+            // the partially-started engine is actually torn down.
+            if (created != null) {
+                pendingTeardown.add(created)
+                try {
+                    runCatching { created.stop() }
+                } finally {
+                    pendingTeardown.remove(created)
+                }
+            }
+            cleanup()
+            // A start failure must not become a restart loop: clear the
+            // desire flag so a STICKY restart doesn't retry forever.
+            settings.setDesiredVpnRunning(false)
+            if (stopRequested) {
+                // A disconnect raced the failure — converge to stopped,
+                // not a spurious error over the user's Idle.
+                connectionManager.onServiceStopped(generation)
+            } else {
+                connectionManager.onServiceFailed(
+                    if (e is dev.typenil.vpnclient.core.engine.EngineError) {
+                        VpnError.fromEngine(e)
+                    } else {
+                        VpnError.Unexpected(e.message ?: "engine start failed")
+                    },
+                    generation,
+                )
+            }
+            stopSelf()
+            return false
+        }
+    }
+
+    /**
+     * Per-app policy changed: request an in-session rebuild. Only a live
+     * session rebuilds — during Connecting/Reconnecting/Stopping the change
+     * is left alone because the next openTun reads the current snapshot
+     * anyway. A change landing mid-rebuild (already Reconnecting) sets a
+     * dirty flag for one bounded re-run — same coalescing as
+     * [notifyEngineNetworkChanged].
+     */
+    private fun requestTunnelRebuild() {
+        if (rebuildJob?.isActive == true) {
+            rebuildDirty = true
+            return
+        }
+        if (connectionManager.state.value !is VpnConnectionState.Connected) return
+        rebuildJob = scope.launch {
+            var runs = 0
+            do {
+                rebuildDirty = false
+                rebuildTunnel()
+            } while (rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS)
+        }
+    }
+
+    /**
+     * Rebuild engine + TUN inside the live session. The Builder's
+     * allowed/disallowed lists are baked into the fd, so a fresh establish()
+     * is the only way to apply a new plan — the generation, notification,
+     * and service all survive; the UI sees a brief Reconnecting.
+     */
+    private suspend fun rebuildTunnel() {
+        val generation = activeGeneration
+        val config = activeConfig
+        if (destroyed || generation < 0 || config == null) return
+        connectionManager.onTunnelRebuildStarted()
+        val old = engine
+        engine = null
+        if (old != null) {
+            pendingTeardown.add(old)
+            try {
+                runCatching { old.stop() }
+            } finally {
+                pendingTeardown.remove(old)
+            }
+        }
+        runCatching { closeTun() }
+        if (stopRequested || destroyed) {
+            // A disconnect raced the rebuild — converge to stopped.
+            activeGeneration = -1L
+            connectionManager.onServiceStopped(generation)
+            cleanup()
+            stopSelf()
+            return
+        }
+        if (!launchEngine(config, generation)) return
+        connectionManager.onTunnelRebuilt(generation)
+        // A network loss during the rebuild left no further callbacks —
+        // re-evaluate so we don't publish Connected while offline.
+        if (lastUnderlyingNetwork == null) {
+            connectionManager.onUnderlyingNetworkLost()
         }
     }
 
@@ -334,6 +439,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     private fun cleanup() {
+        activeConfig = null
         runCatching { closeTun() }
         unregisterUnderlyingNetworkCallback()
         unregisterDozeReceiver()

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 
 private val Context.settingsStore by preferencesDataStore(name = "settings")
 
@@ -40,8 +41,10 @@ class SettingsRepository @Inject constructor(
         val SUBSCRIPTION_REFRESH_MINUTES = intPreferencesKey("subscription_refresh_minutes")
         /** Last user-entered override — survives toggling auto-refresh off/on. */
         val AUTO_REFRESH_OVERRIDE = intPreferencesKey("auto_refresh_override_minutes")
-        /** PerAppMode.ordinal: 0 = all, 1 = include selected, 2 = exclude selected. */
+        /** Legacy ordinal storage — read once by the v2 migration, then removed. */
         val PER_APP_MODE = intPreferencesKey("per_app_mode")
+        /** PerAppMode.key — "all"/"include"/"exclude", never ordinal. */
+        val PER_APP_MODE_V2 = stringPreferencesKey("per_app_mode_v2")
         val PER_APP_PACKAGES = stringSetPreferencesKey("per_app_packages")
         /** RouteMode.key — "all"/"bypass_ru"/"proxy_blocked", never ordinal. */
         val ROUTE_MODE = stringPreferencesKey("route_mode")
@@ -132,14 +135,33 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    /** Per-app routing mode — see [dev.typenil.vpnclient.core.vpn.PerAppMode]. */
-    val perAppMode: Flow<Int> = context.settingsStore.data
-        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
-        .map { it[Keys.PER_APP_MODE] ?: 0 }
+    /**
+     * Idempotent ordinal→string migration for `per_app_mode`. Runs inside a
+     * single edit on the first read: when the v2 key is absent but the legacy
+     * ordinal exists, the ordinal is rewritten as its [PerAppMode.key]; the
+     * legacy key is always removed. After one pass this is a no-op.
+     */
+    private suspend fun migratePerAppModeIfNeeded() {
+        context.settingsStore.edit { prefs ->
+            val target = migratedPerAppModeKey(
+                legacyOrdinal = prefs[Keys.PER_APP_MODE],
+                currentKey = prefs[Keys.PER_APP_MODE_V2],
+            )
+            if (target != null) prefs[Keys.PER_APP_MODE_V2] = target
+            prefs.remove(Keys.PER_APP_MODE)
+        }
+    }
 
-    suspend fun setPerAppMode(mode: Int) {
+    /** Per-app routing mode — see [dev.typenil.vpnclient.core.vpn.PerAppMode]. */
+    val perAppMode: Flow<PerAppMode> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .onStart { migratePerAppModeIfNeeded() }
+        .map { PerAppMode.fromKey(it[Keys.PER_APP_MODE_V2]) }
+
+    suspend fun setPerAppMode(mode: PerAppMode) {
         context.settingsStore.edit {
-            it[Keys.PER_APP_MODE] = mode.coerceIn(0, PerAppMode.entries.lastIndex)
+            it[Keys.PER_APP_MODE_V2] = mode.key
+            it.remove(Keys.PER_APP_MODE)
         }
     }
 
@@ -162,15 +184,18 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    /** Both per-app keys from a single DataStore snapshot — reading the two
-     *  flows separately could tear across a concurrent write. */
-    suspend fun perAppPolicySnapshot(): Pair<PerAppMode, Set<String>> {
-        val prefs = context.settingsStore.data
-            .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
-            .first()
-        return PerAppMode.fromOrdinal(prefs[Keys.PER_APP_MODE] ?: 0) to
-            (prefs[Keys.PER_APP_PACKAGES] ?: emptySet())
-    }
+    /** Mode + package set from a single DataStore snapshot — reading the two
+     *  keys separately could tear across a concurrent write. */
+    val perAppPolicy: Flow<Pair<PerAppMode, Set<String>>> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .onStart { migratePerAppModeIfNeeded() }
+        .map {
+            PerAppMode.fromKey(it[Keys.PER_APP_MODE_V2]) to
+                (it[Keys.PER_APP_PACKAGES] ?: emptySet())
+        }
+
+    suspend fun perAppPolicySnapshot(): Pair<PerAppMode, Set<String>> =
+        perAppPolicy.first()
 
     /** Region/domain routing — see [RouteMode]. Applies on the next connect. */
     val routeMode: Flow<RouteMode> = context.settingsStore.data
@@ -199,5 +224,18 @@ class SettingsRepository @Inject constructor(
             return "${stored.substring(0, 8)}-${stored.substring(8, 12)}-" +
                 "${stored.substring(12, 16)}-${stored.substring(16, 20)}-${stored.substring(20)}"
         }
+
+        /**
+         * Per-app-mode migration decision: the v2 key to write, or null when
+         * nothing needs migrating. Only maps a legacy ordinal onto an absent
+         * v2 value — a stored v2 key always wins, so the migration can never
+         * overwrite a newer write.
+         */
+        fun migratedPerAppModeKey(legacyOrdinal: Int?, currentKey: String?): String? =
+            if (legacyOrdinal != null && currentKey == null) {
+                PerAppMode.fromOrdinal(legacyOrdinal).key
+            } else {
+                null
+            }
     }
 }
