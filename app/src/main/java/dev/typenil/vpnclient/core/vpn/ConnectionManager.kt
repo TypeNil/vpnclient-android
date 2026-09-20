@@ -459,13 +459,19 @@ class ConnectionManager @Inject constructor(
     /**
      * The session's tunnel is back up after an in-session rebuild. Only
      * resolves a Reconnecting state — anything else (Stopping, an early
-     * Connected from a network callback) is left alone.
+     * Connected from a network callback) is left alone. Goes through the
+     * same launch+mutex path as [onTunnelRebuildStarted]: the mutex grants
+     * in FIFO order, so "rebuilt" can never publish before "started".
      */
     fun onTunnelRebuilt(generation: Long) {
-        if (!isCurrent(generation)) return
-        val current = _state.value
-        if (current is VpnConnectionState.Reconnecting) {
-            publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+        scope.launch {
+            mutex.withLock {
+                if (!isCurrent(generation)) return@withLock
+                val current = _state.value
+                if (current is VpnConnectionState.Reconnecting) {
+                    publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+                }
+            }
         }
     }
 

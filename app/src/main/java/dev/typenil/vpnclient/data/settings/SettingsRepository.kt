@@ -155,7 +155,9 @@ class SettingsRepository @Inject constructor(
     /** Per-app routing mode — see [dev.typenil.vpnclient.core.vpn.PerAppMode]. */
     val perAppMode: Flow<PerAppMode> = context.settingsStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
-        .onStart { migratePerAppModeIfNeeded() }
+        // runCatching: onStart sits downstream of catch — an IOException
+        // from the migration edit would otherwise kill the collector.
+        .onStart { runCatching { migratePerAppModeIfNeeded() } }
         .map { PerAppMode.fromKey(it[Keys.PER_APP_MODE_V2]) }
 
     suspend fun setPerAppMode(mode: PerAppMode) {
@@ -188,7 +190,7 @@ class SettingsRepository @Inject constructor(
      *  keys separately could tear across a concurrent write. */
     val perAppPolicy: Flow<Pair<PerAppMode, Set<String>>> = context.settingsStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
-        .onStart { migratePerAppModeIfNeeded() }
+        .onStart { runCatching { migratePerAppModeIfNeeded() } }
         .map {
             PerAppMode.fromKey(it[Keys.PER_APP_MODE_V2]) to
                 (it[Keys.PER_APP_PACKAGES] ?: emptySet())

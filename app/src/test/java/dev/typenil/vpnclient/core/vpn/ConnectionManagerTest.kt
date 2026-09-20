@@ -360,6 +360,7 @@ class ConnectionManagerTest {
             assertEquals(node, (rebuilding as VpnConnectionState.Reconnecting).node)
 
             manager.onTunnelRebuilt(generation)
+            advanceUntilIdle()
             assertTrue(manager.state.value is VpnConnectionState.Connected)
         }
 
@@ -372,9 +373,11 @@ class ConnectionManagerTest {
 
         // A stale generation must not resolve the live session's state.
         manager.onTunnelRebuilt(generation - 1)
+        advanceUntilIdle()
         assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
 
         manager.onTunnelRebuilt(generation)
+        advanceUntilIdle()
         assertTrue(manager.state.value is VpnConnectionState.Connected)
     }
 

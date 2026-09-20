@@ -140,6 +140,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
      *  protocol as the network-change path — main-thread confined. */
     private var rebuildJob: Job? = null
     private var rebuildDirty = false
+    /** A policy change landed while the session wasn't Connected (e.g.
+     *  network-loss Reconnecting — the live TUN would keep the stale plan).
+     *  Drained when the session returns to Connected. */
+    private var rebuildPending = false
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     override fun onCreate() {
@@ -168,6 +172,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 .distinctUntilChanged()
                 .debounce(PER_APP_REBUILD_DEBOUNCE_MS)
                 .collect { requestTunnelRebuild() }
+        }
+        // A change parked by rebuildPending (network-loss Reconnecting)
+        // applies the moment the session is Connected again.
+        scope.launch {
+            connectionManager.state.collect { state ->
+                if (rebuildPending && state is VpnConnectionState.Connected) {
+                    rebuildPending = false
+                    requestTunnelRebuild()
+                }
+            }
         }
     }
 
@@ -303,17 +317,28 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 scope = scope,
                 notifications = notificationSink,
             )
+            if (activeGeneration != generation) {
+                // A disconnect→reconnect swapped the session while the
+                // factory ran — a stale engine must stop only itself and
+                // never touch the new session's fields or state.
+                runCatching { created.stop() }
+                return false
+            }
             engine = created
             connectionManager.attachEngine(created, generation)
             registerDozeReceiver()
             created.start(config)
             // start() returned → openTun succeeded inside it; tunnel is up.
-            if (engine !== created || stopRequested) {
-                // A disconnect raced us while start() was suspended.
+            if (engine !== created) {
+                // A disconnect raced us while start() was suspended. If a
+                // new session owns the service now, we converge only our own
+                // engine — its fields are no longer ours to clear.
                 runCatching { created.stop() }
-                cleanup()
-                connectionManager.onServiceStopped(generation)
-                stopSelf()
+                if (activeGeneration == generation) {
+                    cleanup()
+                    connectionManager.onServiceStopped(generation)
+                    stopSelf()
+                }
                 return false
             }
             return true
@@ -331,6 +356,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 } finally {
                     pendingTeardown.remove(created)
                 }
+            }
+            if (activeGeneration != generation) {
+                // A newer session owns the service — converge only our own
+                // engine; its cleanup/notification/state belong to the owner.
+                return false
             }
             cleanup()
             // A start failure must not become a restart loop: clear the
@@ -368,13 +398,27 @@ class ClientVpnService : VpnService(), EnginePlatform {
             rebuildDirty = true
             return
         }
-        if (connectionManager.state.value !is VpnConnectionState.Connected) return
+        if (connectionManager.state.value !is VpnConnectionState.Connected) {
+            // Session alive but not Connected (network-loss Reconnecting):
+            // the live TUN would keep the stale plan — park the change.
+            if (activeGeneration >= 0) rebuildPending = true
+            return
+        }
         rebuildJob = scope.launch {
             var runs = 0
             do {
                 rebuildDirty = false
                 rebuildTunnel()
-            } while (rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS)
+            } while (
+                rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS &&
+                    connectionManager.state.value is VpnConnectionState.Connected
+            )
+            // Bound hit or state flipped with a change still queued — hand
+            // off to a fresh request so the newest policy isn't stranded.
+            if (rebuildDirty) {
+                rebuildJob = null
+                requestTunnelRebuild()
+            }
         }
     }
 
@@ -400,6 +444,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
         }
         runCatching { closeTun() }
+        if (activeGeneration != generation) {
+            // A disconnect→reconnect swapped the session while the engine
+            // was stopping — the new owner handles state/notification now;
+            // converging here would tear down its live session.
+            return
+        }
         if (stopRequested || destroyed) {
             // A disconnect raced the rebuild — converge to stopped.
             activeGeneration = -1L
@@ -410,6 +460,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
         }
         if (!launchEngine(config, generation)) return
         connectionManager.onTunnelRebuilt(generation)
+        // A rebuilt engine never saw the current Doze state — the receiver
+        // only forwards transitions.
+        if (dozePowerSave) {
+            val pm = getSystemService(PowerManager::class.java)
+            engine?.onDeviceIdle(pm.isDeviceIdleMode)
+        }
         // A network loss during the rebuild left no further callbacks —
         // re-evaluate so we don't publish Connected while offline.
         if (lastUnderlyingNetwork == null) {
@@ -419,6 +475,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     private fun stopTunnel() {
         stopRequested = true
+        // A queued/in-flight rebuild would converge via the generation
+        // guards anyway — cancelling just skips a pointless stop→start.
+        rebuildJob?.cancel()
+        rebuildJob = null
+        rebuildDirty = false
+        rebuildPending = false
         val current = engine
         engine = null
         val generation = activeGeneration
