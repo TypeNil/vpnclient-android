@@ -1,0 +1,24 @@
+# VPN lifecycle smoke test — connect → live telemetry → disconnect.
+# Requires a device with at least one subscription and a selected node,
+# and VPN consent already granted. Run: maestro test maestro/smoke.yaml
+appId: dev.typenil.vpnclient
+name: VPN connect/disconnect smoke test
+tags:
+  - smoke
+  - android
+---
+- launchApp
+- assertVisible: "Connect"
+- tapOn: "Connect"
+- extendedWaitUntil:
+    visible: "Disconnect"
+    timeout: 30000
+- assertVisible: "Download"
+- assertVisible: "Upload"
+- assertVisible: "Connections"
+- assertNotVisible: "Connecting"
+- tapOn: "Disconnect"
+- extendedWaitUntil:
+    visible: "Connect"
+    timeout: 15000
+- assertVisible: "Disconnected"
