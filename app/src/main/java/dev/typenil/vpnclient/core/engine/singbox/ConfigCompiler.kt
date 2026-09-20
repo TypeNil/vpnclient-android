@@ -38,8 +38,9 @@ class ConfigCompiler @Inject constructor() {
         selectedNodeId: String?,
         ipv6Enabled: Boolean,
         routeMode: RouteMode = RouteMode.ALL,
+        underlayIpv6: Boolean = true,
     ): EngineConfig = withContext(Dispatchers.IO) {
-        val compiled = build(nodes, selectedNodeId, ipv6Enabled, routeMode)
+        val compiled = build(nodes, selectedNodeId, ipv6Enabled, routeMode, underlayIpv6)
         try {
             Libbox.checkConfig(compiled.configJson)
         } catch (e: CancellationException) {
@@ -56,6 +57,7 @@ class ConfigCompiler @Inject constructor() {
         selectedNodeId: String?,
         ipv6Enabled: Boolean,
         routeMode: RouteMode = RouteMode.ALL,
+        underlayIpv6: Boolean = true,
     ): EngineConfig {
         require(nodes.isNotEmpty()) { "no nodes to compile" }
         // A stale selection (node removed by a refresh) must fail loudly —
@@ -119,11 +121,14 @@ class ConfigCompiler @Inject constructor() {
                 when (routeMode) {
                     // RU domains resolve via the ISP resolver so the direct
                     // route gets CDN-local answers; everything else keeps the
-                    // proxied DoH.
+                    // proxied DoH. IPv4-only: an AAAA answer wins client-side
+                    // ordering (the tun advertises v6), and a v6 RU dial is a
+                    // dead end on IPv4-only underlays — the typical RU ISP.
                     RouteMode.BYPASS_RU -> putJsonArray("rules") {
                         addJsonObject {
                             putJsonArray("rule_set") { add(GEOSITE_RU_TAG) }
                             put("server", "local")
+                            put("strategy", "ipv4_only")
                         }
                     }
                     // Blocked domains must not touch ISP DNS (spoofed answers)
@@ -169,6 +174,15 @@ class ConfigCompiler @Inject constructor() {
                     addJsonObject {
                         put("ip_is_private", true)
                         put("outbound", "direct")
+                    }
+                    // Without underlay IPv6 a "direct" v6 dial is dead on
+                    // arrival, so v6 goes through the proxy (which carries it
+                    // fine). ALL mode already routes everything to the proxy.
+                    if (routeMode != RouteMode.ALL && !underlayIpv6) {
+                        addJsonObject {
+                            put("ip_version", 6)
+                            put("outbound", SELECTOR_TAG)
+                        }
                     }
                     when (routeMode) {
                         // RU resources bypass the proxy entirely.

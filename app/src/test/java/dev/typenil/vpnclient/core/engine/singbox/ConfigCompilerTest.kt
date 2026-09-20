@@ -256,4 +256,65 @@ class ConfigCompilerTest {
             route["default_domain_resolver"]!!.jsonObject["server"]!!.jsonPrimitive.content,
         )
     }
+
+    @Test
+    fun `v6-less underlay routes all v6 through proxy in BYPASS_RU`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = false,
+        )
+        val rules = json.parseToJsonElement(config.configJson)
+            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+
+        // sniff → hijack-dns → private → v6→proxy → RU→direct.
+        assertEquals(5, rules.size)
+        val v6Rule = rules[3].jsonObject
+        assertEquals(6, v6Rule["ip_version"]!!.jsonPrimitive.int)
+        assertEquals("proxy", v6Rule["outbound"]!!.jsonPrimitive.content)
+        val ruRule = rules[4].jsonObject
+        assertEquals("direct", ruRule["outbound"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `v6-less underlay routes all v6 through proxy in PROXY_BLOCKED`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED, underlayIpv6 = false,
+        )
+        val rules = json.parseToJsonElement(config.configJson)
+            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+
+        assertEquals(5, rules.size)
+        val v6Rule = rules[3].jsonObject
+        assertEquals(6, v6Rule["ip_version"]!!.jsonPrimitive.int)
+        assertEquals("proxy", v6Rule["outbound"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `v6-less underlay does not change ALL mode`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.ALL, underlayIpv6 = false,
+        )
+        val rules = json.parseToJsonElement(config.configJson)
+            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        assertEquals(3, rules.size)
+        assertTrue(rules.none { "ip_version" in it.jsonObject })
+    }
+
+    @Test
+    fun `v6-capable underlay keeps direct v6 for RU`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = true,
+        )
+        val rules = json.parseToJsonElement(config.configJson)
+            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        assertEquals(4, rules.size)
+        assertTrue(rules.none { "ip_version" in it.jsonObject })
+    }
+
+    @Test
+    fun `RU dns rule returns ipv4 only so direct dials reach v4`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU)
+        val dnsRule = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["rules"]!!.jsonArray.single().jsonObject
+        assertEquals("ipv4_only", dnsRule["strategy"]!!.jsonPrimitive.content)
+    }
 }
