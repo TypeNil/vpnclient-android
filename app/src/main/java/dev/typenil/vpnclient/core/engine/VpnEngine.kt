@@ -38,14 +38,13 @@ data class OutboundItemInfo(
     val urlTestDelayMs: Int?,
 )
 
-/** Lifecycle events the engine emits upward. */
+/** Lifecycle events the engine emits upward. Group/latency updates travel on
+ *  [VpnEngine.groups], not through events — keep this channel terminal-only. */
 sealed interface EngineEvent {
     data object Started : EngineEvent
     data class Failed(val error: EngineError) : EngineEvent
     /** Core terminated on its own — never emitted for an app-requested stop(). */
     data object StoppedUnexpectedly : EngineEvent
-    data class Log(val level: Int, val message: String) : EngineEvent
-    data class GroupsUpdated(val groups: List<OutboundGroupInfo>) : EngineEvent
 }
 
 /** Engine failures mapped to typed errors. */
@@ -85,8 +84,9 @@ interface VpnEngine {
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>
 
-    /** Switch selected outbound inside a group (server picker). */
-    suspend fun selectOutbound(groupTag: String, outboundTag: String)
+    /** Switch selected outbound inside a group (server picker).
+     *  Returns false when the control channel is down or the call failed. */
+    suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean
 
     /** Ask the core to run urltest on a group (latency measurement). */
     suspend fun urlTest(groupTag: String)

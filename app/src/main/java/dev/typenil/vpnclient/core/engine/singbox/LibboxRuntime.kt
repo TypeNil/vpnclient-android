@@ -2,6 +2,7 @@ package dev.typenil.vpnclient.core.engine.singbox
 
 import android.content.Context
 import dev.typenil.vpnclient.BuildConfig
+import dev.typenil.vpnclient.core.common.log.SecureLog
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.SetupOptions
 import java.io.File
@@ -37,8 +38,14 @@ object LibboxRuntime {
         Libbox.setLocale(Locale.getDefault().toLanguageTag())
         Libbox.prepareCrashSignalHandlers()
         // Platform diagnostics drafts — surfaced in bugreports/OOM analysis
-        // (same calls sing-box-for-android makes at setup).
+        // (same calls sing-box-for-android makes at setup). Failures are
+        // logged, not swallowed — a silent no-op here means the drafts we
+        // rely on in the field simply never existed.
         runCatching { Libbox.promoteOOMDraft() }
+            .onFailure { SecureLog.w(TAG, "promoteOOMDraft failed", it) }
         runCatching { Libbox.promotePowerReportDraft() }
+            .onFailure { SecureLog.w(TAG, "promotePowerReportDraft failed", it) }
     }
+
+    private const val TAG = "LibboxRuntime"
 }

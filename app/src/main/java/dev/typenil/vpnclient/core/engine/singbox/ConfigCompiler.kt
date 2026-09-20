@@ -7,6 +7,7 @@ import dev.typenil.vpnclient.core.subscription.model.summary
 import io.nekohasekai.libbox.Libbox
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -39,6 +40,8 @@ class ConfigCompiler @Inject constructor() {
         val compiled = build(nodes, selectedNodeId, ipv6Enabled)
         try {
             Libbox.checkConfig(compiled.configJson)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw EngineError.InvalidConfig(e.message ?: "invalid config")
         }
@@ -144,6 +147,10 @@ class ConfigCompiler @Inject constructor() {
                 }
                 put("final", SELECTOR_TAG)
                 putJsonObject("default_domain_resolver") {
+                    // Must stay "local": "remote" detours through the proxy,
+                    // and the proxy's server names are resolved by this
+                    // resolver — pointing it at "remote" would deadlock
+                    // bootstrap (remote → proxy → resolve via remote → …).
                     put("server", "local")
                 }
             }

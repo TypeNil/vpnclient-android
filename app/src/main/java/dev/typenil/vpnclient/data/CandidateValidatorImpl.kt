@@ -6,6 +6,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionCandidateValidator
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 
 /**
  * Compiles the full candidate config (every node outbound) and runs native
@@ -20,6 +21,8 @@ class CandidateValidatorImpl @Inject constructor(
     override suspend fun validate(nodes: List<ProxyNode>) {
         try {
             compiler.compile(nodes = nodes, selectedNodeId = null, ipv6Enabled = true)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: EngineError) {
             throw e
         } catch (e: Exception) {

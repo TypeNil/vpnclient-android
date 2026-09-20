@@ -109,11 +109,15 @@ class SubscriptionFetcher @Inject constructor(
                     val location = response.header("Location")
                     response.close()
                     if (location == null) throw SubscriptionError.Http(response.code, current.host)
-                    current = current.resolve(location)
+                    val next = current.resolve(location)
                         ?: throw SubscriptionError.Http(response.code, current.host)
-                    if (!isAllowedTransport(origin, current, allowInsecure)) {
+                    // Each hop is judged against the hop it came from: an
+                    // https→http downgrade is rejected even when the origin
+                    // itself was opted-in cleartext.
+                    if (!isAllowedTransport(current, next, allowInsecure)) {
                         throw SubscriptionError.InsecureTransport
                     }
+                    current = next
                     redirectsLeft--
                     continue
                 }
@@ -160,9 +164,13 @@ class SubscriptionFetcher @Inject constructor(
                     supportUrl = headers["profile-web-page-url"] ?: headers["support-url"],
                     announce = decodeHeaderValue(headers["announce"]),
                     // Convention (Remnawave/Streisand): the header value is
-                    // in HOURS; normalize to minutes for scheduling.
+                    // in HOURS; normalize to minutes for scheduling. Bound
+                    // before multiplying — a hostile panel can send an
+                    // Int-overflowing value that would floor to the minimum.
                     updateIntervalMinutes = headers["profile-update-interval"]
-                        ?.toIntOrNull()?.takeIf { it > 0 }?.let { it * 60 },
+                        ?.toLongOrNull()
+                        ?.takeIf { it in 1..(Int.MAX_VALUE / 60L) }
+                        ?.let { (it * 60).toInt() },
                     hwidHeaders = headers.names()
                         .filter { it.lowercase().startsWith("x-hwid") }
                         .associateWith { headers[it]!! },
@@ -212,14 +220,14 @@ class SubscriptionFetcher @Inject constructor(
 
     /**
      * Cleartext policy: http is allowed only when the user opted this
-     * subscription in AND the entered URL was already http. An https→http
-     * redirect is a downgrade and is never followed, opt-in or not.
+     * subscription in AND the hop we came from was already cleartext — so
+     * a mid-chain https→http downgrade is rejected even under the opt-in.
      */
     internal fun isAllowedTransport(
-        origin: okhttp3.HttpUrl,
+        previous: okhttp3.HttpUrl,
         current: okhttp3.HttpUrl,
         allowInsecure: Boolean,
-    ): Boolean = current.isHttps || (allowInsecure && origin.scheme == "http")
+    ): Boolean = current.isHttps || (allowInsecure && previous.scheme == "http")
 
     private fun okhttp3.HttpUrl.sameOriginAs(other: okhttp3.HttpUrl): Boolean =
         scheme == other.scheme && host == other.host && port == other.port

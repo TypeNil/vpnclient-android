@@ -17,8 +17,8 @@ enum class PerAppMode {
 
 /**
  * Resolved builder input: `VpnService.Builder` rejects mixing
- * `addAllowedApplication` and `addDisallowedApplication` (IllegalStateException),
- * so a plan may fill exactly one side.
+ * `addAllowedApplication` and `addDisallowedApplication`
+ * (UnsupportedOperationException), so a plan may fill exactly one side.
  */
 data class PerAppPlan(
     val allowed: List<String> = emptyList(),

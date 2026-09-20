@@ -30,6 +30,10 @@ android {
             optimization {
                 enable = true
             }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
     compileOptions {
@@ -44,6 +48,10 @@ android {
         // Let JVM unit tests construct lightweight android.jar stubs
         // (e.g. an empty Intent) without Robolectric.
         unitTests.isReturnDefaultValues = true
+    }
+    sourceSets {
+        // MigrationTestHelper reads exported schema JSONs from test assets.
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
 }
 
@@ -133,6 +141,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.room.testing)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -83,7 +83,8 @@ class ConnectionManagerTest {
         override suspend fun start(config: EngineConfig) = Unit
         override suspend fun stop() { stopCalls++ }
         override suspend fun onUnderlyingNetworkChanged() = Unit
-        override suspend fun selectOutbound(groupTag: String, outboundTag: String) = Unit
+        override suspend fun onDeviceIdle(idle: Boolean) = Unit
+        override suspend fun selectOutbound(groupTag: String, outboundTag: String) = true
         override suspend fun urlTest(groupTag: String) = Unit
     }
 
@@ -294,6 +295,7 @@ class ConnectionManagerTest {
             connectToRunning()
 
             manager.onUnderlyingNetworkLost()
+            advanceUntilIdle()
             val reconnecting = manager.state.value
             assertTrue(reconnecting is VpnConnectionState.Reconnecting)
             assertEquals(node, (reconnecting as VpnConnectionState.Reconnecting).node)
@@ -304,6 +306,7 @@ class ConnectionManagerTest {
             assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
 
             manager.onUnderlyingNetworkAvailable()
+            advanceUntilIdle()
             assertTrue(manager.state.value is VpnConnectionState.Connected)
         }
 
@@ -311,12 +314,15 @@ class ConnectionManagerTest {
     fun `network callbacks are no-ops outside the relevant states`() =
         testScope.runTest {
             manager.onUnderlyingNetworkLost()
+            advanceUntilIdle()
             assertTrue(manager.state.value is VpnConnectionState.Idle)
             manager.onUnderlyingNetworkAvailable()
+            advanceUntilIdle()
             assertTrue(manager.state.value is VpnConnectionState.Idle)
 
             connectToRunning()
             manager.onUnderlyingNetworkAvailable()
+            advanceUntilIdle()
             // Already Connected — no spurious transition.
             assertTrue(manager.state.value is VpnConnectionState.Connected)
         }
@@ -325,6 +331,7 @@ class ConnectionManagerTest {
     fun `engine failure during Reconnecting converges to Error`() = testScope.runTest {
         val generation = connectToRunning()
         manager.onUnderlyingNetworkLost()
+        advanceUntilIdle()
         assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
 
         engine.eventsFlow.emit(EngineEvent.Failed(EngineError.CoreError("boom")))

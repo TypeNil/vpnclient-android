@@ -81,7 +81,16 @@ fun VpnApp(
 
         val pendingImport by importUrl.collectAsStateWithLifecycle()
         LaunchedEffect(pendingImport) {
-            if (pendingImport != null) navController.navigate(Routes.SUBSCRIPTIONS)
+            if (pendingImport != null) {
+                // Same options as bottom nav — a second link while already on
+                // Subscriptions must not stack a duplicate destination.
+                navController.navigate(Routes.SUBSCRIPTIONS) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                }
+            }
         }
 
         val prepareIntent by connectionManager.prepareIntent.collectAsStateWithLifecycle()

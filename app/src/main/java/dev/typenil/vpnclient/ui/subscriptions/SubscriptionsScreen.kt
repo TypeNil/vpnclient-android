@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -32,11 +33,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -63,8 +67,8 @@ fun SubscriptionsScreen(
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
-    var showAddDialog by remember { mutableStateOf(false) }
-    var importPrefill by remember { mutableStateOf<String?>(null) }
+    var showAddDialog by rememberSaveable { mutableStateOf(false) }
+    var importPrefill by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<SubscriptionProfile?>(null) }
 
     // Deep-link/share funnel: open the add dialog prefilled — the user still
@@ -124,17 +128,21 @@ fun SubscriptionsScreen(
     }
 
     if (showAddDialog) {
-        AddSubscriptionDialog(
-            initialUrl = importPrefill.orEmpty(),
-            onDismiss = {
-                showAddDialog = false
-                importPrefill = null
-            },
-            onConfirm = { url, name, allowInsecure ->
-                showAddDialog = false
-                viewModel.add(url, name, allowInsecure)
-            },
-        )
+        // Key on the prefill so a second deep link refreshes an open dialog.
+        key(importPrefill) {
+            AddSubscriptionDialog(
+                initialUrl = importPrefill.orEmpty(),
+                onDismiss = {
+                    showAddDialog = false
+                    importPrefill = null
+                },
+                onConfirm = { url, name, allowInsecure ->
+                    showAddDialog = false
+                    importPrefill = null
+                    viewModel.add(url, name, allowInsecure)
+                },
+            )
+        }
     }
 
     pendingDelete?.let { profile ->
@@ -251,6 +259,8 @@ private fun AddSubscriptionDialog(
     var url by remember { mutableStateOf(initialUrl) }
     var name by remember { mutableStateOf("") }
     var allowInsecure by remember { mutableStateOf(false) }
+    // In-dialog validation — a rejected http add would otherwise lose the URL.
+    val isHttp = url.trim().startsWith("http://", ignoreCase = true)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -272,13 +282,27 @@ private fun AddSubscriptionDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (isHttp && !allowInsecure) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Plain HTTP — enable the option below to allow it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = allowInsecure,
+                            role = Role.Checkbox,
+                            onValueChange = { allowInsecure = it },
+                        ),
                 ) {
                     Checkbox(
                         checked = allowInsecure,
-                        onCheckedChange = { allowInsecure = it },
+                        onCheckedChange = null,
                     )
                     Text(
                         text = "Allow insecure HTTP (not recommended)",
@@ -290,7 +314,7 @@ private fun AddSubscriptionDialog(
         confirmButton = {
             TextButton(
                 onClick = { onConfirm(url.trim(), name.trim().ifEmpty { null }, allowInsecure) },
-                enabled = url.isNotBlank(),
+                enabled = url.isNotBlank() && (!isHttp || allowInsecure),
             ) {
                 Text("Add")
             }

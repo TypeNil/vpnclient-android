@@ -1,7 +1,6 @@
 package dev.typenil.vpnclient.ui.appfilter
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,9 +24,10 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -35,6 +35,8 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.core.vpn.PerAppMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AppFilterScreen(
@@ -77,6 +79,24 @@ fun AppFilterScreen(
         }
 
         if (ui.mode != PerAppMode.ALL) {
+            // The plan is baked into the TUN at openTun — be honest that a
+            // running tunnel won't pick up edits until reconnect.
+            Text(
+                "Changes apply on the next connect",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            if (ui.mode == PerAppMode.INCLUDE && ui.selected.isEmpty()) {
+                // An empty include-list can't be expressed to VpnService —
+                // the resolver falls back to routing everything.
+                Text(
+                    "No apps selected — all apps use the tunnel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
             OutlinedTextField(
                 value = ui.query,
                 onValueChange = viewModel::setQuery,
@@ -142,16 +162,21 @@ private fun AppRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .selectable(selected = checked, onClick = onToggle, role = Role.Checkbox)
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val icon = remember(app.packageName) {
-            loadIcon(app.packageName)?.toBitmap()?.asImageBitmap()
+        // Icon decode is a binder call + bitmap work — off the main thread.
+        val icon by produceState<ImageBitmap?>(null, app.packageName) {
+            value = withContext(Dispatchers.IO) {
+                runCatching {
+                    loadIcon(app.packageName)?.toBitmap()?.asImageBitmap()
+                }.getOrNull()
+            }
         }
         if (icon != null) {
             Image(
-                bitmap = icon,
+                bitmap = icon!!,
                 contentDescription = null,
                 modifier = Modifier.size(36.dp),
             )
@@ -170,6 +195,6 @@ private fun AppRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Checkbox(checked = checked, onCheckedChange = { onToggle() })
+        Checkbox(checked = checked, onCheckedChange = null)
     }
 }

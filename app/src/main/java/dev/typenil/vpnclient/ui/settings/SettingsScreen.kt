@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -29,7 +30,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -92,7 +95,8 @@ fun SettingsScreen(
             title = "Auto-refresh subscriptions",
             subtitle = if (ui.autoRefreshEnabled) {
                 if (ui.autoRefreshMinutes > 0) {
-                    "Every ${ui.autoRefreshMinutes} min"
+                    // Periodic work can't run faster than the platform floor.
+                    "Every ${maxOf(ui.autoRefreshMinutes, 15)} min"
                 } else {
                     "Using each provider's update interval"
                 }
@@ -144,15 +148,17 @@ private fun SwitchRow(
     }
 }
 
-/** Optional user interval override; empty field = follow the provider hint. */
+/** Optional user interval override; empty field = follow the provider hint.
+ *  Committed on IME Done — per-keystroke writes would re-enqueue all work. */
 @Composable
 private fun AutoRefreshIntervalRow(
     minutes: Int,
     onMinutes: (Int) -> Unit,
 ) {
-    var text by remember(minutes) {
-        mutableStateOf(if (minutes > 0) minutes.toString() else "")
+    var text by remember {
+        mutableStateOf(TextFieldValue(if (minutes > 0) minutes.toString() else ""))
     }
+    val focusManager = LocalFocusManager.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -162,14 +168,19 @@ private fun AutoRefreshIntervalRow(
         OutlinedTextField(
             value = text,
             onValueChange = { input ->
-                val digits = input.filter { it.isDigit() }
-                text = digits
-                onMinutes(digits.toIntOrNull() ?: 0)
+                val digits = input.text.filter { it.isDigit() }
+                text = input.copy(text = digits)
             },
-            label = { Text("Interval override (minutes)") },
+            label = { Text("Interval override (minutes, min 15)") },
             placeholder = { Text("provider") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    onMinutes(text.text.toIntOrNull() ?: 0)
+                    focusManager.clearFocus()
+                },
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
     }

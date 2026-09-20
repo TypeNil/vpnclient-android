@@ -44,7 +44,10 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "vpnclient.db")
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            // Last resort only: every version jump must ship a real migration
+            // (schema JSONs are committed for exactly this reason). Destructive
+            // fallback loses user-entered subscriptions but beats a crash loop.
             .fallbackToDestructiveMigration()
             .build()
 

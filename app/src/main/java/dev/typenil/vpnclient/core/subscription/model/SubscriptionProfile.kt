@@ -73,4 +73,8 @@ sealed class SubscriptionError : Exception() {
     /** Remnawave HWID device-limit rejection. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()
     data class RemnawaveError(val statusCode: Int, override val message: String) : SubscriptionError()
+    /** The subscription row no longer exists (removed mid-flight). */
+    data object NotFound : SubscriptionError() {
+        override val message = "subscription no longer exists"
+    }
 }

@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -44,16 +45,29 @@ class VpnClientApp : Application() {
      */
     private fun reconcileRefreshJobs() {
         applicationScope.launch {
-            settings.autoRefreshMinutes.collect { userOverride ->
-                subscriptionDao.getAll().forEach { sub ->
-                    refreshScheduler.schedule(
-                        subscriptionId = sub.id,
-                        providerMinutes = sub.updateIntervalMinutes,
-                        userOverrideMinutes = userOverride,
-                        enabled = sub.enabled,
-                    )
+            // distinctUntilChanged: unrelated DataStore writes re-emit the
+            // flow — without it every settings write re-enqueues all jobs.
+            settings.autoRefreshMinutes
+                .distinctUntilChanged()
+                .collect { userOverride ->
+                    // A throw here must not kill the reconcile loop for the
+                    // rest of the process lifetime.
+                    runCatching {
+                        val subs = subscriptionDao.getAll()
+                        subs.forEach { sub ->
+                            refreshScheduler.schedule(
+                                subscriptionId = sub.id,
+                                providerMinutes = sub.updateIntervalMinutes,
+                                userOverrideMinutes = userOverride,
+                                enabled = sub.enabled,
+                            )
+                        }
+                        // Prune jobs whose subscription no longer exists.
+                        refreshScheduler.reconcile(subs.map { it.id }.toSet())
+                    }.onFailure {
+                        SecureLog.w("VpnClientApp", "refresh reconcile failed", it)
+                    }
                 }
-            }
         }
     }
 

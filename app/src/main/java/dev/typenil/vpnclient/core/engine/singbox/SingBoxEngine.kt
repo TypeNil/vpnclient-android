@@ -45,6 +45,7 @@ import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
 import java.net.InetSocketAddress
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -81,6 +82,10 @@ class SingBoxEngine(
 
     private var commandServer: CommandServer? = null
     private var commandClient: CommandClient? = null
+
+    /** Written on IO under lifecycleMutex, read by libbox's serviceStop()
+     *  callback on a binder thread — must be volatile to be visible. */
+    @Volatile
     private var closing = false
 
     private val _stats = MutableSharedFlow<TrafficStats>(replay = 1)
@@ -94,6 +99,8 @@ class SingBoxEngine(
     override suspend fun validate(config: EngineConfig) = withContext(Dispatchers.IO) {
         try {
             Libbox.checkConfig(config.configJson)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw EngineError.InvalidConfig(e.message ?: "invalid config")
         }
@@ -111,6 +118,14 @@ class SingBoxEngine(
                 closing = false
                 networkMonitor.start()
                 server.startOrReloadService(config.configJson, OverrideOptions())
+            } catch (e: CancellationException) {
+                // Still tear down what we built — cancellation is not an
+                // excuse to leak a half-started CommandServer.
+                runCatching { server.close() }
+                networkMonitor.stop()
+                platform.closeTun()
+                commandServer = null
+                throw e
             } catch (e: Exception) {
                 runCatching { server.close() }
                 networkMonitor.stop()
@@ -129,22 +144,26 @@ class SingBoxEngine(
             addCommand(Libbox.CommandGroup)
             statusInterval = STATUS_INTERVAL_NS
         }
-        val client = CommandClient(ClientHandler(), options)
         scope.launch(Dispatchers.IO) {
             var attempt = 0
-            while (isActive) {
+            while (isActive && !closing) {
                 attempt++
+                // Fresh client per attempt — a failed connect() can leave the
+                // instance in a state libbox won't recover.
+                val client = CommandClient(ClientHandler(), options)
                 try {
                     client.connect()
+                    commandClient = client
                     return@launch
                 } catch (e: Exception) {
                     if (attempt >= COMMAND_CONNECT_MAX_ATTEMPTS) {
                         // Bounded retry: the tunnel works without the control
                         // channel (stats/selection degrade), so this stays
                         // non-fatal — but it must be observable.
-                        SecureLog.w(TAG, "command client connect failed after $attempt attempts")
-                        _events.tryEmit(
-                            EngineEvent.Log(5, "control channel unavailable"),
+                        SecureLog.w(
+                            TAG,
+                            "command client connect failed after " +
+                                "$attempt attempts: ${e.message}",
                         )
                         return@launch
                     }
@@ -153,7 +172,6 @@ class SingBoxEngine(
                 }
             }
         }
-        commandClient = client
     }
 
     override suspend fun stop(): Unit = lifecycleMutex.withLock {
@@ -192,11 +210,12 @@ class SingBoxEngine(
         Unit
     }
 
-    override suspend fun selectOutbound(groupTag: String, outboundTag: String): Unit =
+    override suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean =
         withContext(Dispatchers.IO) {
-            runCatching { commandClient?.selectOutbound(groupTag, outboundTag) }
+            val client = commandClient ?: return@withContext false
+            runCatching { client.selectOutbound(groupTag, outboundTag); true }
                 .onFailure { SecureLog.w(TAG, "selectOutbound failed: ${it.message}") }
-            Unit
+                .getOrDefault(false)
         }
 
     override suspend fun urlTest(groupTag: String): Unit = withContext(Dispatchers.IO) {
@@ -209,8 +228,13 @@ class SingBoxEngine(
 
     private inner class ServerHandler : CommandServerHandler {
         override fun serviceStop() {
+            // closing is @Volatile — read on a binder thread, written under
+            // lifecycleMutex. Re-check inside the coroutine to close the
+            // check-then-launch gap.
             if (closing) return
-            scope.launch { _events.emit(EngineEvent.StoppedUnexpectedly) }
+            scope.launch {
+                if (!closing) _events.emit(EngineEvent.StoppedUnexpectedly)
+            }
         }
 
         override fun serviceReload() {
@@ -284,7 +308,6 @@ class SingBoxEngine(
                 )
             }
             _groups.value = groups
-            scope.launch { _events.emit(EngineEvent.GroupsUpdated(groups)) }
         }
 
         override fun writeOutbounds(message: OutboundGroupItemIterator?) = Unit

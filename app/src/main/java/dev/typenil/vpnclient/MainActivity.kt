@@ -38,7 +38,9 @@ class MainActivity : ComponentActivity() {
                 onImportConsumed = { _importUrl.value = null },
             )
         }
-        handleIntent(intent)
+        // Only on a fresh launch — the launch intent survives recreation, so
+        // a process-death/config-change restore must not re-fire it.
+        if (savedInstanceState == null) handleIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -57,6 +59,13 @@ class MainActivity : ComponentActivity() {
             action = intent.action,
             data = intent.dataString,
             extraText = intent.getStringExtra(Intent.EXTRA_TEXT),
-        )?.let { _importUrl.value = it }
+        )?.let {
+            _importUrl.value = it
+            // Consume: the same intent object is re-delivered to every future
+            // onCreate — without this the import dialog re-opens on rotate.
+            intent.action = Intent.ACTION_MAIN
+            intent.data = null
+            intent.removeExtra(Intent.EXTRA_TEXT)
+        }
     }
 }

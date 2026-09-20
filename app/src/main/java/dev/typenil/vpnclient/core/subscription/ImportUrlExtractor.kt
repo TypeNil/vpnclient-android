@@ -23,7 +23,9 @@ object ImportUrlExtractor {
             else -> data
         }?.trim().orEmpty()
         if (raw.isEmpty()) return null
-        if (raw.startsWith("https://") || raw.startsWith("http://")) return raw
+        // Schemes are case-insensitive per RFC 3986 — OEM browsers and
+        // keyboards emit HTTPS://… often enough to matter.
+        if (raw.startsWithHttp()) return raw
         return when (raw.substringBefore("://").lowercase()) {
             "sing-box", "clash", "clashmeta" -> extractUrlParam(raw)
             else -> null
@@ -38,6 +40,10 @@ object ImportUrlExtractor {
             ?: return null
         return runCatching { URLDecoder.decode(encoded, "UTF-8") }
             .getOrNull()
-            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+            ?.takeIf { it.startsWithHttp() }
     }
+
+    private fun String.startsWithHttp(): Boolean =
+        startsWith("https://", ignoreCase = true) ||
+            startsWith("http://", ignoreCase = true)
 }

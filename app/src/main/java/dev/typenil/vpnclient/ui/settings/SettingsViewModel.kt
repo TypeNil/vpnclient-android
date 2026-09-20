@@ -57,7 +57,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setAutoRefreshEnabled(enabled: Boolean) {
-        viewModelScope.launch { settings.setAutoRefreshMinutes(if (enabled) 0 else -1) }
+        viewModelScope.launch { settings.setAutoRefreshEnabled(enabled) }
     }
 
     /** Persist a user override interval; 0/blank falls back to the provider hint. */

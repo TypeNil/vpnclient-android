@@ -11,6 +11,7 @@ import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -84,6 +85,9 @@ class ConnectionManager @Inject constructor(
      */
     private var pendingTerminalError: VpnError? = null
 
+    /** A teardown intent was already sent for this session — don't resend. */
+    private var teardownRequested = false
+
     private var engine: VpnEngine? = null
     private var statsJob: Job? = null
     private var eventsJob: Job? = null
@@ -102,6 +106,10 @@ class ConnectionManager @Inject constructor(
                     is VpnConnectionState.Connecting,
                     is VpnConnectionState.Reconnecting,
                     is VpnConnectionState.Stopping,
+                    // A consent intent may already be outstanding — a second
+                    // connect() would burn a generation and recompile.
+                    is VpnConnectionState.Preparing,
+                    is VpnConnectionState.PermissionRequired,
                     -> return@withLock
                     else -> Unit
                 }
@@ -110,6 +118,9 @@ class ConnectionManager @Inject constructor(
                 } catch (e: EngineError) {
                     publish(VpnConnectionState.Error(VpnError.fromEngine(e), null))
                     return@withLock
+                } catch (e: CancellationException) {
+                    // Cancelled work is not a user-visible failure.
+                    throw e
                 } catch (e: Exception) {
                     publish(
                         VpnConnectionState.Error(
@@ -179,14 +190,37 @@ class ConnectionManager @Inject constructor(
                 // disconnect must land on Idle, not on a stale failure.
                 pendingTerminalError = null
                 publish(VpnConnectionState.Stopping)
-                serviceControl.startDisconnectService()
+                // startService can throw under background-start restrictions —
+                // report instead of leaving the machine stuck in Stopping.
+                runCatching { serviceControl.startDisconnectService() }
+                    .onFailure {
+                        SecureLog.w(TAG, "disconnect intent failed")
+                        publish(
+                            VpnConnectionState.Error(
+                                VpnError.Unexpected("failed to stop service"),
+                                sessionNode,
+                            ),
+                        )
+                    }
             }
         }
     }
 
     private fun launchService(config: EngineConfig) {
         publish(VpnConnectionState.Connecting(config.node))
-        serviceControl.startConnectService()
+        // startForegroundService can throw under background-start
+        // restrictions — a stuck "Connecting" would be a fake state.
+        runCatching { serviceControl.startConnectService() }
+            .onFailure {
+                SecureLog.w(TAG, "connect intent failed")
+                pendingSession = null
+                publish(
+                    VpnConnectionState.Error(
+                        VpnError.Unexpected("failed to start service"),
+                        sessionNode,
+                    ),
+                )
+            }
     }
 
     // region service callbacks (same process)
@@ -197,6 +231,10 @@ class ConnectionManager @Inject constructor(
      * with a stale generation are dropped.
      */
     fun attachEngine(engine: VpnEngine, generation: Long) {
+        if (generation != sessionGeneration) {
+            SecureLog.w(TAG, "attachEngine with stale generation — ignored")
+            return
+        }
         this.engine = engine
         statsJob?.cancel()
         eventsJob?.cancel()
@@ -231,7 +269,13 @@ class ConnectionManager @Inject constructor(
         }
     }
 
-    fun detachEngine() {
+    /**
+     * Detach collectors from the current engine. [generation] `-1` forces the
+     * detach; a tagged call only acts when it still owns the session — a stale
+     * teardown must not strip a newer session's collectors.
+     */
+    fun detachEngine(generation: Long = -1L) {
+        if (generation >= 0 && generation != sessionGeneration) return
         statsJob?.cancel()
         statsJob = null
         eventsJob?.cancel()
@@ -245,11 +289,10 @@ class ConnectionManager @Inject constructor(
     /**
      * Live-switch the active outbound inside [groupTag] — the selector stays
      * consistent with the persisted selection for the next connect.
-     * No-op while detached or if the call fails (engine logs it).
+     * Returns false while detached or when the engine rejected the switch.
      */
-    suspend fun selectOutbound(groupTag: String, outboundTag: String) {
-        engine?.selectOutbound(groupTag, outboundTag)
-    }
+    suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean =
+        engine?.selectOutbound(groupTag, outboundTag) ?: false
 
     /** Ask the engine to run urltest on [groupTag]; results arrive via [groups]. */
     suspend fun urlTest(groupTag: String) {
@@ -258,12 +301,26 @@ class ConnectionManager @Inject constructor(
 
     /**
      * Allocates the session generation for a service-driven start (process
-     * restart, always-on) that has no `pendingSession`. The service tags all
-     * subsequent callbacks with it.
+     * restart, always-on) that has no `pendingSession`. Returns -1 when a
+     * session is already live — the caller must bail instead of competing
+     * with it. On success the state moves to Connecting so the rebuild is
+     * visible and cancellable like a user-initiated connect.
      */
     fun adoptSession(node: NodeSummary): Long {
+        when (_state.value) {
+            is VpnConnectionState.Connected,
+            is VpnConnectionState.Connecting,
+            is VpnConnectionState.Reconnecting,
+            is VpnConnectionState.Stopping,
+            is VpnConnectionState.Preparing,
+            is VpnConnectionState.PermissionRequired,
+            -> return -1L
+            else -> Unit
+        }
         val generation = ++sessionGeneration
         sessionNode = node
+        teardownRequested = false
+        publish(VpnConnectionState.Connecting(node))
         return generation
     }
 
@@ -276,7 +333,13 @@ class ConnectionManager @Inject constructor(
             is VpnConnectionState.Reconnecting,
             -> {
                 if (pendingTerminalError == null) pendingTerminalError = error
-                serviceControl.startDisconnectService()
+                if (!teardownRequested) {
+                    teardownRequested = true
+                    // startService can throw under background-start
+                    // restrictions — the state machine must survive it.
+                    runCatching { serviceControl.startDisconnectService() }
+                        .onFailure { SecureLog.w(TAG, "disconnect intent failed") }
+                }
             }
             else -> Unit
         }
@@ -287,11 +350,13 @@ class ConnectionManager @Inject constructor(
         if (!isCurrent(generation)) return
         val node = sessionNode ?: pendingSession?.config?.node ?: return
         pendingSession = null
+        teardownRequested = false
         publish(VpnConnectionState.Connected(node, Instant.now(), null))
     }
 
     fun onServiceFailed(error: VpnError, generation: Long) {
         if (!isCurrent(generation)) return
+        detachEngine()
         pendingSession = null
         publish(VpnConnectionState.Error(error, sessionNode))
     }
@@ -300,6 +365,7 @@ class ConnectionManager @Inject constructor(
         if (!isCurrent(generation)) return
         detachEngine()
         pendingSession = null
+        teardownRequested = false
         val error = pendingTerminalError
         pendingTerminalError = null
         val current = _state.value
@@ -318,26 +384,35 @@ class ConnectionManager @Inject constructor(
      * but starved). Called by the service's single network observer.
      */
     fun onUnderlyingNetworkLost() {
-        val current = _state.value
-        if (current is VpnConnectionState.Connected) {
-            publish(
-                VpnConnectionState.Reconnecting(
-                    current.node, "network unavailable", attempt = 1,
-                ),
-            )
+        scope.launch {
+            mutex.withLock {
+                val current = _state.value
+                if (current is VpnConnectionState.Connected) {
+                    publish(
+                        VpnConnectionState.Reconnecting(
+                            current.node, "network unavailable", attempt = 1,
+                        ),
+                    )
+                }
+            }
         }
     }
 
     /** A usable underlying network is back → resume Connected. */
     fun onUnderlyingNetworkAvailable() {
-        val current = _state.value
-        if (current is VpnConnectionState.Reconnecting) {
-            publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+        scope.launch {
+            mutex.withLock {
+                val current = _state.value
+                if (current is VpnConnectionState.Reconnecting) {
+                    publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+                }
+            }
         }
     }
 
     /** onRevoke — the tunnel is already gone. */
-    fun onServiceRevoked() {
+    fun onServiceRevoked(generation: Long) {
+        if (!isCurrent(generation)) return
         pendingSession = null
         pendingTerminalError = null
         detachEngine()
@@ -348,11 +423,12 @@ class ConnectionManager @Inject constructor(
 
     /**
      * A callback applies only to the session that produced it. [generation]
-     * `-1` means the service had no session to tag (e.g. stray start) — those
-     * are lifecycle events worth reporting regardless.
+     * `-1` means the service had no session to tag (stray start, post-teardown
+     * onDestroy) — those reports apply only while no session is attached, so
+     * a stale teardown can't clobber a live one.
      */
     private fun isCurrent(generation: Long): Boolean =
-        generation < 0 || generation == sessionGeneration
+        if (generation < 0) engine == null else generation == sessionGeneration
 
     private fun publish(next: VpnConnectionState) {
         SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}")

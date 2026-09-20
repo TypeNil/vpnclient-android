@@ -114,6 +114,9 @@ class SubscriptionRepositoryTest {
         override suspend fun getOrCreateHwid() = "00000000-0000-0000-0000-000000000000"
         override val selectedNodeId: Flow<String?> get() = selected
         override suspend fun setSelectedNodeId(id: String?) { selected.value = id }
+        override suspend fun clearSelectedNodeIdIf(expected: String) {
+            if (selected.value == expected) selected.value = null
+        }
         override val autoRefreshMinutes: Flow<Int> get() = autoRefresh
     }
 
@@ -135,6 +138,7 @@ class SubscriptionRepositoryTest {
             scheduled.add(Call(subscriptionId, providerMinutes, userOverrideMinutes, enabled))
         }
         override fun cancel(subscriptionId: Long) { cancelled.add(subscriptionId) }
+        override suspend fun reconcile(activeSubscriptionIds: Set<Long>) = Unit
     }
 
     private lateinit var subscriptionDao: FakeSubscriptionDao

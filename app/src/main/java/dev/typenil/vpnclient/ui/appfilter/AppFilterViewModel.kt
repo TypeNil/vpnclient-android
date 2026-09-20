@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,8 +74,11 @@ class AppFilterViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            apps.value = loadLauncherApps()
-            loading.value = false
+            try {
+                apps.value = loadLauncherApps()
+            } finally {
+                loading.value = false
+            }
         }
     }
 
@@ -89,15 +91,12 @@ class AppFilterViewModel @Inject constructor(
     }
 
     fun toggle(packageName: String) {
-        viewModelScope.launch {
-            val current = settings.perAppPackages.first()
-            settings.setPerAppPackages(
-                if (packageName in current) current - packageName else current + packageName,
-            )
-        }
+        // Atomic in the repository — rapid taps must not drop each other.
+        viewModelScope.launch { settings.togglePerAppPackage(packageName) }
     }
 
-    /** Apps with a launcher entry, sorted by label. */
+    /** Apps with a launcher entry, sorted by label. Our own package is
+     *  omitted — it always bypasses the tunnel, so a checkbox would lie. */
     private suspend fun loadLauncherApps(): List<AppEntry> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -112,6 +111,7 @@ class AppFilterViewModel @Inject constructor(
         resolved
             .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
             .distinctBy { it.first }
+            .filter { it.first != context.packageName }
             .sortedBy { it.second.lowercase() }
             .map { (pkg, label) -> AppEntry(pkg, label) }
     }

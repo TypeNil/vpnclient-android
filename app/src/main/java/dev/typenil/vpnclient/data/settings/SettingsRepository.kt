@@ -10,11 +10,13 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.vpn.PerAppMode
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.settingsStore by preferencesDataStore(name = "settings")
@@ -35,6 +37,8 @@ class SettingsRepository @Inject constructor(
         val DESIRED_VPN_RUNNING = booleanPreferencesKey("desired_vpn_running")
         /** -1 = manual only, 0 = provider interval (default), >0 = user override. */
         val SUBSCRIPTION_REFRESH_MINUTES = intPreferencesKey("subscription_refresh_minutes")
+        /** Last user-entered override — survives toggling auto-refresh off/on. */
+        val AUTO_REFRESH_OVERRIDE = intPreferencesKey("auto_refresh_override_minutes")
         /** PerAppMode.ordinal: 0 = all, 1 = include selected, 2 = exclude selected. */
         val PER_APP_MODE = intPreferencesKey("per_app_mode")
         val PER_APP_PACKAGES = stringSetPreferencesKey("per_app_packages")
@@ -49,6 +53,14 @@ class SettingsRepository @Inject constructor(
     override suspend fun setSelectedNodeId(id: String?) {
         context.settingsStore.edit { prefs ->
             if (id == null) prefs.remove(Keys.SELECTED_NODE_ID) else prefs[Keys.SELECTED_NODE_ID] = id
+        }
+    }
+
+    override suspend fun clearSelectedNodeIdIf(expected: String) {
+        context.settingsStore.edit { prefs ->
+            if (prefs[Keys.SELECTED_NODE_ID] == expected) {
+                prefs.remove(Keys.SELECTED_NODE_ID)
+            }
         }
     }
 
@@ -102,7 +114,18 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setAutoRefreshMinutes(minutes: Int) {
         context.settingsStore.edit {
-            it[Keys.SUBSCRIPTION_REFRESH_MINUTES] = minutes.coerceAtLeast(-1)
+            val value = minutes.coerceAtLeast(0)
+            it[Keys.SUBSCRIPTION_REFRESH_MINUTES] = value
+            // Keep the override so toggling auto-refresh off/on restores it.
+            it[Keys.AUTO_REFRESH_OVERRIDE] = value
+        }
+    }
+
+    /** Enable follows the remembered override; disable preserves it. */
+    suspend fun setAutoRefreshEnabled(enabled: Boolean) {
+        context.settingsStore.edit {
+            it[Keys.SUBSCRIPTION_REFRESH_MINUTES] =
+                if (enabled) it[Keys.AUTO_REFRESH_OVERRIDE] ?: 0 else -1
         }
     }
 
@@ -112,7 +135,9 @@ class SettingsRepository @Inject constructor(
         .map { it[Keys.PER_APP_MODE] ?: 0 }
 
     suspend fun setPerAppMode(mode: Int) {
-        context.settingsStore.edit { it[Keys.PER_APP_MODE] = mode.coerceIn(0, 2) }
+        context.settingsStore.edit {
+            it[Keys.PER_APP_MODE] = mode.coerceIn(0, PerAppMode.entries.lastIndex)
+        }
     }
 
     /** Packages the include/exclude list applies to. */
@@ -122,6 +147,26 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setPerAppPackages(packages: Set<String>) {
         context.settingsStore.edit { it[Keys.PER_APP_PACKAGES] = packages }
+    }
+
+    /** Atomic toggle — DataStore serializes edits, so rapid taps can't
+     *  overwrite each other's read-modify-write. */
+    suspend fun togglePerAppPackage(packageName: String) {
+        context.settingsStore.edit { prefs ->
+            val current = prefs[Keys.PER_APP_PACKAGES] ?: emptySet()
+            prefs[Keys.PER_APP_PACKAGES] =
+                if (packageName in current) current - packageName else current + packageName
+        }
+    }
+
+    /** Both per-app keys from a single DataStore snapshot — reading the two
+     *  flows separately could tear across a concurrent write. */
+    suspend fun perAppPolicySnapshot(): Pair<PerAppMode, Set<String>> {
+        val prefs = context.settingsStore.data
+            .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .first()
+        return PerAppMode.fromOrdinal(prefs[Keys.PER_APP_MODE] ?: 0) to
+            (prefs[Keys.PER_APP_PACKAGES] ?: emptySet())
     }
 
     /** Pause the engine in Doze — saves battery but drops open connections. */

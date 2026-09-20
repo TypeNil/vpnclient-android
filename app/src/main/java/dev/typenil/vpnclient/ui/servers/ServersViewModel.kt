@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -89,24 +90,54 @@ class ServersViewModel @Inject constructor(
         initialValue = ServersUiState(),
     )
 
+    /** Live outbound switch in flight — keeps the row honest while the
+     *  engine decides, and debounces double-taps. */
+    private val _switching = MutableStateFlow(false)
+    val switching: StateFlow<Boolean> = _switching
+
     fun select(nodeId: String) {
         viewModelScope.launch {
             settings.setSelectedNodeId(nodeId)
-            if (uiState.value.connected) {
-                // Live-switch the running tunnel; if the engine hasn't
-                // reported groups yet the persisted choice still wins on
-                // the next connect.
-                resolveSelectionTarget(connectionManager.groups.value, nodeId)
-                    ?.let { connectionManager.selectOutbound(it, nodeId) }
-                    ?: _messages.tryEmit("Reconnect to apply the new server")
+            // uiState.connected can lag a fresh connect — the manager's live
+            // state is the source of truth for "is a tunnel actually up".
+            if (connectionManager.state.value is VpnConnectionState.Connected) {
+                if (_switching.value) return@launch
+                _switching.value = true
+                try {
+                    val target = resolveSelectionTarget(
+                        connectionManager.groups.value, nodeId,
+                    )
+                    val switched = target != null &&
+                        connectionManager.selectOutbound(target, nodeId)
+                    if (!switched) {
+                        // Engine couldn't apply it live — the persisted pick
+                        // still takes effect on the next connect.
+                        _messages.tryEmit("Reconnect to apply the new server")
+                    }
+                } finally {
+                    _switching.value = false
+                }
             }
         }
     }
 
-    /** Trigger a latency probe across all reported groups. */
+    /** Trigger a latency probe across all reported groups. Connected-only:
+     *  during Reconnecting the tunnel is starved, so badges would just churn
+     *  to timeouts and mask the last real measurement. */
     fun testLatency() {
+        if (connectionManager.state.value !is VpnConnectionState.Connected) return
+        if (_testing.value) return
         viewModelScope.launch {
-            connectionManager.groups.value.forEach { connectionManager.urlTest(it.tag) }
+            _testing.value = true
+            try {
+                connectionManager.groups.value.forEach { connectionManager.urlTest(it.tag) }
+            } finally {
+                _testing.value = false
+            }
         }
     }
+
+    private val _testing = MutableStateFlow(false)
+    /** True while a latency probe is in flight — drives the button spinner. */
+    val testing: StateFlow<Boolean> = _testing
 }

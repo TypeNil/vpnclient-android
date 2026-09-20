@@ -1,7 +1,6 @@
 package dev.typenil.vpnclient.core.subscription
 
 import dev.typenil.vpnclient.core.common.log.SecureLog
-import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
@@ -13,11 +12,14 @@ import dev.typenil.vpnclient.data.db.SubscriptionEntity
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
@@ -64,7 +66,8 @@ class SubscriptionRepository @Inject constructor(
         val entity = SubscriptionEntity(
             name = requestedName?.trim().orEmpty().ifEmpty { deriveName(trimmed) },
             url = trimmed,
-            allowInsecureHttp = allowInsecureHttp,
+            // The flag is meaningless on https — don't persist dead state.
+            allowInsecureHttp = allowInsecureHttp && !parsed.isHttps,
             createdAtEpochMs = Instant.now().toEpochMilli(),
             lastUpdatedAtEpochMs = null,
             lastAttemptAtEpochMs = null,
@@ -79,21 +82,31 @@ class SubscriptionRepository @Inject constructor(
     }
 
     suspend fun refresh(id: Long): Result<Unit> = refreshMutex.withLock {
-        val sub = subscriptionDao.get(id)
-            ?: return Result.failure(SubscriptionError.ParseFailed("subscription not found"))
         val attemptAt = Instant.now().toEpochMilli()
-        return try {
+        // `fetched` travels out of the try so post-commit bookkeeping can run
+        // only on success — and can't falsify an already-committed refresh.
+        var fetched: FetchedSubscription? = null
+        val result = try {
+            val sub = subscriptionDao.get(id) ?: throw SubscriptionError.NotFound
             val hwid = settings.getOrCreateHwid()
-            val fetched = fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
-            val classified = classifier.classify(fetched.body, fetched.contentType)
-            val nodes = dispatcher.parse(classified.format, classified.body, id)
+            val body = fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
+            fetched = body
+            val classified = classifier.classify(body.body, body.contentType)
+            // Parsing is CPU-bound over up to 8 MiB — keep it off the caller's
+            // (often main) dispatcher. Duplicate node ids would emit duplicate
+            // outbound tags — dedupe before validate + commit.
+            val nodes = withContext(Dispatchers.Default) {
+                dispatcher.parse(classified.format, classified.body, id)
+            }.distinctBy { it.id }
             if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
 
             // Validate the candidate against the engine BEFORE touching the DB:
             // parsed-but-unusable nodes must never replace a working set.
             try {
                 validator.validate(nodes)
-            } catch (e: EngineError) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 throw SubscriptionError.ConfigRejected
             }
 
@@ -118,50 +131,73 @@ class SubscriptionRepository @Inject constructor(
                     id = id,
                     updatedAt = Instant.now().toEpochMilli(),
                     attemptAt = attemptAt,
-                    userInfoJson = fetched.userInfo?.let { json.encodeToString(it) },
-                    supportUrl = fetched.supportUrl,
-                    updateIntervalMinutes = fetched.updateIntervalMinutes,
+                    userInfoJson = body.userInfo?.let { json.encodeToString(it) },
+                    supportUrl = body.supportUrl,
+                    updateIntervalMinutes = body.updateIntervalMinutes,
                 )
             }
-            // If the selected node vanished in this refresh, drop the selection
-            // so the next connect picks a sane default instead of failing.
-            val selected = settings.selectedNodeId.first()
-            if (selected != null && nodeDao.get(selected) == null) {
-                settings.setSelectedNodeId(null)
-                SecureLog.i(TAG, "cleared selection — selected node vanished in refresh")
-            }
-            // Apply profile-title only when the name is still the auto-derived
-            // host — never overwrite a name the user typed.
-            if (!fetched.profileTitle.isNullOrBlank() && sub.name == deriveName(sub.url)) {
-                subscriptionDao.update(sub.copy(name = fetched.profileTitle))
-            }
-            // (Re)register background refresh — the provider interval may have
-            // changed, and a removed/re-added job must be reconciled.
-            scheduler.schedule(
-                subscriptionId = id,
-                providerMinutes = fetched.updateIntervalMinutes,
-                userOverrideMinutes = settings.autoRefreshMinutes.first(),
-                enabled = sub.enabled,
-            )
             SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} fmt=${classified.format}")
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: SubscriptionError) {
             SecureLog.w(TAG, "refresh failed sub=$id: ${e.safeMessage()}")
-            subscriptionDao.markAttempt(id, attemptAt, e.safeMessage())
+            runCatching { subscriptionDao.markAttempt(id, attemptAt, e.safeMessage()) }
             Result.failure(e)
         } catch (e: Exception) {
             // e.message can embed the request URL — persist a fixed string
             // and redact what reaches logcat.
             SecureLog.w(TAG, "refresh failed sub=$id: ${e.javaClass.simpleName}", e)
-            subscriptionDao.markAttempt(id, attemptAt, "unexpected error")
+            runCatching { subscriptionDao.markAttempt(id, attemptAt, "unexpected error") }
             Result.failure(SubscriptionError.ParseFailed(e.javaClass.simpleName))
         }
+
+        val committed = fetched
+        if (result.isSuccess && committed != null) {
+            // Post-commit bookkeeping must not flip a committed success into a
+            // reported failure — log and move on.
+            runCatching {
+                val sub = subscriptionDao.get(id) ?: return@runCatching
+                // If the selected node vanished (disabled subs' nodes count as
+                // unusable too), clear it so the next connect picks a sane
+                // default. The conditional clear can't wipe a selection the
+                // user made concurrently.
+                val selected = settings.selectedNodeId.first()
+                if (selected != null && nodeDao.getEnabled().none { it.id == selected }) {
+                    settings.clearSelectedNodeIdIf(selected)
+                    SecureLog.i(TAG, "cleared selection — selected node vanished in refresh")
+                }
+                // Apply profile-title only when the name is still the
+                // auto-derived host — never overwrite a name the user typed.
+                if (!committed.profileTitle.isNullOrBlank() &&
+                    sub.name == deriveName(sub.url)
+                ) {
+                    subscriptionDao.update(sub.copy(name = committed.profileTitle))
+                }
+                // (Re)register background refresh — the provider interval may
+                // have changed, and a removed/re-added job must be reconciled.
+                scheduler.schedule(
+                    subscriptionId = id,
+                    providerMinutes = committed.updateIntervalMinutes,
+                    userOverrideMinutes = settings.autoRefreshMinutes.first(),
+                    enabled = sub.enabled,
+                )
+            }.onFailure {
+                SecureLog.w(TAG, "post-commit bookkeeping failed sub=$id: ${it.javaClass.simpleName}")
+            }
+        }
+        return result
     }
 
     suspend fun remove(id: Long) {
-        scheduler.cancel(id)
-        nodeDao.deleteForSubscription(id)
-        subscriptionDao.delete(id)
+        // Serialized with refresh: a refresh that already fetched must commit
+        // before the row disappears, not after — otherwise node rows would be
+        // re-inserted against a deleted (later reusable) subscription id.
+        refreshMutex.withLock {
+            scheduler.cancel(id)
+            nodeDao.deleteForSubscription(id)
+            subscriptionDao.delete(id)
+        }
     }
 
     private fun deriveName(url: String): String =
@@ -179,6 +215,7 @@ class SubscriptionRepository @Inject constructor(
         is SubscriptionError.InsecureTransport -> "https required"
         is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
         is SubscriptionError.RemnawaveError -> "panel status $statusCode"
+        is SubscriptionError.NotFound -> "subscription removed"
     }
 
     private fun SubscriptionEntity.toDomain(): SubscriptionProfile = SubscriptionProfile(

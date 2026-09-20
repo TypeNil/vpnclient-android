@@ -143,7 +143,7 @@ abstract class NodeDao {
 
 @Database(
     entities = [SubscriptionEntity::class, NodeEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -157,6 +157,24 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "ALTER TABLE subscriptions " +
                         "ADD COLUMN allowInsecureHttp INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
+        /**
+         * v3: `updateIntervalMinutes` was reinterpreted hours→minutes — rows
+         * written before the change hold raw header hours. NULL them out;
+         * the next successful refresh repopulates the column. Also preserve
+         * cleartext for existing http:// subscriptions — they were added
+         * under a cleartext-allowed regime and would otherwise be stuck with
+         * no way to re-enable the opt-in.
+         */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("UPDATE subscriptions SET updateIntervalMinutes = NULL")
+                db.execSQL(
+                    "UPDATE subscriptions SET allowInsecureHttp = 1 " +
+                        "WHERE url LIKE 'http://%'",
                 )
             }
         }

@@ -22,13 +22,18 @@ import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val TAG = "SubRefreshWork"
 private const val WORK_NAME_PREFIX = "subscription-refresh-"
+/** Group tag on every refresh request — lets reconcile() find orphans. */
+private const val WORK_TAG = "subscription-refresh"
 internal const val KEY_SUBSCRIPTION_ID = "subscription_id"
 
 /** Platform floor for periodic work — 15 minutes. */
 internal const val MIN_INTERVAL_MINUTES = 15L
+/** Total executions per period, including the first. */
 private const val MAX_ATTEMPTS = 3
 
 /**
@@ -72,9 +77,16 @@ class SubscriptionRefreshWorker(
         val result = repository.refresh(id)
         if (result.isSuccess) return Result.success()
         val error = result.exceptionOrNull()
+        if (error is SubscriptionError.NotFound) {
+            // The row is gone — cancel ourselves or the periodic job would
+            // wake forever for a subscription that no longer exists.
+            WorkManager.getInstance(applicationContext)
+                .cancelUniqueWork(WORK_NAME_PREFIX + id)
+            return Result.success()
+        }
         val transient = error is SubscriptionError.Network ||
             error is SubscriptionError.Timeout
-        return if (transient && runAttemptCount < MAX_ATTEMPTS) {
+        return if (transient && runAttemptCount < MAX_ATTEMPTS - 1) {
             Result.retry()
         } else {
             // Permanent failure — lastError already recorded by the repository.
@@ -113,6 +125,10 @@ class WorkManagerRefreshScheduler @Inject constructor(
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
             .setInputData(workDataOf(KEY_SUBSCRIPTION_ID to subscriptionId))
+            // Group tag for orphan pruning + per-sub tag to identify it —
+            // WorkInfo doesn't expose the unique-work name.
+            .addTag(WORK_TAG)
+            .addTag(WORK_NAME_PREFIX + subscriptionId)
             .build()
         wm.enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.UPDATE, request)
         SecureLog.d(TAG, "scheduled refresh sub=$subscriptionId every=${minutes}m")
@@ -121,5 +137,25 @@ class WorkManagerRefreshScheduler @Inject constructor(
     override fun cancel(subscriptionId: Long) {
         WorkManager.getInstance(context)
             .cancelUniqueWork(WORK_NAME_PREFIX + subscriptionId)
+    }
+
+    override suspend fun reconcile(activeSubscriptionIds: Set<Long>) {
+        val wm = WorkManager.getInstance(context)
+        // Blocking .get() on IO — work-runtime-ktx has no ListenableFuture
+        // await for queries, only for Operation.
+        val infos = runCatching {
+            withContext(Dispatchers.IO) { wm.getWorkInfosByTag(WORK_TAG).get() }
+        }.getOrDefault(emptyList())
+        infos.forEach { info ->
+            if (info.state.isFinished) return@forEach
+            val subTag = info.tags.firstOrNull { it.startsWith(WORK_NAME_PREFIX) }
+                ?: return@forEach
+            val id = subTag.removePrefix(WORK_NAME_PREFIX).toLongOrNull()
+                ?: return@forEach
+            if (id !in activeSubscriptionIds) {
+                wm.cancelWorkById(info.id)
+                SecureLog.i(TAG, "pruned orphan refresh job sub=$id")
+            }
+        }
     }
 }

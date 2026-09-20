@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.core.vpn
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
@@ -14,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -43,6 +45,11 @@ class VpnTileService : TileService() {
         listenJob?.cancel()
         listenJob = null
         super.onStopListening()
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 
     override fun onClick() {
@@ -78,16 +85,17 @@ class VpnTileService : TileService() {
 
     private fun updateTile(state: VpnConnectionState) {
         val tile = qsTile ?: return
+        // Transitional states map to INACTIVE, not UNAVAILABLE — an
+        // unavailable tile swallows clicks, so the user couldn't cancel a
+        // connect in flight (or re-tap while consent is outstanding).
         tile.state = when (state) {
             is VpnConnectionState.Connected,
             is VpnConnectionState.Reconnecting,
             -> Tile.STATE_ACTIVE
-            is VpnConnectionState.Connecting,
-            is VpnConnectionState.Preparing,
-            is VpnConnectionState.PermissionRequired,
-            -> Tile.STATE_UNAVAILABLE
             else -> Tile.STATE_INACTIVE
         }
+        // Some SystemUI builds render a blank tile when updates carry no icon.
+        tile.icon = Icon.createWithResource(this, R.drawable.ic_tile_vpn)
         tile.label = getString(R.string.app_name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when (state) {
