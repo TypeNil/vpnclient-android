@@ -90,7 +90,10 @@ class SingBoxEngine(
      * Not thread-safe on the Go side — every access goes through the
      * `synchronized` block in `writeConnectionEvents`. Recreated per start()
      * so a session never sees a previous tunnel's connections.
+     * Written under lifecycleMutex on IO, read by libbox's callback on a
+     * binder thread — volatile for the same reason as [closing].
      */
+    @Volatile
     private var connectionsTracker: Connections? = null
 
     /** Written on IO under lifecycleMutex, read by libbox's serviceStop()
@@ -145,11 +148,12 @@ class SingBoxEngine(
                 commandServer = null
                 throw EngineError.StartFailed(e.message ?: "sing-box start failed")
             }
-            // Fresh tracker per session — the live-connections surface must
-            // never carry entries from a previous tunnel.
+            // Fresh tracker + cleared surface per session — a new tunnel
+            // must never replay the previous one's connections.
             connectionsTracker = Connections().apply {
                 filterState(Libbox.ConnectionStateActive.toInt())
             }
+            _connections.value = emptyList()
             connectClient()
             _events.emit(EngineEvent.Started)
         }
@@ -369,12 +373,19 @@ class SingBoxEngine(
                 tracker.sortByDate()
                 val list = mutableListOf<ConnectionInfo>()
                 val iter = tracker.iterator()
-                while (iter.hasNext()) {
+                // A busy tunnel can hold thousands of connections — cap the
+                // snapshot (newest first after sortByDate) so per-push
+                // mapping work stays bounded.
+                while (iter.hasNext() && list.size < MAX_CONNECTION_SNAPSHOT) {
                     list.add(iter.next().toConnectionInfo())
                 }
                 list
             }
-            _connections.value = snapshot
+            // stop() may have nulled the tracker while the snapshot was
+            // being built — publishing now would leak it past the clear.
+            if (tracker === connectionsTracker) {
+                _connections.value = snapshot
+            }
         }
     }
 
@@ -502,6 +513,7 @@ class SingBoxEngine(
     companion object {
         private const val TAG = "SingBoxEngine"
         private const val STATUS_INTERVAL_NS = 1_000_000_000L
+        private const val MAX_CONNECTION_SNAPSHOT = 1_000
         private const val COMMAND_CONNECT_MAX_ATTEMPTS = 3
         private const val COMMAND_CONNECT_DELAY_MS = 300L
     }

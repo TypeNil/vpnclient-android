@@ -160,7 +160,7 @@ private fun ConnectionRow(
 internal fun metaLine(connection: ConnectionInfo, appLabel: String?): String {
     val parts = mutableListOf<String>()
     connection.packages.firstOrNull()?.let { parts += appLabel ?: it }
-    parts += connection.network
+    if (connection.network.isNotEmpty()) parts += connection.network
     if (connection.protocol.isNotEmpty()) parts += connection.protocol
     if (connection.createdAtMs > 0) {
         parts += formatRelativeTime(Instant.ofEpochMilli(connection.createdAtMs))

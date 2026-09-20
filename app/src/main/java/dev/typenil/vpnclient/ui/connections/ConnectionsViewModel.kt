@@ -30,7 +30,10 @@ class ConnectionsViewModel @Inject constructor(
         connectionManager.activeConnections,
     ) { state, connections ->
         ConnectionsUiState(
-            connected = state is VpnConnectionState.Connected,
+            // Reconnecting still has a live tunnel pushing snapshots —
+            // hiding them would flash the wrong empty state mid-handover.
+            connected = state is VpnConnectionState.Connected ||
+                state is VpnConnectionState.Reconnecting,
             connections = connections,
         )
     }.stateIn(
