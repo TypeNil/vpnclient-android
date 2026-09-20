@@ -81,7 +81,12 @@ fun VpnApp(
 
         val pendingImport by importUrl.collectAsStateWithLifecycle()
         LaunchedEffect(pendingImport) {
-            if (pendingImport != null) {
+            // Re-navigating to SUBSCRIPTIONS while already on it recreates the
+            // back-stack entry — the dialog state the screen's import effect
+            // sets is rememberSaveable to the *old* entry and dies with it.
+            if (pendingImport != null &&
+                navController.currentDestination?.route != Routes.SUBSCRIPTIONS
+            ) {
                 // Same options as bottom nav — a second link while already on
                 // Subscriptions must not stack a duplicate destination.
                 navController.navigate(Routes.SUBSCRIPTIONS) {
