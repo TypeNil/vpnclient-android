@@ -1,8 +1,10 @@
 package dev.typenil.vpnclient.core.engine.singbox
 
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -123,5 +125,135 @@ class ConfigCompilerTest {
     @Test(expected = IllegalArgumentException::class)
     fun `empty nodes rejected`() {
         compiler.build(emptyList(), null, true)
+    }
+
+    @Test
+    fun `ALL mode emits no rule sets and defaults to proxy`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.ALL)
+        val root = json.parseToJsonElement(config.configJson).jsonObject
+
+        val route = root["route"]!!.jsonObject
+        assertTrue("route.rule_set must not be emitted", "rule_set" !in route)
+        assertEquals("proxy", route["final"]!!.jsonPrimitive.content)
+        assertEquals(3, route["rules"]!!.jsonArray.size)
+
+        val dns = root["dns"]!!.jsonObject
+        assertTrue("dns.rules must not be emitted", "rules" !in dns)
+        assertEquals("remote", dns["final"]!!.jsonPrimitive.content)
+
+        assertTrue("cache_file only matters with rule sets", "experimental" !in root)
+    }
+
+    @Test
+    fun `BYPASS_RU sends russian rule sets direct and keeps proxy final`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU)
+        val root = json.parseToJsonElement(config.configJson).jsonObject
+
+        val route = root["route"]!!.jsonObject
+        val ruleSets = route["rule_set"]!!.jsonArray
+        assertEquals(
+            listOf("geoip-ru", "geosite-category-ru"),
+            ruleSets.map { it.jsonObject["tag"]!!.jsonPrimitive.content },
+        )
+        ruleSets.forEach { rs ->
+            val obj = rs.jsonObject
+            assertEquals("remote", obj["type"]!!.jsonPrimitive.content)
+            assertEquals("binary", obj["format"]!!.jsonPrimitive.content)
+            // Rule-set fetch must not depend on the proxy that uses them.
+            assertEquals("direct", obj["download_detour"]!!.jsonPrimitive.content)
+            assertTrue(obj["url"]!!.jsonPrimitive.content.endsWith(".srs"))
+        }
+
+        // Order matters: sniff → hijack-dns → private → mode rule.
+        val rules = route["rules"]!!.jsonArray
+        assertEquals(4, rules.size)
+        assertEquals("sniff", rules[0].jsonObject["action"]!!.jsonPrimitive.content)
+        assertEquals("hijack-dns", rules[1].jsonObject["action"]!!.jsonPrimitive.content)
+        assertTrue(rules[2].jsonObject["ip_is_private"]!!.jsonPrimitive.boolean)
+        val ruRule = rules[3].jsonObject
+        assertEquals(
+            setOf("geoip-ru", "geosite-category-ru"),
+            ruRule["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet(),
+        )
+        assertEquals("direct", ruRule["outbound"]!!.jsonPrimitive.content)
+        assertEquals("proxy", route["final"]!!.jsonPrimitive.content)
+
+        // RU domains resolve via ISP DNS; the rest keeps the proxied DoH.
+        val dns = root["dns"]!!.jsonObject
+        val dnsRule = dns["rules"]!!.jsonArray.single().jsonObject
+        assertEquals(
+            listOf("geosite-category-ru"),
+            dnsRule["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals("local", dnsRule["server"]!!.jsonPrimitive.content)
+        assertEquals("remote", dns["final"]!!.jsonPrimitive.content)
+
+        // Bootstrap invariant: proxy server names resolve locally.
+        assertEquals(
+            "local",
+            route["default_domain_resolver"]!!.jsonObject["server"]!!.jsonPrimitive.content,
+        )
+
+        // Rule sets persist across connects instead of re-downloading.
+        assertEquals(
+            true,
+            root["experimental"]!!.jsonObject["cache_file"]!!
+                .jsonObject["enabled"]!!.jsonPrimitive.boolean,
+        )
+    }
+
+    @Test
+    fun `PROXY_BLOCKED proxies only the curated list and defaults direct`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED)
+        val root = json.parseToJsonElement(config.configJson).jsonObject
+
+        val route = root["route"]!!.jsonObject
+        val ruleSets = route["rule_set"]!!.jsonArray
+        val declaredTags = ruleSets.map { it.jsonObject["tag"]!!.jsonPrimitive.content }
+        assertTrue(declaredTags.isNotEmpty())
+        assertTrue(declaredTags.all { it.startsWith("geosite-") })
+        ruleSets.forEach { rs ->
+            val obj = rs.jsonObject
+            assertEquals("remote", obj["type"]!!.jsonPrimitive.content)
+            assertEquals("binary", obj["format"]!!.jsonPrimitive.content)
+            assertEquals("direct", obj["download_detour"]!!.jsonPrimitive.content)
+            assertTrue(obj["url"]!!.jsonPrimitive.content.endsWith(".srs"))
+        }
+
+        // Order matters: sniff → hijack-dns → private → mode rule.
+        val rules = route["rules"]!!.jsonArray
+        assertEquals(4, rules.size)
+        assertEquals("sniff", rules[0].jsonObject["action"]!!.jsonPrimitive.content)
+        assertEquals("hijack-dns", rules[1].jsonObject["action"]!!.jsonPrimitive.content)
+        assertTrue(rules[2].jsonObject["ip_is_private"]!!.jsonPrimitive.boolean)
+        val blockedRule = rules[3].jsonObject
+        assertEquals(
+            declaredTags.toSet(),
+            blockedRule["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet(),
+        )
+        assertEquals("proxy", blockedRule["outbound"]!!.jsonPrimitive.content)
+        assertEquals("direct", route["final"]!!.jsonPrimitive.content)
+
+        // Blocked domains resolve via proxied DoH (ISP answers are spoofed);
+        // the rest uses the local resolver.
+        val dns = root["dns"]!!.jsonObject
+        val dnsRule = dns["rules"]!!.jsonArray.single().jsonObject
+        assertEquals(
+            declaredTags.toSet(),
+            dnsRule["rule_set"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet(),
+        )
+        assertEquals("remote", dnsRule["server"]!!.jsonPrimitive.content)
+        assertEquals("local", dns["final"]!!.jsonPrimitive.content)
+
+        val remote = dns["servers"]!!.jsonArray.first {
+            it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
+        }.jsonObject
+        assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
+
+        // Bootstrap invariant: proxy server names resolve locally.
+        assertEquals(
+            "local",
+            route["default_domain_resolver"]!!.jsonObject["server"]!!.jsonPrimitive.content,
+        )
     }
 }

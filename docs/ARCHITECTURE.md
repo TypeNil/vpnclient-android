@@ -52,7 +52,7 @@ A failed refresh never touches stored nodes (last-known-good).
 
 ## Config compilation
 
-`NodeConfigProviderImpl.compileSelected()` → `ConfigCompiler.compile(nodes, selectedId, ipv6)`:
+`NodeConfigProviderImpl.compileSelected()` → `ConfigCompiler.compile(nodes, selectedId, ipv6, routeMode)`:
 
 - every node → outbound tagged by node id
 - `selector` group `proxy` (default = selected node) — runtime-switchable via
@@ -63,8 +63,18 @@ A failed refresh never touches stored nodes (last-known-good).
 - `dns`: `local` (platform, via LocalDnsResolver) + `remote` (https://1.1.1.1
   with `detour: proxy` so DoH follows the selected node, not the direct path);
   route rule `hijack-dns` captures tunneled DNS; `default_domain_resolver: local`
-  prevents the loop on outbound server names
-- route: `sniff` → `hijack-dns` → private-IP bypass → `final: proxy`
+  prevents the loop on outbound server names (kept in every mode)
+- route: `sniff` → `hijack-dns` → private-IP bypass → mode rule → `final`
+
+`RouteMode` (DataStore, string key) shapes the tail of the rule chain and DNS:
+
+- `ALL` (default) — no rule sets, `final: proxy`.
+- `BYPASS_RU` — remote rule sets `geoip-ru` + `geosite-category-ru`
+  (`download_detour: direct`) → `direct`; DNS maps `geosite-category-ru` →
+  `local`, `final` stays `remote`.
+- `PROXY_BLOCKED` — curated `geosite-*` service list → `proxy`, `final:
+  direct`; DNS maps the same list → `remote` (ISP answers are spoofed),
+  `final` becomes `local`.
 
 ### Per-app routing
 

@@ -26,6 +26,7 @@ class NodeConfigProviderImpl @Inject constructor(
             nodes = nodes,
             selectedNodeId = settings.selectedNodeId.first(),
             ipv6Enabled = settings.ipv6Enabled.first(),
+            routeMode = settings.routeMode.first(),
         )
     }
 }

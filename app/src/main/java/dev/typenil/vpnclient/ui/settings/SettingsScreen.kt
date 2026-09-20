@@ -12,12 +12,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -40,6 +45,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.core.engine.RouteMode
 
 /** Pinned in gradle/libs.versions.toml (`vpnCore`). */
 private const val CORE_VERSION = "sing-box libbox 1.14.1"
@@ -74,6 +80,10 @@ fun SettingsScreen(
             subtitle = "Pause the core when the device idles — drops open connections",
             checked = ui.dozePowerSave,
             onCheckedChange = viewModel::setDozePowerSave,
+        )
+        RouteModeRow(
+            mode = ui.routeMode,
+            onSelect = viewModel::setRouteMode,
         )
         Row(
             modifier = Modifier
@@ -146,6 +156,89 @@ private fun SwitchRow(
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
+}
+
+/** Region/domain routing picker. The mode is baked into the engine config
+ *  at compile time — like per-app, a running tunnel keeps its old mode. */
+@Composable
+private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Routing mode", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                routeModeLabel(mode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Routing mode") },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    RouteMode.entries.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option == mode,
+                                    onClick = {
+                                        onSelect(option)
+                                        showDialog = false
+                                    },
+                                    role = Role.RadioButton,
+                                )
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == mode, onClick = null)
+                            Column(Modifier.padding(start = 8.dp)) {
+                                Text(
+                                    routeModeLabel(option),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    routeModeSubtitle(option),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "Applies on next connect",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+private fun routeModeLabel(mode: RouteMode): String = when (mode) {
+    RouteMode.ALL -> "Proxy everything"
+    RouteMode.BYPASS_RU -> "Bypass Russian resources"
+    RouteMode.PROXY_BLOCKED -> "Only blocked services"
+}
+
+private fun routeModeSubtitle(mode: RouteMode): String = when (mode) {
+    RouteMode.ALL -> "All traffic goes through the selected server"
+    RouteMode.BYPASS_RU -> "Russian sites and IPs go direct, the rest is proxied"
+    RouteMode.PROXY_BLOCKED -> "Blocked services use the proxy, the rest goes direct"
 }
 
 /** Optional user interval override; empty field = follow the provider hint.

@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,6 +18,7 @@ data class SettingsUiState(
     val dozePowerSave: Boolean = false,
     /** <0 = manual only, 0 = provider-driven, >0 = fixed minutes. */
     val autoRefreshMinutes: Int = 0,
+    val routeMode: RouteMode = RouteMode.ALL,
 ) {
     val autoRefreshEnabled: Boolean get() = autoRefreshMinutes >= 0
 }
@@ -31,12 +33,14 @@ class SettingsViewModel @Inject constructor(
         settings.ipv6Enabled,
         settings.dozePowerSave,
         settings.autoRefreshMinutes,
-    ) { reconnect, ipv6, doze, refreshMinutes ->
+        settings.routeMode,
+    ) { reconnect, ipv6, doze, refreshMinutes, routeMode ->
         SettingsUiState(
             reconnectOnNetworkChange = reconnect,
             ipv6Enabled = ipv6,
             dozePowerSave = doze,
             autoRefreshMinutes = refreshMinutes,
+            routeMode = routeMode,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -54,6 +58,12 @@ class SettingsViewModel @Inject constructor(
 
     fun setDozePowerSave(enabled: Boolean) {
         viewModelScope.launch { settings.setDozePowerSave(enabled) }
+    }
+
+    /** Routing policy — baked into the config at compile time, so a running
+     *  tunnel keeps its mode until the next connect. */
+    fun setRouteMode(mode: RouteMode) {
+        viewModelScope.launch { settings.setRouteMode(mode) }
     }
 
     fun setAutoRefreshEnabled(enabled: Boolean) {

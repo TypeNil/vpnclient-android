@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import java.io.IOException
@@ -42,6 +43,8 @@ class SettingsRepository @Inject constructor(
         /** PerAppMode.ordinal: 0 = all, 1 = include selected, 2 = exclude selected. */
         val PER_APP_MODE = intPreferencesKey("per_app_mode")
         val PER_APP_PACKAGES = stringSetPreferencesKey("per_app_packages")
+        /** RouteMode.key — "all"/"bypass_ru"/"proxy_blocked", never ordinal. */
+        val ROUTE_MODE = stringPreferencesKey("route_mode")
         /** Opt-in: pause the core in Doze (drops open TCP connections). */
         val DOZE_POWER_SAVE = booleanPreferencesKey("doze_power_save")
     }
@@ -167,6 +170,15 @@ class SettingsRepository @Inject constructor(
             .first()
         return PerAppMode.fromOrdinal(prefs[Keys.PER_APP_MODE] ?: 0) to
             (prefs[Keys.PER_APP_PACKAGES] ?: emptySet())
+    }
+
+    /** Region/domain routing — see [RouteMode]. Applies on the next connect. */
+    val routeMode: Flow<RouteMode> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { RouteMode.fromKey(it[Keys.ROUTE_MODE]) }
+
+    suspend fun setRouteMode(mode: RouteMode) {
+        context.settingsStore.edit { it[Keys.ROUTE_MODE] = mode.key }
     }
 
     /** Pause the engine in Doze — saves battery but drops open connections. */
