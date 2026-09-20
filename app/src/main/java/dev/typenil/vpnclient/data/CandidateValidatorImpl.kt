@@ -2,11 +2,14 @@ package dev.typenil.vpnclient.data
 
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
+import dev.typenil.vpnclient.core.engine.singbox.RuleSetStore
 import dev.typenil.vpnclient.core.subscription.SubscriptionCandidateValidator
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 
 /**
  * Compiles the full candidate config (every node outbound) and runs native
@@ -16,11 +19,22 @@ import kotlinx.coroutines.CancellationException
 @Singleton
 class CandidateValidatorImpl @Inject constructor(
     private val compiler: ConfigCompiler,
+    private val settings: SettingsRepository,
+    private val ruleSetStore: RuleSetStore,
 ) : SubscriptionCandidateValidator {
 
     override suspend fun validate(nodes: List<ProxyNode>) {
         try {
-            compiler.compile(nodes = nodes, selectedNodeId = null, ipv6Enabled = true)
+            // Validate the config the user would actually run — the active
+            // route mode with its local rule sets, not a default ALL.
+            val routeMode = settings.routeMode.first()
+            compiler.compile(
+                nodes = nodes,
+                selectedNodeId = null,
+                ipv6Enabled = true,
+                routeMode = routeMode,
+                ruleSetPaths = ruleSetStore.ensureReady(routeMode),
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: EngineError) {

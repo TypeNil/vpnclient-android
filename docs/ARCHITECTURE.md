@@ -66,15 +66,25 @@ A failed refresh never touches stored nodes (last-known-good).
   prevents the loop on outbound server names (kept in every mode)
 - route: `sniff` → `hijack-dns` → private-IP bypass → mode rule → `final`
 
-`RouteMode` (DataStore, string key) shapes the tail of the rule chain and DNS:
+`RouteMode` (DataStore, string key) shapes the tail of the rule chain and DNS.
+Each mode's `ruleSetTags` is the single source of truth for both the store
+and the compiler:
 
 - `ALL` (default) — no rule sets, `final: proxy`.
-- `BYPASS_RU` — remote rule sets `geoip-ru` + `geosite-category-ru`
-  (`download_detour: direct`) → `direct`; DNS maps `geosite-category-ru` →
-  `local`, `final` stays `remote`.
+- `BYPASS_RU` — rule sets `geoip-ru` + `geosite-category-ru` → `direct`;
+  DNS maps `geosite-category-ru` → `local` with `strategy: ipv4_only` (a
+  v6 RU dial is dead on IPv4-only underlays), `final` stays `remote`.
 - `PROXY_BLOCKED` — curated `geosite-*` service list → `proxy`, `final:
   direct`; DNS maps the same list → `remote` (ISP answers are spoofed),
   `final` becomes `local`.
+
+Rule sets are **local**, not remote: `RuleSetStore` downloads the `.srs`
+files app-side over OkHttp into `filesDir/rule_sets` before compile and the
+config references them by path — the engine's start path never fetches over
+the network (a GitHub hiccup can't fail a connect; a stale copy still works
+offline). When the active underlay lacks real IPv6 (global address + `::/0`
+route), non-ALL modes also emit an `ip_version: 6 → proxy` rule so v6 rides
+the tunnel instead of dead-ending in `direct`.
 
 ### Per-app routing
 

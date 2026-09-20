@@ -2,6 +2,7 @@ package dev.typenil.vpnclient.core.engine.singbox
 
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
+import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.summary
@@ -39,8 +40,10 @@ class ConfigCompiler @Inject constructor() {
         ipv6Enabled: Boolean,
         routeMode: RouteMode = RouteMode.ALL,
         underlayIpv6: Boolean = true,
+        ruleSetPaths: Map<String, String> = emptyMap(),
     ): EngineConfig = withContext(Dispatchers.IO) {
-        val compiled = build(nodes, selectedNodeId, ipv6Enabled, routeMode, underlayIpv6)
+        val compiled =
+            build(nodes, selectedNodeId, ipv6Enabled, routeMode, underlayIpv6, ruleSetPaths)
         try {
             Libbox.checkConfig(compiled.configJson)
         } catch (e: CancellationException) {
@@ -58,8 +61,14 @@ class ConfigCompiler @Inject constructor() {
         ipv6Enabled: Boolean,
         routeMode: RouteMode = RouteMode.ALL,
         underlayIpv6: Boolean = true,
+        ruleSetPaths: Map<String, String> = emptyMap(),
     ): EngineConfig {
         require(nodes.isNotEmpty()) { "no nodes to compile" }
+        // Local rule sets only — a missing file must fail at compile, never
+        // surface as a silently-wrong route or an engine-start fetch error.
+        require(ruleSetPaths.keys.containsAll(routeMode.ruleSetTags)) {
+            "missing rule set files for ${routeMode.key}"
+        }
         // A stale selection (node removed by a refresh) must fail loudly —
         // silently connecting to a different server surprises the user.
         val selected = when {
@@ -137,7 +146,7 @@ class ConfigCompiler @Inject constructor() {
                     RouteMode.PROXY_BLOCKED -> putJsonArray("rules") {
                         addJsonObject {
                             putJsonArray("rule_set") {
-                                BLOCKED_GEOSITE_TAGS.forEach { add(it) }
+                                routeMode.ruleSetTags.forEach { add(it) }
                             }
                             put("server", "remote")
                         }
@@ -188,8 +197,7 @@ class ConfigCompiler @Inject constructor() {
                         // RU resources bypass the proxy entirely.
                         RouteMode.BYPASS_RU -> addJsonObject {
                             putJsonArray("rule_set") {
-                                add(GEOIP_RU_TAG)
-                                add(GEOSITE_RU_TAG)
+                                routeMode.ruleSetTags.forEach { add(it) }
                             }
                             put("outbound", "direct")
                         }
@@ -197,7 +205,7 @@ class ConfigCompiler @Inject constructor() {
                         // bandwidth — final below drops to "direct".
                         RouteMode.PROXY_BLOCKED -> addJsonObject {
                             putJsonArray("rule_set") {
-                                BLOCKED_GEOSITE_TAGS.forEach { add(it) }
+                                routeMode.ruleSetTags.forEach { add(it) }
                             }
                             put("outbound", SELECTOR_TAG)
                         }
@@ -205,22 +213,17 @@ class ConfigCompiler @Inject constructor() {
                     }
                 }
                 put("final", if (routeMode == RouteMode.PROXY_BLOCKED) "direct" else SELECTOR_TAG)
-                val ruleSets = routeRuleSets(routeMode)
-                if (ruleSets.isNotEmpty()) {
+                if (routeMode.ruleSetTags.isNotEmpty()) {
                     putJsonArray("rule_set") {
-                        ruleSets.forEach { (tag, url) ->
+                        routeMode.ruleSetTags.forEach { tag ->
                             addJsonObject {
-                                put("type", "remote")
+                                // Local files fetched app-side (RuleSetStore)
+                                // — a remote fetch inside engine start would
+                                // fail the whole connect on bad networks.
+                                put("type", "local")
                                 put("tag", tag)
                                 put("format", "binary")
-                                put("url", url)
-                                // Fetching through the proxy could deadlock
-                                // bootstrap — the proxy route itself may
-                                // depend on these rule sets being loaded.
-                                // Deprecated in 1.14 (http_client is the
-                                // successor); fine on pinned 1.14.1, revisit
-                                // on a 1.16+ upgrade.
-                                put("download_detour", "direct")
+                                put("path", ruleSetPaths.getValue(tag))
                             }
                         }
                     }
@@ -233,65 +236,13 @@ class ConfigCompiler @Inject constructor() {
                     put("server", "local")
                 }
             }
-            if (routeRuleSets(routeMode).isNotEmpty()) {
-                putJsonObject("experimental") {
-                    // Remote rule sets otherwise re-download on every connect.
-                    // cache_file persists them under workingPath (app cache —
-                    // the system may evict it, the core refetches as needed).
-                    putJsonObject("cache_file") {
-                        put("enabled", true)
-                        put("path", "cache.db")
-                    }
-                }
-            }
         }
 
         return EngineConfig(config.toString(), selected.summary())
     }
 
-    /** (tag, url) remote rule sets the mode needs declared under route.rule_set. */
-    private fun routeRuleSets(mode: RouteMode): List<Pair<String, String>> = when (mode) {
-        RouteMode.ALL -> emptyList()
-        RouteMode.BYPASS_RU -> listOf(
-            GEOIP_RU_TAG to "$GEOIP_RS_BASE/$GEOIP_RU_TAG.srs",
-            GEOSITE_RU_TAG to "$GEOSITE_RS_BASE/$GEOSITE_RU_TAG.srs",
-        )
-        RouteMode.PROXY_BLOCKED ->
-            BLOCKED_GEOSITE_TAGS.map { it to "$GEOSITE_RS_BASE/$it.srs" }
-    }
-
     companion object {
         const val SELECTOR_TAG = "proxy"
         const val AUTO_TAG = "auto"
-
-        // SagerNet rule-set branches (sing-box 1.12+ remote rule_set, binary
-        // .srs format). Tag == file basename without the .srs suffix.
-        private const val GEOIP_RS_BASE =
-            "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
-        private const val GEOSITE_RS_BASE =
-            "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set"
-
-        private const val GEOIP_RU_TAG = "geoip-ru"
-        private const val GEOSITE_RU_TAG = "geosite-category-ru"
-
-        /**
-         * Services proxied in [RouteMode.PROXY_BLOCKED] — everything else
-         * goes direct. Tags follow the sing-geosite `rule-set` branch naming
-         * (`geosite-<category>`); each exists as `geosite-<category>.srs`
-         * there. Curating the mode is a one-line edit per service.
-         */
-        private val BLOCKED_GEOSITE_TAGS = listOf(
-            "geosite-youtube",
-            "geosite-telegram",
-            "geosite-instagram",
-            "geosite-facebook",
-            "geosite-twitter",
-            "geosite-discord",
-            "geosite-tiktok",
-            "geosite-linkedin",
-            "geosite-medium",
-            "geosite-openai",
-            "geosite-whatsapp",
-        )
     }
 }

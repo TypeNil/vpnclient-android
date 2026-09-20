@@ -30,6 +30,10 @@ class ConfigCompilerTest {
         rawUri = null,
     )
 
+    /** Paths the store would hand the compiler — tag → local .srs file. */
+    private fun rsPaths(mode: RouteMode): Map<String, String> =
+        mode.ruleSetTags.associateWith { "/data/rule_sets/$it.srs" }
+
     @Test
     fun `config embeds node outbounds plus selector and urltest`() {
         val config = compiler.build(listOf(node("n1"), node("n2")), "n1", true)
@@ -146,7 +150,10 @@ class ConfigCompilerTest {
 
     @Test
     fun `BYPASS_RU sends russian rule sets direct and keeps proxy final`() {
-        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU)
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+        )
         val root = json.parseToJsonElement(config.configJson).jsonObject
 
         val route = root["route"]!!.jsonObject
@@ -157,11 +164,11 @@ class ConfigCompilerTest {
         )
         ruleSets.forEach { rs ->
             val obj = rs.jsonObject
-            assertEquals("remote", obj["type"]!!.jsonPrimitive.content)
+            // Local files fetched app-side — no in-engine remote download.
+            assertEquals("local", obj["type"]!!.jsonPrimitive.content)
             assertEquals("binary", obj["format"]!!.jsonPrimitive.content)
-            // Rule-set fetch must not depend on the proxy that uses them.
-            assertEquals("direct", obj["download_detour"]!!.jsonPrimitive.content)
-            assertTrue(obj["url"]!!.jsonPrimitive.content.endsWith(".srs"))
+            assertTrue(obj["path"]!!.jsonPrimitive.content.endsWith(".srs"))
+            assertTrue("url" !in obj)
         }
 
         // Order matters: sniff → hijack-dns → private → mode rule.
@@ -193,31 +200,31 @@ class ConfigCompilerTest {
             "local",
             route["default_domain_resolver"]!!.jsonObject["server"]!!.jsonPrimitive.content,
         )
+    }
 
-        // Rule sets persist across connects instead of re-downloading.
-        assertEquals(
-            true,
-            root["experimental"]!!.jsonObject["cache_file"]!!
-                .jsonObject["enabled"]!!.jsonPrimitive.boolean,
-        )
+    @Test(expected = IllegalArgumentException::class)
+    fun `missing rule set file fails at compile not engine start`() {
+        compiler.build(listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU)
     }
 
     @Test
     fun `PROXY_BLOCKED proxies only the curated list and defaults direct`() {
-        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED)
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED,
+            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
+        )
         val root = json.parseToJsonElement(config.configJson).jsonObject
 
         val route = root["route"]!!.jsonObject
         val ruleSets = route["rule_set"]!!.jsonArray
         val declaredTags = ruleSets.map { it.jsonObject["tag"]!!.jsonPrimitive.content }
-        assertTrue(declaredTags.isNotEmpty())
+        assertEquals(RouteMode.PROXY_BLOCKED.ruleSetTags, declaredTags)
         assertTrue(declaredTags.all { it.startsWith("geosite-") })
         ruleSets.forEach { rs ->
             val obj = rs.jsonObject
-            assertEquals("remote", obj["type"]!!.jsonPrimitive.content)
+            assertEquals("local", obj["type"]!!.jsonPrimitive.content)
             assertEquals("binary", obj["format"]!!.jsonPrimitive.content)
-            assertEquals("direct", obj["download_detour"]!!.jsonPrimitive.content)
-            assertTrue(obj["url"]!!.jsonPrimitive.content.endsWith(".srs"))
+            assertTrue(obj["path"]!!.jsonPrimitive.content.endsWith(".srs"))
         }
 
         // Order matters: sniff → hijack-dns → private → mode rule.
@@ -261,6 +268,7 @@ class ConfigCompilerTest {
     fun `v6-less underlay routes all v6 through proxy in BYPASS_RU`() {
         val config = compiler.build(
             listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = false,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
         )
         val rules = json.parseToJsonElement(config.configJson)
             .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
@@ -278,6 +286,7 @@ class ConfigCompilerTest {
     fun `v6-less underlay routes all v6 through proxy in PROXY_BLOCKED`() {
         val config = compiler.build(
             listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED, underlayIpv6 = false,
+            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
         )
         val rules = json.parseToJsonElement(config.configJson)
             .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
@@ -303,6 +312,7 @@ class ConfigCompilerTest {
     fun `v6-capable underlay keeps direct v6 for RU`() {
         val config = compiler.build(
             listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = true,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
         )
         val rules = json.parseToJsonElement(config.configJson)
             .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
@@ -312,7 +322,10 @@ class ConfigCompilerTest {
 
     @Test
     fun `RU dns rule returns ipv4 only so direct dials reach v4`() {
-        val config = compiler.build(listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU)
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+        )
         val dnsRule = json.parseToJsonElement(config.configJson)
             .jsonObject["dns"]!!.jsonObject["rules"]!!.jsonArray.single().jsonObject
         assertEquals("ipv4_only", dnsRule["strategy"]!!.jsonPrimitive.content)
