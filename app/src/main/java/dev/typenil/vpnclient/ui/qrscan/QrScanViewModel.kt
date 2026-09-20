@@ -30,7 +30,7 @@ class QrScanViewModel @Inject constructor() : ViewModel() {
      */
     fun onBarcode(raw: String, nowMs: Long = SystemClock.elapsedRealtime()): ScanOutcome {
         if (consumed) return ScanOutcome.Ignored
-        val url = ImportUrlExtractor.extract(action = null, data = raw, extraText = raw)
+        val url = ImportUrlExtractor.extract(action = null, data = raw, extraText = null)
         if (url != null) {
             consumed = true
             return ScanOutcome.Found(url)

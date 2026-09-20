@@ -1,7 +1,11 @@
 package dev.typenil.vpnclient.ui.qrscan
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -40,8 +44,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -68,17 +76,32 @@ fun QrScanScreen(
     viewModel: QrScanViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     var cameraGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED,
         )
     }
+    // "Don't ask again" (or the second denial on Android 11+) makes the
+    // permission request a silent no-op — the only way back is app settings.
+    var permissionPermanentlyDenied by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { cameraGranted = it }
+    ) { granted ->
+        cameraGranted = granted
+        if (!granted && activity != null &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(
+                activity, Manifest.permission.CAMERA,
+            )
+        ) {
+            permissionPermanentlyDenied = true
+        }
+    }
     LaunchedEffect(Unit) {
-        if (!cameraGranted) permissionLauncher.launch(Manifest.permission.CAMERA)
+        if (!cameraGranted && !permissionPermanentlyDenied) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
     }
 
     // Each rejection bumps the nonce so the notice re-arms per payload;
@@ -107,18 +130,28 @@ fun QrScanScreen(
 
         when {
             !cameraGranted -> PermissionRequest(
+                permanentlyDenied = permissionPermanentlyDenied,
                 onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onOpenSettings = {
+                    activity?.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        },
+                    )
+                },
                 onBack = onBack,
             )
-            cameraFailed -> Box(
+            cameraFailed -> Column(
                 Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
                     "Camera unavailable",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                TextButton(onClick = { cameraFailed = false }) { Text("Retry") }
             }
             else -> Box(Modifier.fillMaxSize()) {
                 CameraPreview(
@@ -139,6 +172,7 @@ fun QrScanScreen(
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
                             .padding(24.dp),
                     )
                 }
@@ -148,7 +182,12 @@ fun QrScanScreen(
 }
 
 @Composable
-private fun PermissionRequest(onRequest: () -> Unit, onBack: () -> Unit) {
+private fun PermissionRequest(
+    permanentlyDenied: Boolean,
+    onRequest: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onBack: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -161,7 +200,11 @@ private fun PermissionRequest(onRequest: () -> Unit, onBack: () -> Unit) {
             style = MaterialTheme.typography.bodyLarge,
         )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = onRequest) { Text("Allow camera") }
+        if (permanentlyDenied) {
+            Button(onClick = onOpenSettings) { Text("Open settings") }
+        } else {
+            Button(onClick = onRequest) { Text("Allow camera") }
+        }
         TextButton(onClick = onBack) { Text("Back") }
     }
 }
@@ -188,9 +231,13 @@ private fun CameraPreview(
         )
         val analysisExecutor = Executors.newSingleThreadExecutor()
         var cameraProvider: ProcessCameraProvider? = null
+        var disposed = false
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener(
             {
+                // The provider future can resolve after dispose — binding to
+                // a dead lifecycle/executor would leak a zombie camera.
+                if (disposed) return@addListener
                 cameraProvider = runCatching { providerFuture.get() }.getOrElse {
                     SecureLog.e(TAG, "camera provider unavailable", it)
                     onCameraError()
@@ -220,6 +267,7 @@ private fun CameraPreview(
             ContextCompat.getMainExecutor(context),
         )
         onDispose {
+            disposed = true
             cameraProvider?.unbindAll()
             analysisExecutor.shutdown()
             scanner.close()

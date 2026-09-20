@@ -92,8 +92,7 @@ fun VpnApp(
             if (pendingImport != null &&
                 navController.currentDestination?.route != Routes.SUBSCRIPTIONS
             ) {
-                // Same options as bottom nav — a second link while already on
-                // Subscriptions must not stack a duplicate destination.
+                // Same options as bottom nav.
                 navController.navigate(Routes.SUBSCRIPTIONS) {
                     popUpTo(navController.graph.findStartDestination().id) {
                         saveState = true
@@ -170,13 +169,15 @@ fun VpnApp(
                         snackbarHostState = snackbarHostState,
                         importUrl = pendingImport ?: qrResult,
                         onImportConsumed = {
-                            if (pendingImport != null) {
-                                onImportConsumed()
-                            } else {
-                                entry.savedStateHandle.remove<String>(QR_RESULT_KEY)
-                            }
+                            if (pendingImport != null) onImportConsumed()
+                            // Always drop a stale scan result too — it would
+                            // otherwise surface as a second import once the
+                            // ?: source flips back to it.
+                            entry.savedStateHandle.remove<String>(QR_RESULT_KEY)
                         },
-                        onScanQr = { navController.navigate(Routes.QR_SCAN) },
+                        onScanQr = {
+                            navController.navigate(Routes.QR_SCAN) { launchSingleTop = true }
+                        },
                     )
                 }
                 composable(Routes.SETTINGS) {
@@ -194,10 +195,17 @@ fun VpnApp(
                     QrScanScreen(
                         onBack = { navController.popBackStack() },
                         onResult = { url ->
-                            navController.previousBackStackEntry
-                                ?.savedStateHandle
-                                ?.set(QR_RESULT_KEY, url)
-                            navController.popBackStack()
+                            // A decode can complete after the user already
+                            // backed out — only deliver while the scan entry
+                            // is still on top, else the URL lands on the
+                            // wrong back-stack entry and pop() eats one too
+                            // many screens.
+                            if (navController.currentDestination?.route == Routes.QR_SCAN) {
+                                navController.previousBackStackEntry
+                                    ?.savedStateHandle
+                                    ?.set(QR_RESULT_KEY, url)
+                                navController.popBackStack()
+                            }
                         },
                     )
                 }

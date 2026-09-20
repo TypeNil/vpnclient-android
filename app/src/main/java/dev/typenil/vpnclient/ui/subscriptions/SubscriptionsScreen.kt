@@ -261,9 +261,11 @@ private fun AddSubscriptionDialog(
     onScanQr: () -> Unit,
     initialUrl: String = "",
 ) {
+    // All saveable: navigating to the QR scanner disposes this composition,
+    // and a typed name or the cleartext opt-in must survive the round-trip.
     var url by rememberSaveable { mutableStateOf(initialUrl) }
-    var name by remember { mutableStateOf("") }
-    var allowInsecure by remember { mutableStateOf(false) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var allowInsecure by rememberSaveable { mutableStateOf(false) }
     // In-dialog validation — a rejected http add would otherwise lose the URL.
     val isHttp = url.trim().startsWith("http://", ignoreCase = true)
 
