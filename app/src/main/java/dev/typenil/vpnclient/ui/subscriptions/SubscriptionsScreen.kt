@@ -40,11 +40,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatDate
@@ -64,6 +66,7 @@ fun SubscriptionsScreen(
     modifier: Modifier = Modifier,
     importUrl: String? = null,
     onImportConsumed: () -> Unit = {},
+    onScanQr: () -> Unit = {},
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -132,6 +135,7 @@ fun SubscriptionsScreen(
         key(importPrefill) {
             AddSubscriptionDialog(
                 initialUrl = importPrefill.orEmpty(),
+                onScanQr = onScanQr,
                 onDismiss = {
                     showAddDialog = false
                     importPrefill = null
@@ -254,9 +258,10 @@ private fun SubscriptionCard(
 private fun AddSubscriptionDialog(
     onDismiss: () -> Unit,
     onConfirm: (url: String, name: String?, allowInsecure: Boolean) -> Unit,
+    onScanQr: () -> Unit,
     initialUrl: String = "",
 ) {
-    var url by remember { mutableStateOf(initialUrl) }
+    var url by rememberSaveable { mutableStateOf(initialUrl) }
     var name by remember { mutableStateOf("") }
     var allowInsecure by remember { mutableStateOf(false) }
     // In-dialog validation — a rejected http add would otherwise lose the URL.
@@ -272,6 +277,14 @@ private fun AddSubscriptionDialog(
                     onValueChange = { url = it },
                     label = { Text("Subscription URL") },
                     singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = onScanQr) {
+                            Icon(
+                                painterResource(R.drawable.ic_qr_scanner),
+                                contentDescription = "Scan QR code",
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))

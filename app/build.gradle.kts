@@ -107,6 +107,9 @@ tasks.named("preBuild") { dependsOn(fetchLibbox) }
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.ui)
@@ -125,6 +128,7 @@ dependencies {
     implementation(libs.hilt.android)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.mlkit.barcode.scanning)
     implementation(libs.okhttp)
     implementation(libs.snakeyaml)
     implementation(files(libboxFile))

@@ -37,6 +37,8 @@ import kotlinx.coroutines.flow.StateFlow
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
+import dev.typenil.vpnclient.ui.qrscan.QR_RESULT_KEY
+import dev.typenil.vpnclient.ui.qrscan.QrScanScreen
 import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
 import dev.typenil.vpnclient.ui.subscriptions.SubscriptionsScreen
@@ -48,6 +50,7 @@ object Routes {
     const val SUBSCRIPTIONS = "subscriptions"
     const val SETTINGS = "settings"
     const val APP_FILTER = "app_filter"
+    const val QR_SCAN = "qr_scan"
 }
 
 private data class TopLevelDestination(
@@ -150,11 +153,24 @@ fun VpnApp(
                 composable(Routes.SERVERS) {
                     ServersScreen(snackbarHostState = snackbarHostState)
                 }
-                composable(Routes.SUBSCRIPTIONS) {
+                composable(Routes.SUBSCRIPTIONS) { entry ->
+                    // A QR result arrives via the back-stack entry's
+                    // savedStateHandle; it feeds the same prefilled-dialog
+                    // funnel as deep links.
+                    val qrResult by entry.savedStateHandle
+                        .getStateFlow<String?>(QR_RESULT_KEY, null)
+                        .collectAsStateWithLifecycle()
                     SubscriptionsScreen(
                         snackbarHostState = snackbarHostState,
-                        importUrl = pendingImport,
-                        onImportConsumed = onImportConsumed,
+                        importUrl = pendingImport ?: qrResult,
+                        onImportConsumed = {
+                            if (pendingImport != null) {
+                                onImportConsumed()
+                            } else {
+                                entry.savedStateHandle.remove<String>(QR_RESULT_KEY)
+                            }
+                        },
+                        onScanQr = { navController.navigate(Routes.QR_SCAN) },
                     )
                 }
                 composable(Routes.SETTINGS) {
@@ -164,6 +180,17 @@ fun VpnApp(
                 }
                 composable(Routes.APP_FILTER) {
                     AppFilterScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Routes.QR_SCAN) {
+                    QrScanScreen(
+                        onBack = { navController.popBackStack() },
+                        onResult = { url ->
+                            navController.previousBackStackEntry
+                                ?.savedStateHandle
+                                ?.set(QR_RESULT_KEY, url)
+                            navController.popBackStack()
+                        },
+                    )
                 }
             }
         }

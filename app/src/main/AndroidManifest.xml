@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- QR subscription import — camera-less devices still install and can
+         paste URLs; the scan UI is the only consumer. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Per-app VPN picker lists launcher apps — this query grants that
          visibility without the restricted QUERY_ALL_PACKAGES permission. -->
