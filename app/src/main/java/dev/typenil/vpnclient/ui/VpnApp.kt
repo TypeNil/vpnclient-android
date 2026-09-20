@@ -36,6 +36,7 @@ import dev.typenil.vpnclient.R
 import kotlinx.coroutines.flow.StateFlow
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
+import dev.typenil.vpnclient.ui.connections.ConnectionsScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
 import dev.typenil.vpnclient.ui.qrscan.QR_RESULT_KEY
 import dev.typenil.vpnclient.ui.qrscan.QrScanScreen
@@ -51,6 +52,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val APP_FILTER = "app_filter"
     const val QR_SCAN = "qr_scan"
+    const val CONNECTIONS = "connections"
 }
 
 private data class TopLevelDestination(
@@ -149,7 +151,11 @@ fun VpnApp(
                 startDestination = Routes.HOME,
                 modifier = Modifier.padding(innerPadding),
             ) {
-                composable(Routes.HOME) { HomeScreen() }
+                composable(Routes.HOME) {
+                    HomeScreen(
+                        onOpenConnections = { navController.navigate(Routes.CONNECTIONS) },
+                    )
+                }
                 composable(Routes.SERVERS) {
                     ServersScreen(snackbarHostState = snackbarHostState)
                 }
@@ -180,6 +186,9 @@ fun VpnApp(
                 }
                 composable(Routes.APP_FILTER) {
                     AppFilterScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Routes.CONNECTIONS) {
+                    ConnectionsScreen(onBack = { navController.popBackStack() })
                 }
                 composable(Routes.QR_SCAN) {
                     QrScanScreen(

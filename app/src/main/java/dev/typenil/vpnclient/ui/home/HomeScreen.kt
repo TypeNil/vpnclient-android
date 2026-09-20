@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,9 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,6 +39,7 @@ import dev.typenil.vpnclient.ui.common.formatRate
 @Composable
 fun HomeScreen(
     modifier: Modifier = Modifier,
+    onOpenConnections: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -79,7 +84,7 @@ fun HomeScreen(
         if (connection is VpnConnectionState.Connected) {
             connection.stats?.let { stats ->
                 Spacer(Modifier.height(12.dp))
-                StatsCard(stats)
+                StatsCard(stats, onOpenConnections)
             }
         }
 
@@ -207,19 +212,38 @@ private fun ErrorCard(error: VpnError) {
 }
 
 @Composable
-private fun StatsCard(stats: TrafficStats) {
+private fun StatsCard(stats: TrafficStats, onOpenConnections: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatRow("Download", "${formatRate(stats.downlinkBytesPerSec)}  (${formatBytes(stats.downlinkTotalBytes)} total)")
             StatRow("Upload", "${formatRate(stats.uplinkBytesPerSec)}  (${formatBytes(stats.uplinkTotalBytes)} total)")
-            StatRow("Connections", "${stats.connectionsIn} in / ${stats.connectionsOut} out")
+            StatRow(
+                label = "Connections",
+                value = "${stats.connectionsIn} in / ${stats.connectionsOut} out",
+                // clickable before padding — the padded area stays tappable.
+                modifier = Modifier
+                    .clickable(onClick = onOpenConnections)
+                    .padding(vertical = 4.dp),
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun StatRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) {
+private fun StatRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodySmall,
@@ -227,6 +251,7 @@ private fun StatRow(label: String, value: String) {
             modifier = Modifier.weight(1f),
         )
         Text(text = value, style = MaterialTheme.typography.bodySmall)
+        trailing?.invoke()
     }
 }
 

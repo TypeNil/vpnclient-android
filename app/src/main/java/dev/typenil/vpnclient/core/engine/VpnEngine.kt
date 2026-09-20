@@ -38,6 +38,31 @@ data class OutboundItemInfo(
     val urlTestDelayMs: Int?,
 )
 
+/**
+ * One live connection tracked through the tunnel. Plain Kotlin data —
+ * the engine maps its internal connection objects onto this.
+ */
+data class ConnectionInfo(
+    val id: String,
+    /** `domain:port` when the destination resolved to a name, else `ip:port`. */
+    val destination: String,
+    /** Resolved domain, or empty for bare-IP destinations. */
+    val domain: String,
+    /** Sniffed L7 protocol (tls, quic, …); empty when unknown. */
+    val protocol: String,
+    /** Transport: tcp / udp. */
+    val network: String,
+    /** Tag of the outbound carrying the connection (may differ from the
+     *  selected node — rule routes can diverge, e.g. `direct`). */
+    val outbound: String,
+    /** Android packages owning the socket (empty when unidentifiable). */
+    val packages: List<String>,
+    val uplinkTotalBytes: Long,
+    val downlinkTotalBytes: Long,
+    /** Unix epoch milliseconds when the connection opened. */
+    val createdAtMs: Long,
+)
+
 /** Lifecycle events the engine emits upward. Group/latency updates travel on
  *  [VpnEngine.groups], not through events — keep this channel terminal-only. */
 sealed interface EngineEvent {
@@ -84,12 +109,20 @@ interface VpnEngine {
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>
 
+    /** Snapshot of live connections through the tunnel; empty while the
+     *  control channel is down. Pushed on core connection events. */
+    val connections: StateFlow<List<ConnectionInfo>>
+
     /** Switch selected outbound inside a group (server picker).
      *  Returns false when the control channel is down or the call failed. */
     suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean
 
     /** Ask the core to run urltest on a group (latency measurement). */
     suspend fun urlTest(groupTag: String)
+
+    /** Close one tracked connection by id.
+     *  Returns false when the control channel is down or the call failed. */
+    suspend fun closeConnection(id: String): Boolean
 }
 
 /**

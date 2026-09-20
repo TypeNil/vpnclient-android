@@ -2,6 +2,7 @@ package dev.typenil.vpnclient.core.vpn
 
 import android.content.Intent
 import dev.typenil.vpnclient.core.common.log.SecureLog
+import dev.typenil.vpnclient.core.engine.ConnectionInfo
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
@@ -92,10 +93,15 @@ class ConnectionManager @Inject constructor(
     private var statsJob: Job? = null
     private var eventsJob: Job? = null
     private var groupsJob: Job? = null
+    private var connectionsJob: Job? = null
 
     /** Live outbound groups from the running engine; empty while detached. */
     private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
     val groups: StateFlow<List<OutboundGroupInfo>> = _groups
+
+    /** Live connections through the tunnel; empty while detached. */
+    private val _activeConnections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
+    val activeConnections: StateFlow<List<ConnectionInfo>> = _activeConnections
 
     /** User pressed Connect. */
     fun connect() {
@@ -239,9 +245,17 @@ class ConnectionManager @Inject constructor(
         statsJob?.cancel()
         eventsJob?.cancel()
         groupsJob?.cancel()
+        connectionsJob?.cancel()
         groupsJob = scope.launch {
             engine.groups.collect { groups ->
                 if (generation == sessionGeneration) _groups.value = groups
+            }
+        }
+        connectionsJob = scope.launch {
+            engine.connections.collect { connections ->
+                if (generation == sessionGeneration) {
+                    _activeConnections.value = connections
+                }
             }
         }
         statsJob = scope.launch {
@@ -282,7 +296,10 @@ class ConnectionManager @Inject constructor(
         eventsJob = null
         groupsJob?.cancel()
         groupsJob = null
+        connectionsJob?.cancel()
+        connectionsJob = null
         _groups.value = emptyList()
+        _activeConnections.value = emptyList()
         engine = null
     }
 
@@ -298,6 +315,14 @@ class ConnectionManager @Inject constructor(
     suspend fun urlTest(groupTag: String) {
         engine?.urlTest(groupTag)
     }
+
+    /**
+     * Close one live connection by tracker id; the removal arrives through
+     * [activeConnections] on the next core event. Returns false while
+     * detached or when the engine rejected the close.
+     */
+    suspend fun closeConnection(id: String): Boolean =
+        engine?.closeConnection(id) ?: false
 
     /**
      * Allocates the session generation for a service-driven start (process
@@ -407,6 +432,40 @@ class ConnectionManager @Inject constructor(
                     publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
                 }
             }
+        }
+    }
+
+    /**
+     * The service is rebuilding the TUN inside the live session (the per-app
+     * package lists are baked into the fd at establish() time, so a policy
+     * change needs a fresh establish). Surface it as a brief Reconnecting —
+     * [onTunnelRebuilt] flips back once the new engine is up.
+     */
+    fun onTunnelRebuildStarted() {
+        scope.launch {
+            mutex.withLock {
+                val current = _state.value
+                if (current is VpnConnectionState.Connected) {
+                    publish(
+                        VpnConnectionState.Reconnecting(
+                            current.node, "applying changes", attempt = 1,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The session's tunnel is back up after an in-session rebuild. Only
+     * resolves a Reconnecting state — anything else (Stopping, an early
+     * Connected from a network callback) is left alone.
+     */
+    fun onTunnelRebuilt(generation: Long) {
+        if (!isCurrent(generation)) return
+        val current = _state.value
+        if (current is VpnConnectionState.Reconnecting) {
+            publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
         }
     }
 

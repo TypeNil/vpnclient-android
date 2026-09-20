@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.core.vpn
 
 import android.content.Intent
+import dev.typenil.vpnclient.core.engine.ConnectionInfo
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
@@ -74,10 +75,13 @@ class ConnectionManagerTest {
     private class FakeEngine : VpnEngine {
         val statsFlow = MutableSharedFlow<TrafficStats>(replay = 1)
         val eventsFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 16)
+        val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
+        val closedConnectionIds = mutableListOf<String>()
         override val stats: Flow<TrafficStats> get() = statsFlow
         override val events: Flow<EngineEvent> get() = eventsFlow
         override val groups: StateFlow<List<OutboundGroupInfo>> =
             MutableStateFlow(emptyList())
+        override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
         var stopCalls = 0
         override suspend fun validate(config: EngineConfig) = Unit
         override suspend fun start(config: EngineConfig) = Unit
@@ -86,7 +90,24 @@ class ConnectionManagerTest {
         override suspend fun onDeviceIdle(idle: Boolean) = Unit
         override suspend fun selectOutbound(groupTag: String, outboundTag: String) = true
         override suspend fun urlTest(groupTag: String) = Unit
+        override suspend fun closeConnection(id: String): Boolean {
+            closedConnectionIds += id
+            return true
+        }
     }
+
+    private fun conn(id: String) = ConnectionInfo(
+        id = id,
+        destination = "conn.invalid:443",
+        domain = "conn.invalid",
+        protocol = "tls",
+        network = "tcp",
+        outbound = "node-1",
+        packages = listOf("dev.test.app"),
+        uplinkTotalBytes = 1_000,
+        downlinkTotalBytes = 2_000,
+        createdAtMs = 1_700_000_000_000,
+    )
 
     private fun stats(speed: Long = 1000L) = TrafficStats(
         uplinkBytesPerSec = speed,
@@ -328,6 +349,54 @@ class ConnectionManagerTest {
         }
 
     @Test
+    fun `tunnel rebuild transitions Connected to Reconnecting and back`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+
+            manager.onTunnelRebuildStarted()
+            advanceUntilIdle()
+            val rebuilding = manager.state.value
+            assertTrue(rebuilding is VpnConnectionState.Reconnecting)
+            assertEquals(node, (rebuilding as VpnConnectionState.Reconnecting).node)
+
+            manager.onTunnelRebuilt(generation)
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
+    fun `rebuild callbacks are generation-guarded`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.onTunnelRebuildStarted()
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+        // A stale generation must not resolve the live session's state.
+        manager.onTunnelRebuilt(generation - 1)
+        assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+        manager.onTunnelRebuilt(generation)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `rebuild start is a no-op outside Connected`() = testScope.runTest {
+        // Idle: nothing to rebuild.
+        manager.onTunnelRebuildStarted()
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Idle)
+
+        // Already Reconnecting (e.g. network lost mid-request): the rebuild
+        // must not overwrite the existing reason/attempt payload.
+        connectToRunning()
+        manager.onUnderlyingNetworkLost()
+        advanceUntilIdle()
+        val before = manager.state.value as VpnConnectionState.Reconnecting
+        manager.onTunnelRebuildStarted()
+        advanceUntilIdle()
+        assertEquals(before, manager.state.value)
+    }
+
+    @Test
     fun `engine failure during Reconnecting converges to Error`() = testScope.runTest {
         val generation = connectToRunning()
         manager.onUnderlyingNetworkLost()
@@ -362,6 +431,64 @@ class ConnectionManagerTest {
             manager.onServiceStopped(generation - 1)
             assertTrue(manager.state.value is VpnConnectionState.Connected)
         }
+
+    @Test
+    fun `activeConnections mirrors engine while attached and clears on detach`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            engine.connectionsFlow.value = listOf(conn("c1"), conn("c2"))
+            advanceUntilIdle()
+            assertEquals(
+                listOf("c1", "c2"),
+                manager.activeConnections.value.map { it.id },
+            )
+
+            manager.disconnect()
+            advanceUntilIdle()
+            manager.onServiceStopped(generation)
+            assertTrue(manager.activeConnections.value.isEmpty())
+        }
+
+    @Test
+    fun `connection snapshots from a previous session are dropped`() = testScope.runTest {
+        val oldEngine = engine
+        val genA = connectToRunning()
+        oldEngine.connectionsFlow.value = listOf(conn("old"))
+        advanceUntilIdle()
+        assertEquals(listOf("old"), manager.activeConnections.value.map { it.id })
+
+        manager.disconnect()
+        advanceUntilIdle()
+        manager.onServiceStopped(genA)
+        assertTrue(manager.activeConnections.value.isEmpty())
+
+        engine = FakeEngine()
+        manager.connect()
+        advanceUntilIdle()
+        val genB = manager.pendingSession!!.generation
+        manager.attachEngine(engine, genB)
+        advanceUntilIdle()
+        manager.onServiceStarted(genB)
+
+        // Session A's tracker keeps emitting — its snapshots must not leak
+        // into session B's surface.
+        oldEngine.connectionsFlow.value = listOf(conn("stale"))
+        advanceUntilIdle()
+        assertTrue(manager.activeConnections.value.isEmpty())
+    }
+
+    @Test
+    fun `closeConnection delegates to the attached engine`() = testScope.runTest {
+        connectToRunning()
+        assertTrue(manager.closeConnection("c1"))
+        assertEquals(listOf("c1"), engine.closedConnectionIds)
+    }
+
+    @Test
+    fun `closeConnection returns false while detached`() = testScope.runTest {
+        assertTrue(!manager.closeConnection("c1"))
+        assertTrue(engine.closedConnectionIds.isEmpty())
+    }
 
     @Test
     fun `permission denied reports PermissionDenied`() = testScope.runTest {

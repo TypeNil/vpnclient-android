@@ -7,6 +7,7 @@ import android.os.Process
 import dev.typenil.vpnclient.core.common.log.Redactor
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.CidrAddress
+import dev.typenil.vpnclient.core.engine.ConnectionInfo
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
@@ -27,6 +28,7 @@ import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.ConnectionEvents
 import io.nekohasekai.libbox.ConnectionOwner
+import io.nekohasekai.libbox.Connections
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.LocalDNSTransport
@@ -83,6 +85,14 @@ class SingBoxEngine(
     private var commandServer: CommandServer? = null
     private var commandClient: CommandClient? = null
 
+    /**
+     * Client-side connection tracker fed by CommandConnections events.
+     * Not thread-safe on the Go side — every access goes through the
+     * `synchronized` block in `writeConnectionEvents`. Recreated per start()
+     * so a session never sees a previous tunnel's connections.
+     */
+    private var connectionsTracker: Connections? = null
+
     /** Written on IO under lifecycleMutex, read by libbox's serviceStop()
      *  callback on a binder thread — must be volatile to be visible. */
     @Volatile
@@ -91,10 +101,12 @@ class SingBoxEngine(
     private val _stats = MutableSharedFlow<TrafficStats>(replay = 1)
     private val _events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 64)
     private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
+    private val _connections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
 
     override val stats: Flow<TrafficStats> = _stats
     override val events: Flow<EngineEvent> = _events
     override val groups: StateFlow<List<OutboundGroupInfo>> = _groups
+    override val connections: StateFlow<List<ConnectionInfo>> = _connections
 
     override suspend fun validate(config: EngineConfig) = withContext(Dispatchers.IO) {
         try {
@@ -133,6 +145,11 @@ class SingBoxEngine(
                 commandServer = null
                 throw EngineError.StartFailed(e.message ?: "sing-box start failed")
             }
+            // Fresh tracker per session — the live-connections surface must
+            // never carry entries from a previous tunnel.
+            connectionsTracker = Connections().apply {
+                filterState(Libbox.ConnectionStateActive.toInt())
+            }
             connectClient()
             _events.emit(EngineEvent.Started)
         }
@@ -142,6 +159,7 @@ class SingBoxEngine(
         val options = CommandClientOptions().apply {
             addCommand(Libbox.CommandStatus)
             addCommand(Libbox.CommandGroup)
+            addCommand(Libbox.CommandConnections)
             statusInterval = STATUS_INTERVAL_NS
         }
         scope.launch(Dispatchers.IO) {
@@ -188,7 +206,9 @@ class SingBoxEngine(
             runCatching { server.closeService() }
             runCatching { server.close() }
             platform.closeTun()
+            connectionsTracker = null
             _groups.value = emptyList()
+            _connections.value = emptyList()
             // No terminal event here — app-requested stops are reported by
             // the service lifecycle (onServiceStopped), not the engine.
         }
@@ -223,6 +243,15 @@ class SingBoxEngine(
             .onFailure { SecureLog.w(TAG, "urlTest failed: ${it.message}") }
         Unit
     }
+
+    override suspend fun closeConnection(id: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val client = commandClient ?: return@withContext false
+            // The id is an opaque tracker key — never log connection payloads.
+            runCatching { client.closeConnection(id); true }
+                .onFailure { SecureLog.w(TAG, "closeConnection failed: ${it.message}") }
+                .getOrDefault(false)
+        }
 
     // region CommandServerHandler
 
@@ -322,7 +351,31 @@ class SingBoxEngine(
 
         override fun updateClashMode(newMode: String) = Unit
 
-        override fun writeConnectionEvents(events: ConnectionEvents?) = Unit
+        /**
+         * Pushed ~1/s by the CommandConnections subscription on a binder
+         * thread. The libbox tracker is not internally synchronized, so all
+         * tracker work stays inside one monitor; the iterator's Go proxies
+         * are mapped to plain [ConnectionInfo] before they leave it.
+         *
+         * Nothing here is logged — destinations/domains are user traffic.
+         */
+        override fun writeConnectionEvents(events: ConnectionEvents?) {
+            val tracker = connectionsTracker ?: return
+            if (events == null) return
+            val snapshot = synchronized(tracker) {
+                tracker.applyEvents(events)
+                // sortByDate re-sorts `filtered` in place — ApplyEvents
+                // rebuilds it, so the sort must be re-applied every push.
+                tracker.sortByDate()
+                val list = mutableListOf<ConnectionInfo>()
+                val iter = tracker.iterator()
+                while (iter.hasNext()) {
+                    list.add(iter.next().toConnectionInfo())
+                }
+                list
+            }
+            _connections.value = snapshot
+        }
     }
 
     // endregion
@@ -470,3 +523,18 @@ private fun StringIterator?.toStringList(): List<String> {
     while (hasNext()) out.add(next())
     return out
 }
+
+/** Copy every field out of the Go proxy — libbox `Connection` objects must
+ *  not escape the tracker monitor or the engine package. */
+private fun io.nekohasekai.libbox.Connection.toConnectionInfo() = ConnectionInfo(
+    id = id,
+    destination = displayDestination().orEmpty(),
+    domain = domain.orEmpty(),
+    protocol = protocol.orEmpty(),
+    network = network.orEmpty(),
+    outbound = outbound.orEmpty(),
+    packages = processInfo?.packageNames().toStringList(),
+    uplinkTotalBytes = uplinkTotal,
+    downlinkTotalBytes = downlinkTotal,
+    createdAtMs = createdAt,
+)
