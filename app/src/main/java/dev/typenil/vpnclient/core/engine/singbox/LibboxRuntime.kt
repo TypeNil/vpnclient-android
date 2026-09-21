@@ -30,6 +30,10 @@ object LibboxRuntime {
                 // 0 → in-process unix socket, nothing listens on TCP.
                 it.commandServerListenPort = 0
                 it.crashReportSource = "vpnclient"
+                // Version metadata lands in core crash/OOM reports —
+                // useless for triage without it.
+                it.appVersion = BuildConfig.VERSION_CODE.toString()
+                it.appMarketingVersion = BuildConfig.VERSION_NAME
                 it.logMaxLines = 300
                 it.debug = BuildConfig.DEBUG
                 it.fixAndroidStack = true

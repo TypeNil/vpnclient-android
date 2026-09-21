@@ -299,6 +299,9 @@ class SingBoxEngine(
         }
 
         override fun writeStatus(message: StatusMessage) {
+            // Counters are meaningless until the core says they're
+            // available — emitting them anyway shows fake "0 B/s" on Home.
+            if (!message.trafficAvailable) return
             _stats.tryEmit(
                 TrafficStats(
                     uplinkBytesPerSec = message.uplink,
