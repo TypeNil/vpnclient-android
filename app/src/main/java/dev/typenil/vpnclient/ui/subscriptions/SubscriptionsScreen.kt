@@ -33,7 +33,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -71,14 +70,19 @@ fun SubscriptionsScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
-    var importPrefill by rememberSaveable { mutableStateOf<String?>(null) }
+    // Dialog fields are hoisted, not keyed to the prefill: a QR result must
+    // fill the field in place — key()ing on it would dispose and recreate
+    // the whole dialog a frame after the restored copy appeared.
+    var dialogUrl by rememberSaveable { mutableStateOf("") }
+    var dialogName by rememberSaveable { mutableStateOf("") }
+    var dialogAllowInsecure by rememberSaveable { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<SubscriptionProfile?>(null) }
 
     // Deep-link/share funnel: open the add dialog prefilled — the user still
     // confirms; nothing is imported silently.
     LaunchedEffect(importUrl) {
         if (importUrl != null) {
-            importPrefill = importUrl
+            dialogUrl = importUrl
             showAddDialog = true
             onImportConsumed()
         }
@@ -131,22 +135,28 @@ fun SubscriptionsScreen(
     }
 
     if (showAddDialog) {
-        // Key on the prefill so a second deep link refreshes an open dialog.
-        key(importPrefill) {
-            AddSubscriptionDialog(
-                initialUrl = importPrefill.orEmpty(),
-                onScanQr = onScanQr,
-                onDismiss = {
-                    showAddDialog = false
-                    importPrefill = null
-                },
-                onConfirm = { url, name, allowInsecure ->
-                    showAddDialog = false
-                    importPrefill = null
-                    viewModel.add(url, name, allowInsecure)
-                },
-            )
-        }
+        AddSubscriptionDialog(
+            url = dialogUrl,
+            onUrlChange = { dialogUrl = it },
+            name = dialogName,
+            onNameChange = { dialogName = it },
+            allowInsecure = dialogAllowInsecure,
+            onAllowInsecureChange = { dialogAllowInsecure = it },
+            onScanQr = onScanQr,
+            onDismiss = {
+                showAddDialog = false
+                dialogUrl = ""
+                dialogName = ""
+                dialogAllowInsecure = false
+            },
+            onConfirm = { url, name, allowInsecure ->
+                showAddDialog = false
+                dialogUrl = ""
+                dialogName = ""
+                dialogAllowInsecure = false
+                viewModel.add(url, name, allowInsecure)
+            },
+        )
     }
 
     pendingDelete?.let { profile ->
@@ -256,17 +266,18 @@ private fun SubscriptionCard(
 
 @Composable
 private fun AddSubscriptionDialog(
+    url: String,
+    onUrlChange: (String) -> Unit,
+    name: String,
+    onNameChange: (String) -> Unit,
+    allowInsecure: Boolean,
+    onAllowInsecureChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (url: String, name: String?, allowInsecure: Boolean) -> Unit,
     onScanQr: () -> Unit,
-    initialUrl: String = "",
 ) {
-    // All saveable: navigating to the QR scanner disposes this composition,
-    // and a typed name or the cleartext opt-in must survive the round-trip.
-    var url by rememberSaveable { mutableStateOf(initialUrl) }
-    var name by rememberSaveable { mutableStateOf("") }
-    var allowInsecure by rememberSaveable { mutableStateOf(false) }
-    // In-dialog validation — a rejected http add would otherwise lose the URL.
+    // Stateless: fields live in the caller's saveable state so a QR result
+    // fills the open dialog in place instead of recreating it.
     val isHttp = url.trim().startsWith("http://", ignoreCase = true)
 
     AlertDialog(
@@ -276,7 +287,7 @@ private fun AddSubscriptionDialog(
             Column {
                 OutlinedTextField(
                     value = url,
-                    onValueChange = { url = it },
+                    onValueChange = onUrlChange,
                     label = { Text("Subscription URL") },
                     singleLine = true,
                     trailingIcon = {
@@ -292,7 +303,7 @@ private fun AddSubscriptionDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = onNameChange,
                     label = { Text("Name (optional)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -312,7 +323,7 @@ private fun AddSubscriptionDialog(
                         .toggleable(
                             value = allowInsecure,
                             role = Role.Checkbox,
-                            onValueChange = { allowInsecure = it },
+                            onValueChange = onAllowInsecureChange,
                         ),
                 ) {
                     Checkbox(

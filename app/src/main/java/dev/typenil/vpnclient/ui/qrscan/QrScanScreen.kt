@@ -16,6 +16,14 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +32,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -43,10 +54,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
@@ -60,6 +75,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 private const val TAG = "QrScan"
@@ -165,6 +181,7 @@ fun QrScanScreen(
                     onCameraError = { cameraFailed = true },
                     modifier = Modifier.fillMaxSize(),
                 )
+                ViewfinderOverlay()
                 if (showReject) {
                     Text(
                         text = "Not a subscription link",
@@ -178,6 +195,69 @@ fun QrScanScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Scanning affordance over the live preview: a rounded target frame with a
+ * sweeping line so it's obvious the camera is actively decoding, plus the
+ * aim hint below it.
+ */
+@Composable
+private fun ViewfinderOverlay() {
+    val sweep by rememberInfiniteTransition(label = "qrSweep").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1_800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "sweep",
+    )
+    val sweepRange = with(LocalDensity.current) { 228.dp.toPx() }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(240.dp)
+                .border(
+                    width = 2.dp,
+                    color = Color.White.copy(alpha = 0.9f),
+                    shape = RoundedCornerShape(20.dp),
+                ),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .align(Alignment.TopCenter)
+                    // Lambda offset reads `sweep` in the layout phase, so the
+                    // animation doesn't recompose the overlay every frame.
+                    .offset { IntOffset(0, (sweepRange * sweep).roundToInt()) }
+                    .height(2.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color.Transparent,
+                                MaterialTheme.colorScheme.primary,
+                                Color.Transparent,
+                            ),
+                        ),
+                    ),
+            )
+        }
+        Text(
+            text = "Point the camera at a QR code",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp)
+                .background(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
     }
 }
 
