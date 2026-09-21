@@ -1,20 +1,24 @@
 package dev.typenil.vpnclient.ui.servers
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -61,13 +65,17 @@ fun ServersScreen(
         return
     }
 
-    LazyColumn(modifier = modifier.fillMaxSize()) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 160.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (ui.connected) {
-            item(key = "actions") {
+            item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -88,24 +96,19 @@ fun ServersScreen(
             }
         }
         ui.groups.forEach { group ->
-            item(key = "header-${group.subscriptionId}") {
+            item(key = "header-${group.subscriptionId}", span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                     text = group.subscriptionName,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(
-                        start = 16.dp,
-                        top = 16.dp,
-                        end = 16.dp,
-                        bottom = 4.dp,
-                    ),
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
             items(
                 items = group.nodes,
                 key = { node -> node.id },
             ) { node ->
-                ServerRow(
+                ServerCard(
                     node = node,
                     selected = node.id == ui.selectedNodeId,
                     delayMs = ui.delays[node.id],
@@ -117,58 +120,51 @@ fun ServersScreen(
 }
 
 @Composable
-private fun ServerRow(
+private fun ServerCard(
     node: NodeEntity,
     selected: Boolean,
     delayMs: Int?,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = node.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(8.dp))
-                ProtocolBadge(node.protocol)
+                if (selected) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
-            Text(
-                text = "${node.server}:${node.port}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (delayMs != null) {
-            Text(
-                text = "$delayMs ms",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (delayMs < 800) {
-                    MaterialTheme.colorScheme.tertiary
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        if (selected) {
-            Spacer(Modifier.width(8.dp))
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.primary,
-            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProtocolBadge(node.protocol)
+                Spacer(Modifier.weight(1f))
+                if (delayMs != null) {
+                    Text(
+                        text = "$delayMs ms",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (delayMs < 800) {
+                            MaterialTheme.colorScheme.tertiary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+            }
         }
     }
 }
