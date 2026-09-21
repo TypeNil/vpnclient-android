@@ -8,7 +8,6 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import dev.typenil.vpnclient.MainActivity
 import dev.typenil.vpnclient.R
-import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 
 /** Foreground-service notification for the tunnel. */
 class VpnNotification(private val service: Service) {
@@ -40,15 +39,11 @@ class VpnNotification(private val service: Service) {
     fun build(
         title: String,
         text: String,
-        node: NodeSummary?,
         showDisconnect: Boolean,
     ): Notification {
         val builder = baseBuilder()
             .setContentTitle(title)
             .setContentText(text)
-        if (node != null) {
-            builder.setSubText(node.name)
-        }
         if (showDisconnect) {
             builder.addAction(
                 NotificationCompat.Action.Builder(

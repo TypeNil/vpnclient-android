@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -183,6 +184,53 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 }
             }
         }
+        // The foreground notification mirrors the live state machine —
+        // without this it would stay on "Connecting…" forever. Rendered
+        // content is deduped: Connected republishes on every ~1s stats tick.
+        scope.launch {
+            connectionManager.state
+                .map { state ->
+                    // Only update while this service instance owns a
+                    // session — Idle/Error teardown paths post nothing.
+                    if (activeGeneration < 0) return@map null
+                    when (state) {
+                        is VpnConnectionState.Connected -> NotificationSpec(
+                            title = getString(R.string.notification_connected),
+                            text = state.node.name,
+                            showDisconnect = true,
+                        )
+                        is VpnConnectionState.Reconnecting -> NotificationSpec(
+                            title = getString(R.string.notification_reconnecting),
+                            text = state.node.name,
+                            showDisconnect = true,
+                        )
+                        is VpnConnectionState.Connecting -> NotificationSpec(
+                            title = getString(R.string.notification_connecting),
+                            text = state.node.name,
+                            showDisconnect = true,
+                        )
+                        VpnConnectionState.Stopping -> NotificationSpec(
+                            title = getString(R.string.notification_disconnecting),
+                            text = activeConfig?.node?.name ?: getString(R.string.app_name),
+                            showDisconnect = false,
+                        )
+                        // e.g. disconnect delivery failed after Stopping —
+                        // show the error instead of a stuck "Disconnecting…".
+                        is VpnConnectionState.Error -> NotificationSpec(
+                            title = getString(R.string.notification_error),
+                            text = state.error.message ?: getString(R.string.app_name),
+                            showDisconnect = false,
+                        )
+                        VpnConnectionState.Idle,
+                        is VpnConnectionState.Preparing,
+                        VpnConnectionState.PermissionRequired -> null
+                    }
+                }
+                .distinctUntilChanged()
+                .collect { spec ->
+                    spec?.let { showNotification(it.title, it.text, it.showDisconnect) }
+                }
+        }
     }
 
     // The core rarely raises user-facing notifications; forwarded for
@@ -240,7 +288,6 @@ class ClientVpnService : VpnService(), EnginePlatform {
         showNotification(
             title = getString(R.string.notification_connecting),
             text = session?.config?.node?.name ?: getString(R.string.app_name),
-            node = session?.config?.node,
             showDisconnect = true,
         )
         runCatching { registerUnderlyingNetworkCallback() }
@@ -286,10 +333,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
             activeGeneration = generation
             activeConfig = config
+            // On adopted sessions adoptSession published Connecting before
+            // the generation was set — that emission was gated out, and the
+            // early post above had no session to read the node name from.
+            // Re-post with the compiled config so the text is right.
             showNotification(
                 title = getString(R.string.notification_connecting),
                 text = config.node.name,
-                node = config.node,
                 showDisconnect = true,
             )
             if (!launchEngine(config, generation)) return@launch
@@ -485,6 +535,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
         engine = null
         val generation = activeGeneration
         activeGeneration = -1L
+        if (generation >= 0) {
+            // The notification Disconnect action reaches here directly,
+            // bypassing the Stopping state — post it ourselves so the
+            // shade doesn't keep showing "Connected" through teardown.
+            showNotification(
+                title = getString(R.string.notification_disconnecting),
+                text = activeConfig?.node?.name ?: getString(R.string.app_name),
+                showDisconnect = false,
+            )
+        }
         if (current != null) pendingTeardown.add(current)
         scope.launch {
             try {
@@ -758,10 +818,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private fun showNotification(
         title: String,
         text: String,
-        node: dev.typenil.vpnclient.core.subscription.model.NodeSummary?,
         showDisconnect: Boolean,
     ) {
-        val n = notification.build(title, text, node, showDisconnect)
+        val n = notification.build(title, text, showDisconnect)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 VpnNotification.NOTIFICATION_ID,
@@ -773,6 +832,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
         }
     }
 }
+
+/** What the status notification should render — dedupe key for the ~1 Hz stats republish. */
+private data class NotificationSpec(
+    val title: String,
+    val text: String,
+    val showDisconnect: Boolean,
+)
 
 @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun dev.typenil.vpnclient.core.engine.CidrAddress.toIpPrefix(): android.net.IpPrefix =

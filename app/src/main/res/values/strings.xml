@@ -5,6 +5,8 @@
     <string name="notification_connecting">Connecting…</string>
     <string name="notification_connected">Connected</string>
     <string name="notification_reconnecting">Reconnecting…</string>
+    <string name="notification_disconnecting">Disconnecting…</string>
+    <string name="notification_error">Connection error</string>
     <string name="action_disconnect">Disconnect</string>
 
     <string name="nav_home">Home</string>
