@@ -21,9 +21,11 @@ import kotlinx.coroutines.launch
 /**
  * Quick Settings tile: tap toggles the tunnel.
  *
- * Connect goes through [MainActivity] — the consent-dialog flow lives in the
- * UI layer (`prepareIntent` → activity-result launcher), so the tile only
- * kicks an intent that delegates there. Disconnect needs no UI.
+ * Connect calls [ConnectionManager.connect] directly — when consent is
+ * needed the `prepareIntent` StateFlow hands the dialog to whatever UI is
+ * open. The activity is only launched so the user sees the result; it must
+ * NOT carry a connect extra (an exported activity honoring one would let
+ * any app trigger connects).
  */
 @AndroidEntryPoint
 class VpnTileService : TileService() {
@@ -60,17 +62,19 @@ class VpnTileService : TileService() {
             is VpnConnectionState.Reconnecting,
             is VpnConnectionState.Stopping,
             -> connectionManager.disconnect()
-            else -> openMainForConnect()
+            else -> {
+                connectionManager.connect()
+                openMain()
+            }
         }
     }
 
     // PendingIntent overload exists only on API 34+; the Intent overload is
     // the only path below that.
     @SuppressLint("StartActivityAndCollapseDeprecated")
-    private fun openMainForConnect() {
+    private fun openMain() {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            .putExtra(MainActivity.EXTRA_CONNECT, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startActivityAndCollapse(
                 PendingIntent.getActivity(

@@ -303,11 +303,27 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 return START_NOT_STICKY
             }
             else -> {
-                // System restart (null intent) or always-on boot: rebuild only
-                // if the user previously wanted the tunnel running. A failed
-                // flag read stops the service cleanly. The restart attempt is
-                // bounded — a hard/native crash never reaches a catch block,
-                // so without the guard a crash-on-start would loop forever:
+                // A stray system start (always-on re-start, duplicate
+                // package-replaced restore) on a live/in-flight session must
+                // not clobber the Connected notification, consume a restart
+                // slot, or trip the guard into killing a healthy tunnel.
+                if (engine != null || startJob?.isActive == true) {
+                    return START_STICKY
+                }
+                // FGS contract: startForegroundService gives us ~5s to call
+                // startForeground — promote *before* the DataStore reads
+                // below, not inside startTunnel after them.
+                showNotification(
+                    title = getString(R.string.notification_connecting),
+                    text = getString(R.string.app_name),
+                    showDisconnect = false,
+                )
+                // System restart (null intent), boot/update restore, or
+                // always-on start: rebuild only if the user previously wanted
+                // the tunnel running. A failed flag read stops the service
+                // cleanly. The restart attempt is bounded — a hard/native
+                // crash never reaches a catch block, so without the guard a
+                // crash-on-start would loop forever:
                 // crash → START_STICKY restart → startTunnel → crash → …
                 scope.launch {
                     val wanted = runCatching { settings.desiredVpnRunning.first() }
@@ -329,8 +345,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
                             "restart guard tripped — clearing desiredVpnRunning",
                         )
                         runCatching { settings.setDesiredVpnRunning(false) }
-                        // Never leave a silently-unprotected device: tell the
-                        // user the auto-restart gave up and offer a way back.
+                        // Never leave a silently-unprotected device: the
+                        // persisted flag shows a Home warning even when
+                        // notifications are denied; the alert is the fast path.
+                        runCatching { settings.setRestartGuardTripped(true) }
                         runCatching {
                             notification.postAlert(
                                 title = getString(R.string.notification_restart_guard_title),

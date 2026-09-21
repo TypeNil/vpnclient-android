@@ -153,8 +153,10 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 ### Entry points
 
 - **QS tile** (`VpnTileService`): mirrors `ConnectionManager.state`; tap on an
-  active session disconnects directly, otherwise launches `MainActivity` with
-  `EXTRA_CONNECT` so the consent flow stays in the UI layer.
+  active session disconnects directly, otherwise calls
+  `ConnectionManager.connect()` itself and opens `MainActivity` — the consent
+  dialog reaches the UI via the `prepareIntent` StateFlow. The exported
+  activity never honors caller-supplied connect extras.
 - **Boot receiver** (`BootReceiver`): `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED` →
   restarts the tunnel only when `desiredVpnRunning` is set AND
   `VpnService.prepare` reports consent is still granted.
@@ -176,7 +178,7 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 - Room: `subscriptions` + `nodes` tables (nodes keyed by stable content hash id).
 - DataStore preferences: selected node id, HWID, reconnect/IPv6/doze flags,
   `desiredVpnRunning`, `subscriptionRefreshMinutes`, `perAppMode`,
-  `perAppPackages`.
+  `perAppPackages`, restart-guard window/count/tripped flag.
 - Secrets stay in Room (`url`, `rawUri`, `outboundJson`) — local-only, never exported;
   `SecureLog` + `Redactor` scrub logs.
 

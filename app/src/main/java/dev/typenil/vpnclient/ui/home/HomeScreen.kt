@@ -76,6 +76,11 @@ fun HomeScreen(
 
         NodeCard(ui = ui)
 
+        if (ui.restartGuardTripped) {
+            Spacer(Modifier.height(12.dp))
+            RestartGuardCard(onDismiss = viewModel::dismissRestartGuardWarning)
+        }
+
         if (connection is VpnConnectionState.Error) {
             Spacer(Modifier.height(12.dp))
             ErrorCard(connection.error)
@@ -205,6 +210,33 @@ private fun ErrorCard(error: VpnError) {
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = { dismissed = true }) {
+                Text("Dismiss")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RestartGuardCard(onDismiss: () -> Unit) {
+    // Persisted counterpart of the restart-guard alert notification — shown
+    // even when notifications are denied, until dismissed or a new connect.
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "VPN auto-restart stopped — repeated failures. Reconnect manually.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onDismiss) {
                 Text("Dismiss")
             }
         }

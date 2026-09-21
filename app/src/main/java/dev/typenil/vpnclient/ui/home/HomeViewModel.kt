@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 data class HomeUiState(
     /** The real connection state machine — rendered as-is, never invented. */
@@ -21,13 +22,17 @@ data class HomeUiState(
     val selectedNodeProtocol: String? = null,
     val selectedNodeServer: String? = null,
     val subscriptionName: String? = null,
+    /** Restart guard disabled auto-start — persistent warning, survives a
+     *  denied notification permission (the alert notification may never
+     *  have been seen). */
+    val restartGuardTripped: Boolean = false,
 )
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val connectionManager: ConnectionManager,
     nodeDao: NodeDao,
-    settings: SettingsRepository,
+    private val settings: SettingsRepository,
     subscriptions: SubscriptionRepository,
 ) : ViewModel() {
 
@@ -36,7 +41,8 @@ class HomeViewModel @Inject constructor(
         settings.selectedNodeId,
         nodeDao.observeEnabled(),
         subscriptions.profiles,
-    ) { connection, selectedId, nodes, profiles ->
+        settings.restartGuardTripped,
+    ) { connection, selectedId, nodes, profiles, guardTripped ->
         val selected = nodes.firstOrNull { it.id == selectedId }
         HomeUiState(
             connection = connection,
@@ -44,6 +50,7 @@ class HomeViewModel @Inject constructor(
             selectedNodeProtocol = selected?.protocol,
             selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
             subscriptionName = profiles.firstOrNull { it.enabled }?.name,
+            restartGuardTripped = guardTripped,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -54,4 +61,11 @@ class HomeViewModel @Inject constructor(
     fun connect() = connectionManager.connect()
 
     fun disconnect() = connectionManager.disconnect()
+
+    /** Explicit dismiss — connecting again also clears it via the reset. */
+    fun dismissRestartGuardWarning() {
+        viewModelScope.launch {
+            runCatching { settings.setRestartGuardTripped(false) }
+        }
+    }
 }

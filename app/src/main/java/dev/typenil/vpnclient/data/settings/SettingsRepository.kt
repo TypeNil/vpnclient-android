@@ -55,6 +55,9 @@ class SettingsRepository @Inject constructor(
         val VPN_RESTART_WINDOW_START = longPreferencesKey("vpn_restart_window_start")
         /** Automatic tunnel starts counted inside the current window. */
         val VPN_RESTART_COUNT = intPreferencesKey("vpn_restart_count")
+        /** Set when the restart guard disabled auto-start — persisted so the
+         *  UI can warn even when notifications are denied. */
+        val VPN_RESTART_GUARD_TRIPPED = booleanPreferencesKey("vpn_restart_guard_tripped")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -247,6 +250,16 @@ class SettingsRepository @Inject constructor(
         return allowed
     }
 
+    /** Whether the restart guard disabled auto-start — the Home warning
+     *  surfaces this; it survives notification-permission denial. */
+    val restartGuardTripped: Flow<Boolean> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.VPN_RESTART_GUARD_TRIPPED] ?: false }
+
+    suspend fun setRestartGuardTripped(tripped: Boolean) {
+        context.settingsStore.edit { it[Keys.VPN_RESTART_GUARD_TRIPPED] = tripped }
+    }
+
     /** Reset after a session stayed Connected long enough — LMK kills of a
      *  healthy tunnel must not accumulate toward the guard limit. Also reset
      *  on explicit user connects (the tap overrides a tripped guard). */
@@ -254,6 +267,7 @@ class SettingsRepository @Inject constructor(
         context.settingsStore.edit { prefs ->
             prefs.remove(Keys.VPN_RESTART_WINDOW_START)
             prefs.remove(Keys.VPN_RESTART_COUNT)
+            prefs.remove(Keys.VPN_RESTART_GUARD_TRIPPED)
         }
     }
 

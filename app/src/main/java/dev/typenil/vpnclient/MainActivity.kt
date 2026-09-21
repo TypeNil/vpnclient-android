@@ -16,12 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    companion object {
-        /** QS tile asks the activity to start a connect attempt — the UI owns
-         *  the consent-dialog flow, so the tile delegates here. */
-        const val EXTRA_CONNECT = "dev.typenil.vpnclient.extra.CONNECT"
-    }
-
     @Inject
     lateinit var connectionManager: ConnectionManager
 
@@ -50,11 +44,9 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
-        if (intent.getBooleanExtra(EXTRA_CONNECT, false)) {
-            intent.removeExtra(EXTRA_CONNECT)
-            connectionManager.connect()
-            return
-        }
+        // No connect extras here — this activity is exported, and honoring a
+        // caller-supplied "connect" flag would let any installed app toggle
+        // the VPN. The QS tile calls ConnectionManager directly instead.
         ImportUrlExtractor.extract(
             action = intent.action,
             data = intent.dataString,
