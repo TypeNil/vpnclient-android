@@ -81,6 +81,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
          *  scenario degrades to a flaky-but-working tunnel, not a dead loop. */
         private const val RESTART_GUARD_STABLE_MS = 60_000L
 
+        /**
+         * Whether an automatic/system start must be ignored because this
+         * instance already owns a session lifecycle. `engine != null` is
+         * deliberately absent — during a rebuild the engine slot is null
+         * while the generation is still owned, and during teardown
+         * [stopRequested] covers the gap before `engine` is cleared.
+         */
+        internal fun sessionOwned(
+            activeGeneration: Long,
+            startActive: Boolean,
+            rebuildActive: Boolean,
+            stopRequested: Boolean,
+        ): Boolean =
+            activeGeneration >= 0 || startActive || rebuildActive || stopRequested
+
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
 
@@ -304,10 +319,22 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
             else -> {
                 // A stray system start (always-on re-start, duplicate
-                // package-replaced restore) on a live/in-flight session must
-                // not clobber the Connected notification, consume a restart
-                // slot, or trip the guard into killing a healthy tunnel.
-                if (engine != null || startJob?.isActive == true) {
+                // package-replaced restore) must not clobber the Connected
+                // notification, consume a restart slot, or trip the guard
+                // into killing a healthy tunnel. Check session ownership, not
+                // just the engine: during rebuildTunnel the engine is null
+                // while activeGeneration is still valid, and during teardown
+                // stopRequested is set — a stray start in either window would
+                // otherwise race startTunnel into cleanup()/stopSelf() or
+                // resurrect the tunnel mid-stop.
+                if (
+                    sessionOwned(
+                        activeGeneration = activeGeneration,
+                        startActive = startJob?.isActive == true,
+                        rebuildActive = rebuildJob?.isActive == true,
+                        stopRequested = stopRequested,
+                    )
+                ) {
                     return START_STICKY
                 }
                 // FGS contract: startForegroundService gives us ~5s to call
