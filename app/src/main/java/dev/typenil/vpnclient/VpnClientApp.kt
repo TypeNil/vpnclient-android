@@ -80,5 +80,12 @@ class VpnClientApp : Application() {
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                VpnNotification.ALERT_CHANNEL_ID,
+                getString(R.string.notification_channel_vpn_alerts),
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
     }
 }

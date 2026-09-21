@@ -36,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -65,17 +66,29 @@ class ClientVpnService : VpnService(), EnginePlatform {
         private const val TAG = "ClientVpnService"
         private const val ACTION_CONNECT = "dev.typenil.vpnclient.action.CONNECT"
         private const val ACTION_DISCONNECT = "dev.typenil.vpnclient.action.DISCONNECT"
+        /** Boot/update restore — an *automatic* start, counted by the
+         *  restart guard (unlike the user's explicit CONNECT). */
+        private const val ACTION_RESTORE = "dev.typenil.vpnclient.action.RESTORE"
         /** Quiet window before a per-app change triggers a TUN rebuild —
          *  rapid toggle bursts collapse into a single rebuild. */
         private const val PER_APP_REBUILD_DEBOUNCE_MS = 800L
         /** Bounded re-runs for changes landing mid-rebuild (dirty flag). */
         private const val MAX_TUNNEL_REBUILDS = 4
+        /** A Connected session older than this proves the start wasn't a
+         *  crash — resets the sticky-restart crash guard. Known hole: a
+         *  core that reliably crashes *after* this uptime loops forever
+         *  (each cycle self-resets the counter); acceptable because that
+         *  scenario degrades to a flaky-but-working tunnel, not a dead loop. */
+        private const val RESTART_GUARD_STABLE_MS = 60_000L
 
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
 
         fun disconnectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_DISCONNECT)
+
+        fun restoreIntent(context: Context): Intent =
+            Intent(context, ClientVpnService::class.java).setAction(ACTION_RESTORE)
     }
 
     @Inject
@@ -184,6 +197,32 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 }
             }
         }
+        // Restart-guard reset: a session that survives Connected this long
+        // isn't crash-looping — wipe the window so routine LMK kills are
+        // counted fresh. Connected republishes every ~1s on stats ticks, so
+        // dedupe on the boolean to arm the timer only on real transitions.
+        var stabilityJob: Job? = null
+        scope.launch {
+            connectionManager.state
+                .map { it is VpnConnectionState.Connected }
+                .distinctUntilChanged()
+                .collect { connected ->
+                    stabilityJob?.cancel()
+                    stabilityJob = if (connected) {
+                        scope.launch {
+                            delay(RESTART_GUARD_STABLE_MS)
+                            try {
+                                settings.resetVpnRestartAttempts()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                            }
+                        }
+                    } else {
+                        null
+                    }
+                }
+        }
         // The foreground notification mirrors the live state machine —
         // without this it would stay on "Connecting…" forever. Rendered
         // content is deduped: Connected republishes on every ~1s stats tick.
@@ -246,8 +285,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
-                // User asked for the tunnel — remember it across process death.
-                scope.launch { settings.setDesiredVpnRunning(true) }
+                // User asked for the tunnel — remember it across process
+                // death. The explicit tap also clears the restart guard: a
+                // tripped guard is about *automatic* starts, not the user
+                // asking again.
+                scope.launch {
+                    // Flag first — a failed guard reset must not drop it.
+                    settings.setDesiredVpnRunning(true)
+                    runCatching { settings.resetVpnRestartAttempts() }
+                }
                 startTunnel()
                 return START_STICKY
             }
@@ -259,14 +305,38 @@ class ClientVpnService : VpnService(), EnginePlatform {
             else -> {
                 // System restart (null intent) or always-on boot: rebuild only
                 // if the user previously wanted the tunnel running. A failed
-                // flag read stops the service cleanly.
+                // flag read stops the service cleanly. The restart attempt is
+                // bounded — a hard/native crash never reaches a catch block,
+                // so without the guard a crash-on-start would loop forever:
+                // crash → START_STICKY restart → startTunnel → crash → …
                 scope.launch {
                     val wanted = runCatching { settings.desiredVpnRunning.first() }
                         .getOrDefault(false)
-                    if (wanted) {
+                    if (!wanted) {
+                        stopSelf()
+                        return@launch
+                    }
+                    // Fail-open on a DataStore read error: the guard is a
+                    // safety net, a broken read must not block reconnects.
+                    val allowed = runCatching { settings.registerVpnRestartAttempt() }
+                        .getOrDefault(true)
+                    if (allowed) {
                         SecureLog.i(TAG, "rebuilding tunnel after service restart")
                         startTunnel()
                     } else {
+                        SecureLog.w(
+                            TAG,
+                            "restart guard tripped — clearing desiredVpnRunning",
+                        )
+                        runCatching { settings.setDesiredVpnRunning(false) }
+                        // Never leave a silently-unprotected device: tell the
+                        // user the auto-restart gave up and offer a way back.
+                        runCatching {
+                            notification.postAlert(
+                                title = getString(R.string.notification_restart_guard_title),
+                                text = getString(R.string.notification_restart_guard_text),
+                            )
+                        }
                         stopSelf()
                     }
                 }
@@ -647,7 +717,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
-        builder.allowBypass()
+        // No allowBypass(): without it apps cannot sidestep the tunnel via
+        // bindProcessToNetwork — "Proxy everything" means it. Controlled
+        // split tunneling is covered by the per-app include/exclude plan
+        // below, and our own core sockets use protect() regardless.
 
         request.inet4Addresses.forEach { builder.addAddress(it.address, it.prefix) }
         request.inet6Addresses.forEach { builder.addAddress(it.address, it.prefix) }

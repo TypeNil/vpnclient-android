@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.core.vpn
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -14,7 +15,10 @@ class VpnNotification(private val service: Service) {
 
     companion object {
         const val CHANNEL_ID = "vpn"
+        /** One-shot alerts (e.g. restart-guard trip) — high importance. */
+        const val ALERT_CHANNEL_ID = "vpn_alerts"
         const val NOTIFICATION_ID = 1
+        const val ALERT_NOTIFICATION_ID = 2
         private const val REQUEST_OPEN = 0
         private const val REQUEST_DISCONNECT = 1
 
@@ -34,6 +38,9 @@ class VpnNotification(private val service: Service) {
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            // Don't defer the foreground-service notification — the VPN
+            // status should appear immediately when the tunnel starts.
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setShowWhen(false)
 
     fun build(
@@ -59,5 +66,21 @@ class VpnNotification(private val service: Service) {
             )
         }
         return builder.build()
+    }
+
+    /**
+     * One-shot user-visible alert — posted through NotificationManager, not
+     * the foreground slot, so it works while the service is stopping.
+     */
+    fun postAlert(title: String, text: String) {
+        val notification = NotificationCompat.Builder(service, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(openPendingIntent(service))
+            .setAutoCancel(true)
+            .build()
+        service.getSystemService(NotificationManager::class.java)
+            .notify(ALERT_NOTIFICATION_ID, notification)
     }
 }

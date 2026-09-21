@@ -55,7 +55,7 @@ class BootReceiver : BroadcastReceiver() {
                     // a crash inside onReceive is worse than a missed restore.
                     runCatching {
                         ContextCompat.startForegroundService(
-                            context, ClientVpnService.connectIntent(context),
+                            context, ClientVpnService.restoreIntent(context),
                         )
                     }.onFailure { SecureLog.w(TAG, "boot restore start failed") }
                 }

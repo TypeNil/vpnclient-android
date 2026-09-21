@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -50,6 +51,10 @@ class SettingsRepository @Inject constructor(
         val ROUTE_MODE = stringPreferencesKey("route_mode")
         /** Opt-in: pause the core in Doze (drops open TCP connections). */
         val DOZE_POWER_SAVE = booleanPreferencesKey("doze_power_save")
+        /** Crash-loop guard: start of the current counting window (epoch ms). */
+        val VPN_RESTART_WINDOW_START = longPreferencesKey("vpn_restart_window_start")
+        /** Automatic tunnel starts counted inside the current window. */
+        val VPN_RESTART_COUNT = intPreferencesKey("vpn_restart_count")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -217,7 +222,46 @@ class SettingsRepository @Inject constructor(
         context.settingsStore.edit { it[Keys.DOZE_POWER_SAVE] = enabled }
     }
 
+    /**
+     * Crash-loop guard for automatic (sticky-restart / boot) tunnel starts.
+     * A native crash kills the process before any catch block runs, so the
+     * only observable symptom is repeated starts with no stable session in
+     * between. Returns false once [RESTART_MAX_ATTEMPTS] automatic starts
+     * land inside [RESTART_WINDOW_MS] — the caller must clear
+     * `desiredVpnRunning` and stop instead of looping forever.
+     */
+    suspend fun registerVpnRestartAttempt(now: Long = System.currentTimeMillis()): Boolean {
+        var allowed = true
+        context.settingsStore.edit { prefs ->
+            val (windowStart, count) = restartWindow(
+                prevStart = prefs[Keys.VPN_RESTART_WINDOW_START] ?: 0L,
+                prevCount = prefs[Keys.VPN_RESTART_COUNT] ?: 0,
+                now = now,
+            )
+            allowed = count <= RESTART_MAX_ATTEMPTS
+            if (allowed) {
+                prefs[Keys.VPN_RESTART_WINDOW_START] = windowStart
+                prefs[Keys.VPN_RESTART_COUNT] = count
+            }
+        }
+        return allowed
+    }
+
+    /** Reset after a session stayed Connected long enough — LMK kills of a
+     *  healthy tunnel must not accumulate toward the guard limit. Also reset
+     *  on explicit user connects (the tap overrides a tripped guard). */
+    suspend fun resetVpnRestartAttempts() {
+        context.settingsStore.edit { prefs ->
+            prefs.remove(Keys.VPN_RESTART_WINDOW_START)
+            prefs.remove(Keys.VPN_RESTART_COUNT)
+        }
+    }
+
     internal companion object {
+        /** Automatic starts allowed inside one window before giving up. */
+        const val RESTART_MAX_ATTEMPTS = 3
+        const val RESTART_WINDOW_MS = 10 * 60 * 1000L
+
         private val HEX32 = Regex("[0-9a-fA-F]{32}")
 
         /** Reformats an undashed 32-hex HWID to dashed UUID form; null if already fine. */
@@ -226,6 +270,18 @@ class SettingsRepository @Inject constructor(
             return "${stored.substring(0, 8)}-${stored.substring(8, 12)}-" +
                 "${stored.substring(12, 16)}-${stored.substring(16, 20)}-${stored.substring(20)}"
         }
+
+        /**
+         * Restart-window decision: the (windowStart, count) to store for this
+         * attempt. A stale window starts a fresh one anchored at [now];
+         * callers compare count against [RESTART_MAX_ATTEMPTS].
+         */
+        fun restartWindow(prevStart: Long, prevCount: Int, now: Long): Pair<Long, Int> =
+            if (now - prevStart > RESTART_WINDOW_MS) {
+                now to 1
+            } else {
+                prevStart to prevCount + 1
+            }
 
         /**
          * Per-app-mode migration decision: the v2 key to write, or null when
