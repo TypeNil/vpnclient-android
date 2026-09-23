@@ -9,6 +9,8 @@ import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,13 +31,22 @@ class RuleSetStore @Inject constructor(
 ) {
     private val dir = File(context.filesDir, "rule_sets")
 
+    /** One mutex per tag: concurrent ensureReady calls for the same tag
+     *  serialize instead of racing a shared .tmp file. Tags come from the
+     *  RouteMode enum — the map stays bounded. */
+    private val tagLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
     /** Absolute .srs path per tag required by [mode]; downloads or
      *  revalidates as needed. Empty for modes without rule sets. */
     suspend fun ensureReady(mode: RouteMode): Map<String, String> =
         withContext(Dispatchers.IO) {
             if (mode.ruleSetTags.isEmpty()) return@withContext emptyMap()
             dir.mkdirs()
-            mode.ruleSetTags.associateWith { ensureFile(it).absolutePath }
+            mode.ruleSetTags.associateWith { tag ->
+                tagLocks.getOrPut(tag) { Mutex() }.withLock {
+                    ensureFile(tag).absolutePath
+                }
+            }
         }
 
     private fun ensureFile(tag: String): File {
@@ -58,16 +69,21 @@ class RuleSetStore @Inject constructor(
         val request = Request.Builder().url(urlFor(tag)).build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-            val tmp = File(dir, "$tag.srs.tmp")
-            response.body!!.byteStream().use { input ->
-                tmp.outputStream().use { input.copyTo(it) }
-            }
-            // renameTo is unreliable across Windows/Android edge cases.
-            if (!tmp.renameTo(target)) {
-                tmp.copyTo(target, overwrite = true)
+            // Unique temp per download — even if the tag lock were bypassed,
+            // two writers can never interleave into one file.
+            val tmp = File.createTempFile("$tag-", ".srs.tmp", dir)
+            try {
+                response.body!!.byteStream().use { input ->
+                    tmp.outputStream().use { input.copyTo(it) }
+                }
+                // renameTo is unreliable across Windows/Android edge cases.
+                if (!tmp.renameTo(target)) {
+                    tmp.copyTo(target, overwrite = true)
+                }
+                target.setLastModified(System.currentTimeMillis())
+            } finally {
                 tmp.delete()
             }
-            target.setLastModified(System.currentTimeMillis())
         }
     }
 

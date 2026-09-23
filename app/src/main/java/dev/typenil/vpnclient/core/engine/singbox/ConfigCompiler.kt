@@ -158,6 +158,10 @@ class ConfigCompiler @Inject constructor() {
                 }
                 put("final", if (routeMode == RouteMode.PROXY_BLOCKED) "local" else "remote")
                 put("strategy", if (ipv6Enabled) "prefer_ipv4" else "ipv4_only")
+                // IP→domain map so rule sets can match connections dialed by
+                // bare IP — non-sniffable traffic (MTProto, ECH) otherwise
+                // falls through to `final` and leaks past the proxy rules.
+                put("reverse_mapping", true)
             }
             putJsonArray("inbounds") {
                 addJsonObject {

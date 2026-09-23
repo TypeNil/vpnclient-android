@@ -330,4 +330,17 @@ class ConfigCompilerTest {
             .jsonObject["dns"]!!.jsonObject["rules"]!!.jsonArray.single().jsonObject
         assertEquals("ipv4_only", dnsRule["strategy"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun `dns reverse mapping lets rule sets match bare-IP connections`() {
+        // Without reverse_mapping a resolved-IP dial (MTProto, ECH — nothing
+        // to sniff) can't hit the geosite rules and falls through to direct.
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED,
+            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
+        )
+        val dns = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject
+        assertEquals(true, dns["reverse_mapping"]!!.jsonPrimitive.boolean)
+    }
 }

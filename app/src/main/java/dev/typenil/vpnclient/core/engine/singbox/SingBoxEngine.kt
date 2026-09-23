@@ -84,6 +84,10 @@ class SingBoxEngine(
     private val localDnsResolver = LocalDnsResolver(networkMonitor)
 
     private var commandServer: CommandServer? = null
+
+    /** Published under [clientMutex]; read lock-free on IO threads by the
+     *  control calls (selectOutbound/urlTest/closeConnection). */
+    @Volatile
     private var commandClient: CommandClient? = null
 
     /**
@@ -155,16 +159,49 @@ class SingBoxEngine(
                 filterState(Libbox.ConnectionStateActive.toInt())
             }
             _connections.value = emptyList()
-            connectClient()
+            // Invalidate anything a previous session left in flight, then
+            // start a fresh client — a restart must not inherit a channel
+            // bound to the old CommandServer.
+            val staleClient = clientMutex.withLock {
+                updatesWanted = true
+                val stale = invalidateClientLocked()
+                connectClientLocked()
+                stale
+            }
+            staleClient?.let { runCatching { it.disconnect() } }
             _events.emit(EngineEvent.Started)
         }
     }
 
+    /**
+     * CommandClient lifecycle is serialized on [clientMutex]: [clientEpoch]
+     * is bumped on every disable/stop so a connect() that returns after its
+     * job was cancelled can never publish — the stale client is disconnected
+     * instead. [updatesWanted] is the screen-off suppression flag.
+     */
+    private val clientMutex = Mutex()
+    private var clientEpoch = 0L
+    private var updatesWanted = false
     private var clientJob: Job? = null
 
-    private fun connectClient() {
-        // A retry loop may still be in flight — don't stack a second client.
-        if (clientJob?.isActive == true) return
+    /** Caller must hold [clientMutex]. Returns the dropped client so the
+     *  caller can disconnect it outside the lock. */
+    private fun invalidateClientLocked(): CommandClient? {
+        clientEpoch++
+        clientJob?.cancel()
+        clientJob = null
+        val client = commandClient
+        commandClient = null
+        return client
+    }
+
+    /** Caller must hold [clientMutex]. Idempotent: a live client or an
+     *  in-flight connect loop is left alone. */
+    private fun connectClientLocked() {
+        if (!updatesWanted || closing || commandServer == null) return
+        // A live client or an in-flight retry loop — don't stack a second.
+        if (commandClient != null || clientJob?.isActive == true) return
+        val epoch = clientEpoch
         val options = CommandClientOptions().apply {
             addCommand(Libbox.CommandStatus)
             addCommand(Libbox.CommandGroup)
@@ -177,11 +214,42 @@ class SingBoxEngine(
                 attempt++
                 // Fresh client per attempt — a failed connect() can leave the
                 // instance in a state libbox won't recover.
-                val client = CommandClient(ClientHandler(), options)
+                val handler = ClientHandler()
+                val client = CommandClient(handler, options)
+                handler.client = client
                 try {
                     client.connect()
-                    commandClient = client
+                    // connect() may outlive a cancel/disable — publish only
+                    // if this epoch is still current, updates are still
+                    // wanted, the server is alive, and the channel didn't
+                    // die while we were blocked in connect().
+                    val publish = try {
+                        clientMutex.withLock {
+                            if (epoch == clientEpoch && updatesWanted && !closing &&
+                                commandServer != null && !handler.dropped
+                            ) {
+                                commandClient = client
+                                true
+                            } else {
+                                // The channel died before it could publish —
+                                // reschedule instead of dropping the event.
+                                if (handler.dropped && epoch == clientEpoch &&
+                                    updatesWanted && !closing && commandServer != null
+                                ) {
+                                    clientJob = null
+                                    connectClientLocked()
+                                }
+                                false
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        runCatching { client.disconnect() }
+                        throw e
+                    }
+                    if (!publish) runCatching { client.disconnect() }
                     return@launch
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     if (attempt >= COMMAND_CONNECT_MAX_ATTEMPTS) {
                         // Bounded retry: the tunnel works without the control
@@ -204,19 +272,22 @@ class SingBoxEngine(
     /**
      * Screen-off suppression (SFA pattern): disconnecting the client stops
      * the core's status pushes at the source — no 1 Hz stats churn while
-     * nobody is looking. Reconnects on screen-on via the same bounded retry.
+     * nobody is looking. Control calls (selectOutbound/urlTest) fail while
+     * the channel is down — fine, they're UI-driven and the screen is off.
      */
     override suspend fun setStatusUpdatesEnabled(enabled: Boolean) {
         withContext(Dispatchers.IO) {
-            if (enabled) {
-                connectClient()
-            } else {
-                clientJob?.cancel()
-                clientJob = null
-                val client = commandClient
-                commandClient = null
-                client?.let { runCatching { it.disconnect() } }
+            SecureLog.d(TAG, "status updates enabled=$enabled")
+            val stale = clientMutex.withLock {
+                updatesWanted = enabled
+                if (enabled) {
+                    connectClientLocked()
+                    null
+                } else {
+                    invalidateClientLocked()
+                }
             }
+            stale?.let { runCatching { it.disconnect() } }
         }
     }
 
@@ -227,10 +298,10 @@ class SingBoxEngine(
             // close the server must not surface as StoppedUnexpectedly.
             closing = true
             commandServer = null
-            val client = commandClient
-            clientJob?.cancel()
-            clientJob = null
-            commandClient = null
+            val client = clientMutex.withLock {
+                updatesWanted = false
+                invalidateClientLocked()
+            }
             networkMonitor.stop()
             client?.let { runCatching { it.disconnect() } }
             runCatching { server.closeService() }
@@ -318,10 +389,34 @@ class SingBoxEngine(
     // region CommandClientHandler
 
     private inner class ClientHandler : CommandClientHandler {
+        /** The client this handler is bound to — set before connect() so
+         *  callbacks can be matched against the published client. Read on
+         *  libbox binder threads. */
+        @Volatile
+        var client: CommandClient? = null
+
+        /** Set when the channel drops — a client that ever disconnected is
+         *  dead to us even if connect() returns afterwards. */
+        @Volatile
+        var dropped = false
+
         override fun connected() = Unit
 
         override fun disconnected(message: String?) {
             SecureLog.d(TAG, "command client disconnected: ${Redactor.redact(message)}")
+            dropped = true
+            val dead = client ?: return
+            // Binder thread — the client state is mutex-guarded, so the
+            // identity check and the reconnect scheduling happen in a
+            // coroutine. Callbacks from stale clients (already replaced or
+            // deliberately dropped) are ignored.
+            scope.launch {
+                clientMutex.withLock {
+                    if (commandClient !== dead) return@withLock
+                    commandClient = null
+                    connectClientLocked()
+                }
+            }
         }
 
         override fun writeStatus(message: StatusMessage) {

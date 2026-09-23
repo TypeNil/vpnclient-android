@@ -16,6 +16,7 @@ import java.net.InterfaceAddress
 import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -57,7 +58,9 @@ class NetworkMonitor(
 
     fun start() {
         if (callback != null) return
-        defaultNetwork = physicalNetwork(connectivity.activeNetwork)
+        synchronized(pushLock) {
+            defaultNetwork = physicalNetwork(connectivity.activeNetwork)
+        }
         val cb = object : ConnectivityManager.NetworkCallback() {
             // NOT_VPN-scoped request: the tunnel's own network never fires
             // these callbacks, so the core can't be pushed onto itself.
@@ -74,8 +77,13 @@ class NetworkMonitor(
 
             private fun recompute() {
                 val physical = physicalNetwork(connectivity.activeNetwork)
-                if (physical == defaultNetwork) return
-                defaultNetwork = physical
+                // defaultNetwork writes share pushLock with the publish
+                // check in pushDefaultInterface — a stale retry can never
+                // win the race against a handover.
+                synchronized(pushLock) {
+                    if (physical == defaultNetwork) return
+                    defaultNetwork = physical
+                }
                 pushDefaultInterface(physical)
             }
         }
@@ -93,45 +101,70 @@ class NetworkMonitor(
     fun stop() {
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
-        defaultNetwork = null
-        listener = null
-        lastPushedInterface = null
+        synchronized(pushLock) {
+            pushJob?.cancel()
+            pushJob = null
+            defaultNetwork = null
+            listener = null
+            lastPushedInterface = null
+        }
     }
 
     /** Core calls this to (un)register its default-interface listener. */
     fun setListener(newListener: InterfaceUpdateListener?) {
-        listener = newListener
+        synchronized(pushLock) { listener = newListener }
         pushDefaultInterface(defaultNetwork)
     }
+
+    /**
+     * Serializes pushes: every [pushDefaultInterface] call supersedes the
+     * previous retry loop, and the publish check shares this lock with the
+     * [defaultNetwork]/[listener] writes — a delayed LinkProperties retry
+     * can never overwrite a newer default interface.
+     */
+    private val pushLock = Any()
+    private var pushJob: Job? = null
 
     @Volatile
     private var lastPushedInterface: String? = null
 
     private fun pushDefaultInterface(network: Network?) {
-        val target = listener ?: return
-        if (network == null) {
-            if (lastPushedInterface != null) {
-                lastPushedInterface = null
-                target.updateDefaultInterface("", -1, false, false)
-            }
-            return
-        }
-        // LinkProperties may lag behind the callback; retry briefly like SFA.
-        scope.launch(Dispatchers.IO) {
-            repeat(10) {
-                // Re-read the listener — stop() may have detached it while we slept.
-                val current = listener ?: return@launch
-                val interfaceName = connectivity.getLinkProperties(network)?.interfaceName
-                val index = interfaceName
-                    ?.let { runCatching { NetworkInterface.getByName(it)?.index }.getOrNull() }
-                if (interfaceName != null && index != null) {
-                    if (interfaceName != lastPushedInterface) {
-                        lastPushedInterface = interfaceName
-                        current.updateDefaultInterface(interfaceName, index, false, false)
-                    }
-                    return@launch
+        // Cancel + launch + track atomically — a concurrent push can never
+        // leave an untracked retry loop behind.
+        synchronized(pushLock) {
+            val target = listener ?: return
+            if (network == null) {
+                if (lastPushedInterface != null) {
+                    lastPushedInterface = null
+                    target.updateDefaultInterface("", -1, false, false)
                 }
-                kotlinx.coroutines.delay(100)
+                return
+            }
+            // LinkProperties may lag behind the callback; retry briefly like
+            // SFA. Handovers can queue pushes — only the newest matters, so
+            // each call supersedes the previous retry loop.
+            pushJob = scope.launch(Dispatchers.IO) {
+                repeat(10) {
+                    // Bail early if a handover already superseded this push.
+                    if (network != defaultNetwork) return@launch
+                    val interfaceName = connectivity.getLinkProperties(network)?.interfaceName
+                    val index = interfaceName
+                        ?.let { runCatching { NetworkInterface.getByName(it)?.index }.getOrNull() }
+                    if (interfaceName != null && index != null) {
+                        synchronized(pushLock) {
+                            // Re-verify under the lock: the captured network
+                            // must still be the default and the listener live.
+                            val live = listener ?: return@launch
+                            if (network != defaultNetwork) return@launch
+                            if (interfaceName != lastPushedInterface) {
+                                lastPushedInterface = interfaceName
+                                live.updateDefaultInterface(interfaceName, index, false, false)
+                            }
+                        }
+                        return@launch
+                    }
+                    kotlinx.coroutines.delay(100)
+                }
             }
         }
     }

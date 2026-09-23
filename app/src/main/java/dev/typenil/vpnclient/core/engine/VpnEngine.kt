@@ -118,9 +118,10 @@ interface VpnEngine {
     /**
      * Screen-on/off hint: false disconnects the status channel (stats,
      * groups, connections stop flowing) to save battery while the screen is
-     * off; true reconnects it. Control calls (selectOutbound, urlTest) are
-     * unaffected — they re-dial on demand. Default no-op for engines without
-     * a status channel.
+     * off; true reconnects it. Control calls (selectOutbound, urlTest,
+     * closeConnection) fail while the channel is down — acceptable since
+     * they're UI-driven and the screen is off. Default no-op for engines
+     * without a status channel.
      */
     suspend fun setStatusUpdatesEnabled(enabled: Boolean) = Unit
 
