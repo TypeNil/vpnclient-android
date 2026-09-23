@@ -156,7 +156,7 @@ fun VpnApp(
                     )
                 }
                 composable(Routes.SERVERS) {
-                    ServersScreen(snackbarHostState = snackbarHostState)
+                    ServersScreen()
                 }
                 composable(Routes.SUBSCRIPTIONS) { entry ->
                     // A QR result arrives via the back-stack entry's
@@ -183,6 +183,7 @@ fun VpnApp(
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                        snackbarHostState = snackbarHostState,
                     )
                 }
                 composable(Routes.APP_FILTER) {

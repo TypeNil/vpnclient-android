@@ -119,10 +119,20 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   flips state to `Connected`; stats may only mutate a `Connected` payload —
   telemetry never creates or resurrects lifecycle state.
 - Live outbound control: `ConnectionManager.groups` mirrors the engine's
-  outbound groups (generation-guarded, cleared on detach); `selectOutbound`
-  switches the `proxy` selector without reconnecting, `urlTest` refreshes
-  per-node delays shown in the server list. Selection resolves to the first
-  selectable group containing the node tag.
+  outbound groups (generation-guarded, cleared on detach). The persisted
+  `selectedNodeId` is the desired outbound: the manager reconciles it into
+  the live engine on every selection change and every engine attach (a
+  rebuilt tunnel starts on its compiled default, so the pick is re-applied).
+  A successful `selectOutbound` updates the session node shown by the UI;
+  when the engine can't honor it (control channel down, tag missing) the
+  manager reconnects so the pick compiles in as the selector default.
+- Latency: `urlTest` runs through each node's own outbound over the real
+  underlay — the app's package is always disallowed on the TUN, so neither
+  the engine's probes nor the disconnected-mode `LatencyProbe` (direct TCP
+  connect to `server:port`) ever measure through the tunnel itself.
+  Settings baked into the config at compile time (`routeMode`,
+  `ipv6Enabled`) prompt a reconnect when changed on a live tunnel; per-app
+  policy rebuilds the TUN in-session instead.
 - Disconnect: notification action / UI → `disconnect` intent → `engine.stop()` →
   `closeTun` → `stopSelf` → `onServiceStopped(gen)` → `Idle`.
 - Unexpected engine termination (`Failed` / `StoppedUnexpectedly`) is recorded,

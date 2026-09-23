@@ -22,10 +22,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,10 +56,22 @@ private const val CORE_VERSION = "sing-box libbox 1.14.1"
 @Composable
 fun SettingsScreen(
     onOpenAppFilter: () -> Unit,
+    snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.promptReconnect.collect {
+            val result = snackbarHostState.showSnackbar(
+                message = "Reconnect the VPN to apply the new settings",
+                actionLabel = "Reconnect",
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.reconnect()
+        }
+    }
+
 
     Column(
         modifier = modifier
