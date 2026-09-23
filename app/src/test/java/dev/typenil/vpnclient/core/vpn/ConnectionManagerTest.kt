@@ -62,9 +62,21 @@ class ConnectionManagerTest {
     ) : ServiceControl {
         var connectStarts = 0
         var disconnectStarts = 0
+        /** When set, startDisconnectService throws — simulates a service
+         *  unreachable under background-start restrictions. */
+        var disconnectFailure: RuntimeException? = null
+        var stopServiceCalls = 0
+        var stopServiceResult = false
         override fun prepareVpn(): Intent? = permissionIntent
         override fun startConnectService() { connectStarts++ }
-        override fun startDisconnectService() { disconnectStarts++ }
+        override fun startDisconnectService() {
+            disconnectStarts++
+            disconnectFailure?.let { throw it }
+        }
+        override fun stopVpnService(): Boolean {
+            stopServiceCalls++
+            return stopServiceResult
+        }
     }
 
     private class FakeNodeConfigProvider(
@@ -261,6 +273,68 @@ class ConnectionManagerTest {
         manager.onServiceStopped(generation)
         assertTrue(manager.state.value is VpnConnectionState.Error)
     }
+
+
+    @Test
+    fun `undeliverable disconnect intent converges to Error without wedging`() =
+        testScope.runTest {
+            connectToRunning()
+            serviceControl.disconnectFailure = RuntimeException("background start blocked")
+
+            engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+            runCurrent()
+
+            // One retry, then the machine converges: the service is
+            // unreachable, so no onServiceStopped will ever arrive — Error
+            // is published immediately instead of waiting out the settle
+            // window with a live tunnel.
+            assertEquals(2, serviceControl.disconnectStarts)
+            assertEquals(1, serviceControl.stopServiceCalls)
+            val state = manager.state.value
+            assertTrue(state is VpnConnectionState.Error)
+            assertTrue((state as VpnConnectionState.Error).error is VpnError.EngineFailed)
+
+            // teardownRequested was cleared — a later connect isn't blocked
+            // by a teardown that never happened.
+            serviceControl.disconnectFailure = null
+            manager.connect()
+            advanceUntilIdle()
+            assertEquals(2, serviceControl.connectStarts)
+            assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        }
+
+    @Test
+    fun `exhausted budget settle timeout publishes the parked error`() =
+        testScope.runTest {
+            var generation = connectToRunning()
+            repeat(ConnectionManager.MAX_FAILURE_RECONNECTS) {
+                engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+                runCurrent()
+                assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+                manager.onServiceStopped(generation)
+                advanceTimeBy(17_000) // covers the largest backoff step (16s)
+                runCurrent()
+                val gen = manager.pendingSession!!.generation
+                engine = FakeEngine()
+                manager.attachEngine(engine, gen)
+                runCurrent()
+                manager.onServiceStarted(gen)
+                generation = gen
+            }
+            // One failure past the budget — teardown requested, but the
+            // service never reports stopped. The watchdog must publish the
+            // parked terminal error instead of sitting in Reconnecting.
+            engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+            runCurrent()
+            assertEquals(6, serviceControl.disconnectStarts)
+            assertFalse(manager.state.value is VpnConnectionState.Error)
+
+            advanceTimeBy(ConnectionManager.RECONNECT_SETTLE_MS + 1)
+            runCurrent()
+            val state = manager.state.value
+            assertTrue(state is VpnConnectionState.Error)
+            assertTrue((state as VpnConnectionState.Error).error is VpnError.EngineFailed)
+        }
 
     @Test
     fun `network recovery during failure reconnect does not fake Connected`() =

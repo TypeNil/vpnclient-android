@@ -21,6 +21,7 @@ class SessionOwnershipGuardTest {
                 startActive = false,
                 rebuildActive = false,
                 stopRequested = false,
+                autoStartActive = false,
             ),
         )
     }
@@ -33,6 +34,7 @@ class SessionOwnershipGuardTest {
                 startActive = false,
                 rebuildActive = false,
                 stopRequested = false,
+                autoStartActive = false,
             ),
         )
     }
@@ -47,6 +49,7 @@ class SessionOwnershipGuardTest {
                 startActive = false,
                 rebuildActive = true,
                 stopRequested = false,
+                autoStartActive = false,
             ),
         )
     }
@@ -59,6 +62,7 @@ class SessionOwnershipGuardTest {
                 startActive = true,
                 rebuildActive = false,
                 stopRequested = false,
+                autoStartActive = false,
             ),
         )
     }
@@ -73,6 +77,23 @@ class SessionOwnershipGuardTest {
                 startActive = false,
                 rebuildActive = false,
                 stopRequested = true,
+                autoStartActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `in-flight automatic start coalesces duplicates`() {
+        // The first automatic start is suspended on its DataStore reads —
+        // no generation/startJob exists yet. A second automatic start must
+        // coalesce into it instead of consuming another restart-guard slot.
+        assertTrue(
+            ClientVpnService.sessionOwned(
+                activeGeneration = -1L,
+                startActive = false,
+                rebuildActive = false,
+                stopRequested = false,
+                autoStartActive = true,
             ),
         )
     }

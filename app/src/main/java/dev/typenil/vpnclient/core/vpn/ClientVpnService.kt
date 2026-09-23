@@ -44,6 +44,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The app's [VpnService]. Owns the TUN fd lifecycle and the foreground
@@ -80,6 +81,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
          *  (each cycle self-resets the counter); acceptable because that
          *  scenario degrades to a flaky-but-working tunnel, not a dead loop. */
         private const val RESTART_GUARD_STABLE_MS = 60_000L
+        /** Bound on a graceful engine stop during teardown — a hung core
+         *  must not wedge the state machine; on expiry the service forces
+         *  cleanup and reports stopped itself. */
+        private const val ENGINE_STOP_TIMEOUT_MS = 10_000L
 
         /**
          * Whether an automatic/system start must be ignored because this
@@ -87,14 +92,20 @@ class ClientVpnService : VpnService(), EnginePlatform {
          * deliberately absent — during a rebuild the engine slot is null
          * while the generation is still owned, and during teardown
          * [stopRequested] covers the gap before `engine` is cleared.
+         * `autoStartActive` covers the window where an earlier automatic
+         * start is still suspended on its DataStore reads — a second
+         * automatic start must coalesce into it, not consume another
+         * restart-guard attempt.
          */
         internal fun sessionOwned(
             activeGeneration: Long,
             startActive: Boolean,
             rebuildActive: Boolean,
             stopRequested: Boolean,
+            autoStartActive: Boolean,
         ): Boolean =
-            activeGeneration >= 0 || startActive || rebuildActive || stopRequested
+            activeGeneration >= 0 || startActive || rebuildActive ||
+                stopRequested || autoStartActive
 
         fun connectIntent(context: Context): Intent =
             Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
@@ -176,6 +187,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var destroyed = false
     /** Single-flight guard: only one start coroutine may be in flight. */
     private var startJob: Job? = null
+    /** Single-flight guard for the automatic (system/boot/restore) start
+     *  coroutine — tracked so a newer command can cancel it and a duplicate
+     *  automatic start coalesces instead of burning a restart-guard slot. */
+    private var autoStartJob: Job? = null
     /** Coalesced network-change notification to the engine. Main-thread only —
      *  the ConnectivityManager callback is registered on the main Handler. */
     private var networkNotifyJob: Job? = null
@@ -327,20 +342,25 @@ class ClientVpnService : VpnService(), EnginePlatform {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
+                // An explicit command supersedes any in-flight automatic
+                // start — kill it so it can't stopSelf() the new session or
+                // resurrect a tunnel after it.
+                autoStartJob?.cancel()
                 // User asked for the tunnel — remember it across process
                 // death. The explicit tap also clears the restart guard: a
                 // tripped guard is about *automatic* starts, not the user
                 // asking again.
                 scope.launch {
                     // Flag first — a failed guard reset must not drop it.
-                    settings.setDesiredVpnRunning(true)
+                    persistSetting { settings.setDesiredVpnRunning(true) }
                     runCatching { settings.resetVpnRestartAttempts() }
                 }
                 startTunnel()
                 return START_STICKY
             }
             ACTION_DISCONNECT -> {
-                scope.launch { settings.setDesiredVpnRunning(false) }
+                autoStartJob?.cancel()
+                scope.launch { persistSetting { settings.setDesiredVpnRunning(false) } }
                 stopTunnel()
                 return START_NOT_STICKY
             }
@@ -353,13 +373,17 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // while activeGeneration is still valid, and during teardown
                 // stopRequested is set — a stray start in either window would
                 // otherwise race startTunnel into cleanup()/stopSelf() or
-                // resurrect the tunnel mid-stop.
+                // resurrect the tunnel mid-stop. autoStartJob covers the
+                // DataStore-read window: a second automatic start while one
+                // is in flight coalesces into it instead of consuming
+                // another restart-guard attempt.
                 if (
                     sessionOwned(
                         activeGeneration = activeGeneration,
                         startActive = startJob?.isActive == true,
                         rebuildActive = rebuildJob?.isActive == true,
                         stopRequested = stopRequested,
+                        autoStartActive = autoStartJob?.isActive == true,
                     )
                 ) {
                     return START_STICKY
@@ -379,17 +403,24 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // crash never reaches a catch block, so without the guard a
                 // crash-on-start would loop forever:
                 // crash → START_STICKY restart → startTunnel → crash → …
-                scope.launch {
+                //
+                // The coroutine suspends on DataStore reads, so ownership is
+                // re-validated after every suspension point and before
+                // startTunnel()/stopSelf() — a CONNECT/DISCONNECT arriving
+                // mid-flight must never see this stale work stop or
+                // resurrect its session.
+                autoStartJob = scope.launch {
                     val wanted = runCatching { settings.desiredVpnRunning.first() }
                         .getOrDefault(false)
                     if (!wanted) {
-                        stopSelf()
+                        if (!autoStartLostOwnership()) stopSelf()
                         return@launch
                     }
                     // Fail-open on a DataStore read error: the guard is a
                     // safety net, a broken read must not block reconnects.
                     val allowed = runCatching { settings.registerVpnRestartAttempt() }
                         .getOrDefault(true)
+                    if (autoStartLostOwnership()) return@launch
                     if (allowed) {
                         SecureLog.i(TAG, "rebuilding tunnel after service restart")
                         startTunnel()
@@ -409,11 +440,40 @@ class ClientVpnService : VpnService(), EnginePlatform {
                                 text = getString(R.string.notification_restart_guard_text),
                             )
                         }
-                        stopSelf()
+                        if (!autoStartLostOwnership()) stopSelf()
                     }
                 }
                 return START_STICKY
             }
+        }
+    }
+
+    /**
+     * Re-validation for the automatic-start coroutine after a suspension
+     * point: true when a newer command took ownership while it was suspended
+     * (a session appeared, a start/rebuild is in flight, teardown was
+     * requested, or the instance is being destroyed). The coroutine must
+     * bail without calling startTunnel()/stopSelf() — those belong to the
+     * new owner. `engine` is checked here (unlike [sessionOwned]) because
+     * no rebuild can be in flight before a session exists.
+     */
+    private fun autoStartLostOwnership(): Boolean =
+        destroyed || stopRequested || activeGeneration >= 0 ||
+            engine != null || startJob?.isActive == true ||
+            rebuildJob?.isActive == true
+
+    /**
+     * Best-effort settings write: a DataStore failure is logged, never
+     * allowed to skip mandatory lifecycle callbacks or teardown.
+     * Cancellation still propagates.
+     */
+    private suspend fun persistSetting(write: suspend () -> Unit) {
+        try {
+            write()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SecureLog.w(TAG, "settings write failed", e)
         }
     }
 
@@ -447,16 +507,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     null
                 }
             if (config == null) {
-                if (session != null) {
-                    connectionManager.onServiceFailed(
-                        VpnError.NoNodeSelected, session.generation,
-                    )
-                } else {
-                    // Rebuild with nothing usable — don't loop on it.
-                    settings.setDesiredVpnRunning(false)
+                try {
+                    if (session != null) {
+                        connectionManager.onServiceFailed(
+                            VpnError.NoNodeSelected, session.generation,
+                        )
+                    } else {
+                        // Rebuild with nothing usable — don't loop on it.
+                        persistSetting { settings.setDesiredVpnRunning(false) }
+                    }
+                } finally {
+                    cleanup()
+                    stopSelf()
                 }
-                cleanup()
-                stopSelf()
                 return@launch
             }
             if (stopRequested || destroyed) {
@@ -560,25 +623,29 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // engine; its cleanup/notification/state belong to the owner.
                 return false
             }
-            cleanup()
-            // A start failure must not become a restart loop: clear the
-            // desire flag so a STICKY restart doesn't retry forever.
-            settings.setDesiredVpnRunning(false)
-            if (stopRequested) {
-                // A disconnect raced the failure — converge to stopped,
-                // not a spurious error over the user's Idle.
-                connectionManager.onServiceStopped(generation)
-            } else {
-                connectionManager.onServiceFailed(
-                    if (e is dev.typenil.vpnclient.core.engine.EngineError) {
-                        VpnError.fromEngine(e)
-                    } else {
-                        VpnError.Unexpected(e.message ?: "engine start failed")
-                    },
-                    generation,
-                )
+            try {
+                cleanup()
+                if (stopRequested) {
+                    // A disconnect raced the failure — converge to stopped,
+                    // not a spurious error over the user's Idle.
+                    connectionManager.onServiceStopped(generation)
+                } else {
+                    connectionManager.onServiceFailed(
+                        if (e is dev.typenil.vpnclient.core.engine.EngineError) {
+                            VpnError.fromEngine(e)
+                        } else {
+                            VpnError.Unexpected(e.message ?: "engine start failed")
+                        },
+                        generation,
+                    )
+                }
+                stopSelf()
+            } finally {
+                // A start failure must not become a restart loop: clear the
+                // desire flag so a STICKY restart doesn't retry forever.
+                // Best-effort — a DataStore failure must not skip teardown.
+                persistSetting { settings.setDesiredVpnRunning(false) }
             }
-            stopSelf()
             return false
         }
     }
@@ -673,6 +740,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     private fun stopTunnel() {
         stopRequested = true
+        // A suspended automatic start must not resurrect the tunnel or
+        // stopSelf() past this teardown.
+        autoStartJob?.cancel()
         // A queued/in-flight rebuild would converge via the generation
         // guards anyway — cancelling just skips a pointless stop→start.
         rebuildJob?.cancel()
@@ -695,10 +765,26 @@ class ClientVpnService : VpnService(), EnginePlatform {
         }
         if (current != null) pendingTeardown.add(current)
         scope.launch {
-            try {
-                runCatching { current?.stop() }
-            } finally {
-                pendingTeardown.remove(current)
+            // The engine leaves pendingTeardown only when stop() actually
+            // returns — even past the timeout below — so onDestroy's drain
+            // can't miss an engine whose stop is still in flight.
+            val stopping = current?.let { eng ->
+                scope.launch {
+                    try {
+                        runCatching { eng.stop() }
+                    } finally {
+                        pendingTeardown.remove(eng)
+                    }
+                }
+            }
+            // Bounded: a hung engine stop must not wedge the state machine —
+            // on timeout we force cleanup and report stopped ourselves.
+            val settled = withTimeoutOrNull(ENGINE_STOP_TIMEOUT_MS) {
+                stopping?.join()
+                true
+            }
+            if (settled == null) {
+                SecureLog.w(TAG, "engine stop timed out — forcing teardown")
             }
             cleanup()
             // Generation-guarded: a stale teardown can't detach a newer
@@ -769,21 +855,27 @@ class ClientVpnService : VpnService(), EnginePlatform {
     override fun onRevoke() {
         SecureLog.w(TAG, "vpn permission revoked")
         stopRequested = true
+        autoStartJob?.cancel()
         val current = engine
         engine = null
         val generation = activeGeneration
         activeGeneration = -1L
         if (current != null) pendingTeardown.add(current)
         scope.launch {
-            settings.setDesiredVpnRunning(false)
             try {
-                runCatching { current?.stop() }
+                persistSetting { settings.setDesiredVpnRunning(false) }
             } finally {
-                pendingTeardown.remove(current)
+                // The manager callback, engine drain, and service stop are
+                // mandatory — a failed flag write must not skip them.
+                try {
+                    runCatching { current?.stop() }
+                } finally {
+                    pendingTeardown.remove(current)
+                }
+                connectionManager.onServiceRevoked(generation)
+                cleanup()
+                stopSelf()
             }
-            connectionManager.onServiceRevoked(generation)
-            cleanup()
-            stopSelf()
         }
     }
 

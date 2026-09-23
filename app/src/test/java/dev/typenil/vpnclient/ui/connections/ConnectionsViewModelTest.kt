@@ -58,6 +58,7 @@ class ConnectionsViewModelTest {
         override fun prepareVpn(): Intent? = null
         override fun startConnectService() = Unit
         override fun startDisconnectService() = Unit
+        override fun stopVpnService(): Boolean = false
     }
 
     private class FakeNodeConfigProvider(

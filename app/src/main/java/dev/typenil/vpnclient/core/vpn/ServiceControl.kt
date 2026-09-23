@@ -22,6 +22,9 @@ interface ServiceControl {
 
     /** Plain `startService` with the disconnect action (teardown request). */
     fun startDisconnectService()
+
+    /** Last-resort physical stop when the disconnect command can't start. */
+    fun stopVpnService(): Boolean
 }
 
 @Singleton
@@ -38,4 +41,7 @@ class AndroidServiceControl @Inject constructor(
     override fun startDisconnectService() {
         context.startService(ClientVpnService.disconnectIntent(context))
     }
+
+    override fun stopVpnService(): Boolean =
+        context.stopService(Intent(context, ClientVpnService::class.java))
 }

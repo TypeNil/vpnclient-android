@@ -557,27 +557,67 @@ class ConnectionManager @Inject constructor(
                                     node, "core failure", attempt,
                                 ),
                             )
-                            if (!teardownRequested) {
-                                teardownRequested = true
-                                // startService can throw under background-start
-                                // restrictions — the state machine must survive it.
-                                runCatching { serviceControl.startDisconnectService() }
-                                    .onFailure {
-                                        SecureLog.w(TAG, "disconnect intent failed")
-                                    }
+                            if (!requestServiceTeardown()) {
+                                // The service is unreachable — no
+                                // onServiceStopped will ever arrive, so the
+                                // settle wait would publish Error while the
+                                // tunnel is still up. Error now is honest;
+                                // teardownRequested is cleared so a later
+                                // connect isn't blocked.
+                                detachEngine()
+                                publish(VpnConnectionState.Error(error, sessionNode))
+                                return@withLock
                             }
                             scheduleFailureReconnect(attempt)
                         } else {
                             // Budget exhausted — converge to a terminal error.
                             if (pendingTerminalError == null) pendingTerminalError = error
-                            if (!teardownRequested) {
-                                teardownRequested = true
-                                // startService can throw under background-start
-                                // restrictions — the state machine must survive it.
-                                runCatching { serviceControl.startDisconnectService() }
-                                    .onFailure {
-                                        SecureLog.w(TAG, "disconnect intent failed")
+                            if (!requestServiceTeardown()) {
+                                // Unreachable service: no onServiceStopped
+                                // will arrive — publish the parked error now.
+                                detachEngine()
+                                val terminal = pendingTerminalError ?: error
+                                pendingTerminalError = null
+                                publish(VpnConnectionState.Error(terminal, sessionNode))
+                                return@withLock
+                            }
+                            // Watchdog: if the service never reports
+                            // onServiceStopped (wedged teardown, unreachable
+                            // service) the state must not sit in
+                            // Reconnecting forever — the service-side stop
+                            // deadline guarantees physical convergence.
+                            failureReconnectJob?.cancel()
+                            failureReconnectJob = scope.launch {
+                                val settled = withTimeoutOrNull(RECONNECT_SETTLE_MS) {
+                                    _state.first {
+                                        it is VpnConnectionState.Idle ||
+                                            it is VpnConnectionState.Error
                                     }
+                                }
+                                if (settled == null) {
+                                    // A user disconnect cancels this job,
+                                    // but the timeout can win the race —
+                                    // never clobber Stopping/Idle/Error.
+                                    val s = _state.value
+                                    if (s !is VpnConnectionState.Connected &&
+                                        s !is VpnConnectionState.Connecting &&
+                                        s !is VpnConnectionState.Reconnecting
+                                    ) {
+                                        return@launch
+                                    }
+                                    SecureLog.w(
+                                        TAG,
+                                        "terminal teardown did not settle",
+                                    )
+                                    detachEngine()
+                                    val terminal = pendingTerminalError
+                                        ?: lastFailureError
+                                        ?: VpnError.EngineFailed("reconnect failed")
+                                    pendingTerminalError = null
+                                    publish(
+                                        VpnConnectionState.Error(terminal, sessionNode),
+                                    )
+                                }
                             }
                         }
                     }
@@ -585,6 +625,38 @@ class ConnectionManager @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Ask the service to tear down the live session. Returns false when the
+     * disconnect intent can't be delivered even after one retry — the
+     * service is unreachable and no onServiceStopped will arrive, so the
+     * caller must converge the state machine itself. [teardownRequested] is
+     * cleared on failure so a later connect isn't blocked by a teardown
+     * that never happened.
+     */
+    private fun requestServiceTeardown(): Boolean {
+        if (teardownRequested) return true
+        teardownRequested = true
+        // startService can throw under background-start restrictions —
+        // the state machine must survive it.
+        repeat(2) { attempt ->
+            try {
+                serviceControl.startDisconnectService()
+                return true
+            } catch (e: Exception) {
+                SecureLog.w(TAG, "disconnect intent failed (attempt ${attempt + 1})")
+            }
+        }
+        // A background-start restriction can reject startService even though
+        // the service is alive. Context.stopService is the physical fallback:
+        // onDestroy closes the TUN and reports onServiceStopped(generation).
+        val stopping = runCatching { serviceControl.stopVpnService() }
+            .onFailure { SecureLog.w(TAG, "stopService fallback failed") }
+            .getOrDefault(false)
+        if (stopping) return true
+        teardownRequested = false
+        return false
     }
 
     /**
