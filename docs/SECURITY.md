@@ -6,8 +6,8 @@
   `SecureLog` routes through `Redactor` which strips UUIDs, userinfo credentials,
   sensitive query params, bearer tokens and long opaque tokens.
 - **Storage:** subscription URLs and `rawUri`/outbound JSON live in Room —
-  local-only, not exported, no backup rules customized (default backup applies;
-  note for future hardening). Selected node id and HWID live in DataStore.
+  local-only, not exported; `android:allowBackup="false"` keeps them out of
+  cloud/device-transfer backups. Selected node id and HWID live in DataStore.
 - **HWID:** install-scoped random value, not a hardware identifier.
 
 ## Network surface
