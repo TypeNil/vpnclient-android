@@ -3,7 +3,7 @@ package dev.typenil.vpnclient.ui.servers
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
+import dev.typenil.vpnclient.core.common.LatencyProbe
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -11,13 +11,13 @@ import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Nodes of one subscription, under its display name. */
@@ -30,40 +30,61 @@ data class ServerGroup(
 data class ServersUiState(
     val groups: List<ServerGroup> = emptyList(),
     val selectedNodeId: String? = null,
-    val connected: Boolean = false,
     /** Outbound tag → last measured delay; feeds the latency badges. */
     val delays: Map<String, Int> = emptyMap(),
+    /** Tags a latency run has covered — distinguishes "timeout" from
+     *  "never tested" on the badge. */
+    val testedNodeIds: Set<String> = emptySet(),
 )
 
-/**
- * The group a node tag should be selected in: the first selectable group
- * that actually contains it. Falls back to null when the engine hasn't
- * reported groups yet — selection stays persisted-only until reconnect.
- */
-internal fun resolveSelectionTarget(
-    groups: List<OutboundGroupInfo>,
-    tag: String,
-): String? = groups.firstOrNull { g -> g.selectable && g.items.any { it.tag == tag } }?.tag
+/** Engine-reported surface: connection state + per-outbound delays. */
+private data class EngineSurface(
+    val connected: Boolean,
+    val delays: Map<String, Int>,
+)
+
+/** Direct-probe surface: per-node results + the tags a run has covered. */
+private data class ProbeSurface(
+    val delays: Map<String, Int>,
+    val tested: Set<String>,
+)
 
 @HiltViewModel
 class ServersViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val connectionManager: ConnectionManager,
-    nodeDao: NodeDao,
+    private val nodeDao: NodeDao,
+    private val latencyProbe: LatencyProbe,
     subscriptions: SubscriptionRepository,
 ) : ViewModel() {
 
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    /** One-shot snackbar messages. */
-    val messages: SharedFlow<String> = _messages
+    /** Direct TCP probe results — populated when testing while disconnected. */
+    private val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
+
+    private val engineSurface: StateFlow<EngineSurface> = combine(
+        connectionManager.state,
+        connectionManager.groups,
+    ) { state, groups ->
+        EngineSurface(
+            connected = state is VpnConnectionState.Connected,
+            delays = groups
+                .flatMap { it.items }
+                .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
+                .toMap(),
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = EngineSurface(connected = false, delays = emptyMap()),
+    )
 
     val uiState: StateFlow<ServersUiState> = combine(
         nodeDao.observeEnabled(),
         subscriptions.profiles,
         settings.selectedNodeId,
-        connectionManager.state,
-        connectionManager.groups,
-    ) { nodes, profiles, selectedId, state, groups ->
+        engineSurface,
+        probeSurface,
+    ) { nodes, profiles, selectedId, engine, probe ->
         val names = profiles.associate { it.id to it.name }
         val serverGroups = nodes
             .groupBy { it.subscriptionId }
@@ -77,12 +98,10 @@ class ServersViewModel @Inject constructor(
         ServersUiState(
             groups = serverGroups,
             selectedNodeId = selectedId,
-            connected = state is VpnConnectionState.Connected ||
-                state is VpnConnectionState.Reconnecting,
-            delays = groups
-                .flatMap { it.items }
-                .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
-                .toMap(),
+            // Engine urltest numbers win while connected — they measure the
+            // full proxy chain; probe results fill in the rest.
+            delays = probe.delays + engine.delays,
+            testedNodeIds = probe.tested,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -90,47 +109,57 @@ class ServersViewModel @Inject constructor(
         initialValue = ServersUiState(),
     )
 
-    /** Live outbound switch in flight — keeps the row honest while the
-     *  engine decides, and debounces double-taps. */
-    private val _switching = MutableStateFlow(false)
-    val switching: StateFlow<Boolean> = _switching
-
+    /**
+     * Persist the pick — ConnectionManager reconciles the live engine with
+     * it (live selector switch, or a reconnect when the engine can't apply
+     * it). Nothing else to do here.
+     */
     fun select(nodeId: String) {
-        viewModelScope.launch {
-            settings.setSelectedNodeId(nodeId)
-            // uiState.connected can lag a fresh connect — the manager's live
-            // state is the source of truth for "is a tunnel actually up".
-            if (connectionManager.state.value is VpnConnectionState.Connected) {
-                if (_switching.value) return@launch
-                _switching.value = true
-                try {
-                    val target = resolveSelectionTarget(
-                        connectionManager.groups.value, nodeId,
-                    )
-                    val switched = target != null &&
-                        connectionManager.selectOutbound(target, nodeId)
-                    if (!switched) {
-                        // Engine couldn't apply it live — the persisted pick
-                        // still takes effect on the next connect.
-                        _messages.tryEmit("Reconnect to apply the new server")
-                    }
-                } finally {
-                    _switching.value = false
-                }
-            }
-        }
+        viewModelScope.launch { settings.setSelectedNodeId(nodeId) }
     }
 
-    /** Trigger a latency probe across all reported groups. Connected-only:
-     *  during Reconnecting the tunnel is starved, so badges would just churn
-     *  to timeouts and mask the last real measurement. */
+    /**
+     * Latency probe. Connected: the engine's urltest measures each node
+     * through its own outbound over the real underlay (our sockets never
+     * enter the TUN). Disconnected: a direct TCP-connect probe per node —
+     * same underlay, without needing a running core.
+     */
     fun testLatency() {
-        if (connectionManager.state.value !is VpnConnectionState.Connected) return
         if (_testing.value) return
         viewModelScope.launch {
             _testing.value = true
             try {
-                connectionManager.groups.value.forEach { connectionManager.urlTest(it.tag) }
+                if (connectionManager.state.value is VpnConnectionState.Connected) {
+                    val groups = connectionManager.groups.value
+                    groups.forEach { connectionManager.urlTest(it.tag) }
+                    // Mark covered tags now — a node that stays without a
+                    // delay after the run shows "timeout" instead of "—".
+                    probeSurface.update {
+                        it.copy(
+                            tested = it.tested +
+                                groups.flatMap { g -> g.items.map { item -> item.tag } },
+                        )
+                    }
+                } else {
+                    val nodes = nodeDao.getEnabled()
+                    coroutineScope {
+                        nodes.forEach { node ->
+                            launch {
+                                val delay = latencyProbe.measure(node.server, node.port)
+                                probeSurface.update { surface ->
+                                    surface.copy(
+                                        delays = if (delay != null) {
+                                            surface.delays + (node.id to delay)
+                                        } else {
+                                            surface.delays - node.id
+                                        },
+                                        tested = surface.tested + node.id,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             } finally {
                 _testing.value = false
             }

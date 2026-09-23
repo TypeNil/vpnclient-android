@@ -22,12 +22,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,16 +38,11 @@ import dev.typenil.vpnclient.data.db.NodeEntity
 
 @Composable
 fun ServersScreen(
-    snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
     viewModel: ServersViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val testing by viewModel.testing.collectAsStateWithLifecycle()
-
-    LaunchedEffect(Unit) {
-        viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
-    }
 
     if (ui.groups.isEmpty()) {
         Box(
@@ -72,26 +65,24 @@ fun ServersScreen(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (ui.connected) {
-            item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
+        item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (testing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                TextButton(
+                    onClick = viewModel::testLatency,
+                    enabled = !testing,
                 ) {
-                    if (testing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    TextButton(
-                        onClick = viewModel::testLatency,
-                        enabled = !testing,
-                    ) {
-                        Text("Test latency")
-                    }
+                    Text("Test latency")
                 }
             }
         }
@@ -112,6 +103,7 @@ fun ServersScreen(
                     node = node,
                     selected = node.id == ui.selectedNodeId,
                     delayMs = ui.delays[node.id],
+                    tested = node.id in ui.testedNodeIds,
                     onClick = { viewModel.select(node.id) },
                 )
             }
@@ -124,6 +116,7 @@ private fun ServerCard(
     node: NodeEntity,
     selected: Boolean,
     delayMs: Int?,
+    tested: Boolean,
     onClick: () -> Unit,
 ) {
     Card(
@@ -135,6 +128,9 @@ private fun ServerCard(
                 Text(
                     text = node.name,
                     style = MaterialTheme.typography.bodyMedium,
+                    // minLines keeps every card the same height — a one-line
+                    // name must not shrink the card below its two-line peers.
+                    minLines = 2,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -153,19 +149,34 @@ private fun ServerCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ProtocolBadge(node.protocol)
                 Spacer(Modifier.weight(1f))
-                if (delayMs != null) {
-                    Text(
-                        text = "$delayMs ms",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (delayMs < 800) {
-                            MaterialTheme.colorScheme.tertiary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                }
+                LatencyBadge(delayMs = delayMs, tested = tested)
             }
         }
+    }
+}
+
+@Composable
+private fun LatencyBadge(delayMs: Int?, tested: Boolean) {
+    when {
+        delayMs != null -> Text(
+            text = "$delayMs ms",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (delayMs < 800) {
+                MaterialTheme.colorScheme.tertiary
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+        tested -> Text(
+            text = "timeout",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        else -> Text(
+            text = "—",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
