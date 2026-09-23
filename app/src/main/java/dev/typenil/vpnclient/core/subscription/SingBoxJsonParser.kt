@@ -51,20 +51,22 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
         val port = obj["server_port"]?.jsonPrimitive?.intOrNull
             ?: obj["server_port"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
             ?: 0
-        val id = stableNodeId(subscriptionId, type, server, port, "${tag.orEmpty()}$type$server$port")
         // Strip fields that reference outbounds/DNS servers we don't compile —
         // a verbatim `detour` or foreign `domain_resolver` would fail checkConfig.
+        // `tag` is dropped here too: identity is the tagless outbound, so two
+        // outbounds differing only in display tag collapse to the same id.
         val cleaned = JsonObject(
-            obj - "detour" - "domain_resolver" - "default_domain_resolver" +
-                ("tag" to JsonPrimitive(id)),
+            obj - "detour" - "domain_resolver" - "default_domain_resolver" - "tag",
         )
+        val id = stableNodeId(subscriptionId, cleaned)
+        val tagged = JsonObject(cleaned + ("tag" to JsonPrimitive(id)))
         return ProxyNode(
             id = id,
             name = tag?.takeIf { it.isNotBlank() } ?: "$server:$port",
             protocol = protocol,
             server = server,
             port = port,
-            outboundJson = cleaned.toString(),
+            outboundJson = tagged.toString(),
             rawUri = null,
             subscriptionId = subscriptionId,
         )

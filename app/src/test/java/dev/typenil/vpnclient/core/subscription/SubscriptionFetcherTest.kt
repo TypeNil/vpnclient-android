@@ -1,17 +1,24 @@
 package dev.typenil.vpnclient.core.subscription
 
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.junit.After
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 
@@ -113,5 +120,44 @@ class SubscriptionFetcherTest {
         val second = server.takeRequest()
         assertEquals(hwid, first.getHeader("x-hwid"))
         assertEquals(hwid, second.getHeader("x-hwid"))
+    }
+
+    @Test
+    fun `cancelling the coroutine aborts the in-flight call`() = runTest {
+        // The server accepts and never answers — without cancellation
+        // bridging the fetch would block until the socket timeout.
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val slowFetcher = SubscriptionFetcher(
+            OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build(),
+        )
+        val outcome = CompletableDeferred<Result<FetchedSubscription>>()
+        val job = launch(Dispatchers.IO) {
+            outcome.complete(runCatching { slowFetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true) })
+        }
+        // Wait until the request is actually in flight before cancelling.
+        assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        val start = System.nanoTime()
+        job.cancel()
+        job.join()
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        assertTrue(
+            "cancelled fetch took ${elapsedMs}ms — Call.cancel() did not abort it",
+            elapsedMs < 30_000,
+        )
+        assertTrue(outcome.await().exceptionOrNull() is CancellationException)
+    }
+
+    @Test
+    fun `whole-call deadline maps to Timeout`() = runTest {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val deadlineFetcher = SubscriptionFetcher(
+            OkHttpClient.Builder().callTimeout(1, TimeUnit.SECONDS).build(),
+        )
+        try {
+            deadlineFetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+            fail("expected SubscriptionError")
+        } catch (e: SubscriptionError) {
+            assertTrue(e is SubscriptionError.Timeout)
+        }
     }
 }

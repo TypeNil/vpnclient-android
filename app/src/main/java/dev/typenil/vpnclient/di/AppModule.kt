@@ -63,6 +63,9 @@ object AppModule {
         okhttp3.OkHttpClient.Builder()
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            // Whole-call deadline: connect+read timeouts alone let a slow
+            // trickle (or redirect chain) run forever.
+            .callTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
             .build()
 
     @Provides

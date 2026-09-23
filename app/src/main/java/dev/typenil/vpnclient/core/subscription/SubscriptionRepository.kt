@@ -78,7 +78,27 @@ class SubscriptionRepository @Inject constructor(
             updateIntervalMinutes = null,
         )
         val id = subscriptionDao.insert(entity)
-        return refresh(id).map { id }
+        val result = refresh(id)
+        if (result.isFailure) {
+            // A failed first refresh still gets a periodic job when the user
+            // pinned a fixed interval — otherwise the subscription could never
+            // recover on its own. Provider-following mode stays unscheduled:
+            // there is no interval until a success supplies one.
+            runCatching {
+                val override = settings.autoRefreshMinutes.first()
+                if (override > 0) {
+                    scheduler.schedule(
+                        subscriptionId = id,
+                        providerMinutes = null,
+                        userOverrideMinutes = override,
+                        enabled = entity.enabled,
+                    )
+                }
+            }.onFailure {
+                SecureLog.w(TAG, "post-add scheduling failed sub=$id: ${it.javaClass.simpleName}")
+            }
+        }
+        return result.map { id }
     }
 
     suspend fun refresh(id: Long): Result<Unit> = refreshMutex.withLock {
@@ -194,9 +214,15 @@ class SubscriptionRepository @Inject constructor(
         // before the row disappears, not after — otherwise node rows would be
         // re-inserted against a deleted (later reusable) subscription id.
         refreshMutex.withLock {
+            // Both deletes commit atomically — a crash between them would
+            // orphan a subscription with no nodes and no scheduled recovery.
+            // The work is cancelled only after commit so a failed delete
+            // leaves the retry job in place.
+            transactions.run {
+                nodeDao.deleteForSubscription(id)
+                subscriptionDao.delete(id)
+            }
             scheduler.cancel(id)
-            nodeDao.deleteForSubscription(id)
-            subscriptionDao.delete(id)
         }
     }
 

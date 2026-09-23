@@ -1,6 +1,6 @@
 package dev.typenil.vpnclient.core.subscription
 
-import java.net.URLDecoder
+import dev.typenil.vpnclient.core.subscription.parse.percentDecode
 
 /**
  * Maps an incoming share/deep-link intent to a subscription URL.
@@ -47,9 +47,9 @@ object ImportUrlExtractor {
                 ?: return null
         }
         val encoded = query.substring(start).substringBeforeLast("&name=")
-        return runCatching { URLDecoder.decode(encoded, "UTF-8") }
-            .getOrNull()
-            ?.takeIf { it.startsWithHttp() }
+        // percentDecode, not URLDecoder: '+' is a literal in a nested URL's
+        // query (e.g. ?token=a+b) — form semantics would corrupt it to 'a b'.
+        return percentDecode(encoded).takeIf { it.startsWithHttp() }
     }
 
     private fun String.startsWithHttp(): Boolean =

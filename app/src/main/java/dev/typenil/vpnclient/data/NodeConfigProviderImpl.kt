@@ -38,9 +38,19 @@ class NodeConfigProviderImpl @Inject constructor(
     override suspend fun compileSelected(): EngineConfig? {
         val nodes = nodeDao.getEnabled().map { it.toDomain() }
         if (nodes.isEmpty()) return null
+        // A refresh can commit a node set that no longer contains the
+        // persisted selection before its post-commit cleanup runs — clear it
+        // here so a connect in that window falls back instead of failing.
+        // The conditional clear can't wipe a selection the user just made.
+        val persisted = settings.selectedNodeId.first()
+        if (persisted != null && nodes.none { it.id == persisted }) {
+            settings.clearSelectedNodeIdIf(persisted)
+        }
         val routeMode = settings.routeMode.first()
         return compiler.compile(
             nodes = nodes,
+            // Re-read after the conditional clear: a concurrent user pick
+            // lands here, and a still-stale id keeps failing loudly.
             selectedNodeId = settings.selectedNodeId.first(),
             ipv6Enabled = settings.ipv6Enabled.first(),
             routeMode = routeMode,

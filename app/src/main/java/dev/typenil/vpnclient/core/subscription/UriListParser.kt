@@ -91,7 +91,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             maxEarlyData = p.param("ed", "maxEarlyData", "max_early_data")?.toIntOrNull(),
             earlyDataHeaderName = p.param("eh", "earlyDataHeaderName", "early_data_header_name"),
         )
-        return node(subscriptionId, "vless", ProtocolType.VLESS, link, uuid, line) { tag ->
+        return node(subscriptionId, ProtocolType.VLESS, link, line) { tag ->
             vlessOutbound(
                 tag, link.host, link.port, uuid,
                 flow = p["flow"],
@@ -133,8 +133,8 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             else -> null
         }
         return node(
-            subscriptionId, "vmess", ProtocolType.VMESS,
-            server, port, uuid, obj.str("ps"), line,
+            subscriptionId, ProtocolType.VMESS,
+            server, port, obj.str("ps"), line,
         ) { tag ->
             vmessOutbound(
                 tag, server, port, uuid,
@@ -169,7 +169,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             path = p["path"],
             serviceName = p.param("serviceName", "service_name"),
         )
-        return node(subscriptionId, "trojan", ProtocolType.TROJAN, link, password, line) { tag ->
+        return node(subscriptionId, ProtocolType.TROJAN, link, line) { tag ->
             trojanOutbound(tag, link.host, link.port, password, tls = tls, transport = transport)
         }
     }
@@ -208,8 +208,8 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val (method, password) = parseSsUserInfo(authority.substring(0, at)) ?: return null
         val (server, port) = ShareLink.splitHostPort(authority.substring(at + 1))
         return node(
-            subscriptionId, "ss", ProtocolType.SHADOWSOCKS,
-            server, port, password, fragment, line,
+            subscriptionId, ProtocolType.SHADOWSOCKS,
+            server, port, fragment, line,
         ) { tag ->
             shadowsocksOutbound(tag, server, port, method, password, plugin = plugin, pluginOpts = pluginOpts)
         }
@@ -249,8 +249,8 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         )
         val obfsPassword = if (p["obfs"] != null) p["obfs-password"].orEmpty() else null
         return node(
-            subscriptionId, "hysteria2", ProtocolType.HYSTERIA2,
-            link.host, port, password, link.fragment, line,
+            subscriptionId, ProtocolType.HYSTERIA2,
+            link.host, port, link.fragment, line,
         ) { tag ->
             hysteria2Outbound(tag, link.host, port, password, tls = tls, obfsPassword = obfsPassword)
         }
@@ -270,7 +270,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             insecure = truthyParam(p.param("allow_insecure", "allowInsecure", "insecure")),
             alpn = commaList(p["alpn"]) ?: listOf("h3"),
         )
-        return node(subscriptionId, "tuic", ProtocolType.TUIC, link, uuid, line) { tag ->
+        return node(subscriptionId, ProtocolType.TUIC, link, line) { tag ->
             tuicOutbound(
                 tag, link.host, link.port, uuid, password,
                 congestionControl = p.param("congestion_control", "congestion-controller"),
@@ -281,26 +281,29 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     private fun node(
-        subscriptionId: Long, scheme: String, protocol: ProtocolType,
-        link: ShareLink, credential: String, rawUri: String,
+        subscriptionId: Long, protocol: ProtocolType,
+        link: ShareLink, rawUri: String,
         outbound: (tag: String) -> JsonObject,
     ): ProxyNode = node(
-        subscriptionId, scheme, protocol, link.host, link.port, credential, link.fragment, rawUri, outbound,
+        subscriptionId, protocol, link.host, link.port, link.fragment, rawUri, outbound,
     )
 
     private fun node(
-        subscriptionId: Long, scheme: String, protocol: ProtocolType,
-        server: String, port: Int, credential: String, name: String?, rawUri: String,
+        subscriptionId: Long, protocol: ProtocolType,
+        server: String, port: Int, name: String?, rawUri: String,
         outbound: (tag: String) -> JsonObject,
     ): ProxyNode {
-        val id = stableNodeId(subscriptionId, scheme, server, port, credential)
+        // The tag is generated from the id, so identity must come from the
+        // tagless outbound — build once with a placeholder, hash, then stamp.
+        val template = outbound("")
+        val id = stableNodeId(subscriptionId, template)
         return ProxyNode(
             id = id,
             name = name?.takeIf { it.isNotBlank() } ?: "$server:$port",
             protocol = protocol,
             server = server,
             port = port,
-            outboundJson = outbound(id).toString(),
+            outboundJson = JsonObject(template + ("tag" to JsonPrimitive(id))).toString(),
             rawUri = rawUri,
             subscriptionId = subscriptionId,
         )

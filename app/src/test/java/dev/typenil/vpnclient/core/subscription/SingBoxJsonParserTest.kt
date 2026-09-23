@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
@@ -60,6 +61,42 @@ class SingBoxJsonParserTest {
             |"uuid":"u","password":"p"}]}""".trimMargin()
         val n = parser.parse(body, 1).single()
         assertEquals("t.example.com:10443", n.name)
+    }
+
+    @Test
+    fun `outbounds differing only in tag share an id`() {
+        val body = """{"outbounds":[
+            |{"type":"vless","tag":"one","server":"a.example.com","server_port":443,
+            |"uuid":"11111111-2222-3333-4444-555555555555"},
+            |{"type":"vless","tag":"two","server":"a.example.com","server_port":443,
+            |"uuid":"11111111-2222-3333-4444-555555555555"}
+            |]}""".trimMargin()
+        val nodes = parser.parse(body, 1)
+        assertEquals(2, nodes.size)
+        assertEquals(nodes[0].id, nodes[1].id)
+    }
+
+    @Test
+    fun `outbounds differing in transport get distinct ids`() {
+        val body = """{"outbounds":[
+            |{"type":"vless","tag":"a","server":"a.example.com","server_port":443,
+            |"uuid":"11111111-2222-3333-4444-555555555555"},
+            |{"type":"vless","tag":"b","server":"a.example.com","server_port":443,
+            |"uuid":"11111111-2222-3333-4444-555555555555",
+            |"transport":{"type":"ws","path":"/ws"}}
+            |]}""".trimMargin()
+        val nodes = parser.parse(body, 1)
+        assertEquals(2, nodes.size)
+        assertNotEquals(nodes[0].id, nodes[1].id)
+    }
+
+    @Test
+    fun `outbound key order does not perturb the id`() {
+        val a = """{"outbounds":[{"type":"vless","tag":"n","server":"a.example.com",
+            |"server_port":443,"uuid":"u","flow":"f"}]}""".trimMargin()
+        val b = """{"outbounds":[{"uuid":"u","server_port":443,"server":"a.example.com",
+            |"flow":"f","type":"vless","tag":"n"}]}""".trimMargin()
+        assertEquals(parser.parse(a, 1).single().id, parser.parse(b, 1).single().id)
     }
 
     @Test

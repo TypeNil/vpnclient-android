@@ -16,6 +16,7 @@ import dev.typenil.vpnclient.core.subscription.parse.vmessOutbound
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
@@ -53,7 +54,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
         val network = m.str("network") ?: "tcp"
         if (isUnsupportedNetwork(network)) return null
 
-        val (protocol, credential, outbound) = when (type) {
+        val (protocol, outbound) = when (type) {
             "vless" -> {
                 val uuid = m.str("uuid") ?: return null
                 val reality = m.map("reality-opts")
@@ -67,7 +68,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     realityPublicKey = reality?.str("public-key"),
                     realityShortId = reality?.str("short-id"),
                 ) else null
-                Triple(ProtocolType.VLESS, uuid) { tag: String ->
+                ProtocolType.VLESS to { tag: String ->
                     vlessOutbound(
                         tag, server, port, uuid,
                         flow = m.str("flow"),
@@ -85,7 +86,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
                 ) else null
-                Triple(ProtocolType.VMESS, uuid) { tag: String ->
+                ProtocolType.VMESS to { tag: String ->
                     vmessOutbound(
                         tag, server, port, uuid,
                         security = m.str("cipher"),
@@ -104,14 +105,14 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
                 )
-                Triple(ProtocolType.TROJAN, password) { tag: String ->
+                ProtocolType.TROJAN to { tag: String ->
                     trojanOutbound(tag, server, port, password, tls = tls, transport = clashTransport(m, network))
                 }
             }
             "ss", "shadowsocks" -> {
                 val method = m.str("cipher") ?: return null
                 val password = m.str("password") ?: return null
-                Triple(ProtocolType.SHADOWSOCKS, password) { tag: String ->
+                ProtocolType.SHADOWSOCKS to { tag: String ->
                     shadowsocksOutbound(tag, server, port, method, password)
                 }
             }
@@ -122,7 +123,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     insecure = m.bool("skip-cert-verify"),
                 )
                 val obfsPassword = if (m.str("obfs") != null) m.str("obfs-password").orEmpty() else null
-                Triple(ProtocolType.HYSTERIA2, password) { tag: String ->
+                ProtocolType.HYSTERIA2 to { tag: String ->
                     hysteria2Outbound(tag, server, port, password, tls = tls, obfsPassword = obfsPassword)
                 }
             }
@@ -134,7 +135,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     insecure = m.bool("skip-cert-verify"),
                     alpn = m.strList("alpn") ?: listOf("h3"),
                 )
-                Triple(ProtocolType.TUIC, uuid) { tag: String ->
+                ProtocolType.TUIC to { tag: String ->
                     tuicOutbound(
                         tag, server, port, uuid, password,
                         congestionControl = m.str("congestion-controller") ?: m.str("congestion_control"),
@@ -147,19 +148,17 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             else -> return null
         }
 
-        // Include the credential: two nodes differing only by password must
-        // not collide into the same id/tag.
-        val id = stableNodeId(
-            subscriptionId, type, server, port,
-            "${name.orEmpty()}$type$server$port$credential",
-        )
+        // Identity is the tagless outbound: proxies differing only in `name`
+        // collapse to one id, while transport/TLS differences do not.
+        val template = outbound("")
+        val id = stableNodeId(subscriptionId, template)
         return ProxyNode(
             id = id,
             name = name ?: "$server:$port",
             protocol = protocol,
             server = server,
             port = port,
-            outboundJson = outbound(id).toString(),
+            outboundJson = JsonObject(template + ("tag" to JsonPrimitive(id))).toString(),
             rawUri = null,
             subscriptionId = subscriptionId,
         )

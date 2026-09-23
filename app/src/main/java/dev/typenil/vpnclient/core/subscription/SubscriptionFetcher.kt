@@ -5,10 +5,14 @@ import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
 import java.io.IOException
+import java.io.InterruptedIOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -98,8 +102,10 @@ class SubscriptionFetcher @Inject constructor(
                     .build()
 
                 val response = try {
-                    noRedirectClient.newCall(request).execute()
-                } catch (e: java.net.SocketTimeoutException) {
+                    noRedirectClient.newCall(request).await()
+                } catch (e: InterruptedIOException) {
+                    // Covers socket timeouts AND the whole-call deadline
+                    // (callTimeout) — both surface as InterruptedIOException.
                     throw SubscriptionError.Timeout
                 } catch (e: IOException) {
                     throw SubscriptionError.Network
@@ -126,6 +132,26 @@ class SubscriptionFetcher @Inject constructor(
             }
             @Suppress("UNREACHABLE_CODE")
             error("unreachable")
+        }
+
+    /**
+     * Executes [Call] with coroutine-cancellation bridging: cancelling the
+     * calling coroutine calls [Call.cancel], aborting the in-flight request
+     * instead of leaving a blocked IO thread running to the socket timeout.
+     * A response delivered concurrently with cancellation is closed.
+     */
+    private suspend fun Call.await(): okhttp3.Response =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { cancel() }
+            enqueue(object : Callback {
+                override fun onResponse(call: Call, response: okhttp3.Response) {
+                    cont.resume(response) { _, resp, _ -> resp.close() }
+                }
+
+                override fun onFailure(call: Call, e: IOException) {
+                    cont.resumeWith(Result.failure(e))
+                }
+            })
         }
 
     private fun readResponse(response: okhttp3.Response, url: String): FetchedSubscription =

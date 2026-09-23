@@ -154,6 +154,26 @@ class ClashYamlParserTest {
     }
 
     @Test
+    fun `proxies differing only in name share an id`() {
+        val body = """
+        proxies:
+          - name: first
+            type: trojan
+            server: t.example.com
+            port: 443
+            password: pw
+          - name: second
+            type: trojan
+            server: t.example.com
+            port: 443
+            password: pw
+        """.trimIndent()
+        val nodes = parser.parse(body, 1)
+        assertEquals(2, nodes.size)
+        assertEquals(nodes[0].id, nodes[1].id)
+    }
+
+    @Test
     fun `empty proxies throws EmptyResult`() {
         try {
             parser.parse("proxies: []", 1)

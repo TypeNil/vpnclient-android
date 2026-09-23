@@ -104,8 +104,13 @@ class SubscriptionRepositoryTest {
         }
     }
 
-    private class FakeTransactions : DbTransactionRunner {
-        override suspend fun <T> run(block: suspend () -> T): T = block()
+    private inner class FakeTransactions : DbTransactionRunner {
+        /** scheduler.cancel calls observed while a transaction block ran. */
+        var cancelledInsideBlock = -1
+        override suspend fun <T> run(block: suspend () -> T): T {
+            cancelledInsideBlock = scheduler.cancelled.size
+            return block()
+        }
     }
 
     private class FakeSettings : SubscriptionSettings {
@@ -146,6 +151,7 @@ class SubscriptionRepositoryTest {
     private lateinit var validator: FakeValidator
     private lateinit var settings: FakeSettings
     private lateinit var scheduler: FakeScheduler
+    private lateinit var transactions: FakeTransactions
     private lateinit var repository: SubscriptionRepository
 
     private val uriParser = UriListParser()
@@ -195,6 +201,7 @@ class SubscriptionRepositoryTest {
         validator = FakeValidator(nodeDao)
         settings = FakeSettings()
         scheduler = FakeScheduler()
+        transactions = FakeTransactions()
         repository = SubscriptionRepository(
             subscriptionDao = subscriptionDao,
             nodeDao = nodeDao,
@@ -204,7 +211,7 @@ class SubscriptionRepositoryTest {
                 uriParser, SingBoxJsonParser(), ClashYamlParser(),
             ),
             validator = validator,
-            transactions = FakeTransactions(),
+            transactions = transactions,
             scheduler = scheduler,
             settings = settings,
         )
@@ -351,9 +358,45 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `remove cancels the scheduled job`() = runTest {
+    fun `remove deletes rows atomically then cancels the scheduled job`() = runTest {
         seedSubscription()
+        nodeDao.nodes["n1"] = nodeEntity(uri("a.example.com", "A"), 1)
+
         repository.remove(1)
+
+        assertTrue(subscriptionDao.subs.isEmpty())
+        assertTrue(nodeDao.nodes.isEmpty())
+        // Cancel ran after the delete transaction committed, not before it.
+        assertEquals(0, transactions.cancelledInsideBlock)
         assertEquals(listOf(1L), scheduler.cancelled)
+    }
+
+    @Test
+    fun `failed add still schedules when user override is set`() = runTest {
+        settings.autoRefresh.value = 60
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        val result = repository.add(
+            server.url("/sub").toString(), null, allowInsecureHttp = true,
+        )
+
+        assertTrue(result.isFailure)
+        val call = scheduler.scheduled.single()
+        assertEquals(subscriptionDao.subs.keys.single(), call.id)
+        assertNull(call.providerMinutes)
+        assertEquals(60, call.userOverride)
+        assertTrue(call.enabled)
+    }
+
+    @Test
+    fun `failed add in provider mode stays unscheduled`() = runTest {
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        val result = repository.add(
+            server.url("/sub").toString(), null, allowInsecureHttp = true,
+        )
+
+        assertTrue(result.isFailure)
+        assertTrue(scheduler.scheduled.isEmpty())
     }
 }

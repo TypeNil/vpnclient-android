@@ -56,6 +56,26 @@ class ImportUrlExtractorTest {
     }
 
     @Test
+    fun `literal plus inside raw url param is preserved`() {
+        // URLDecoder.decode would turn '+' into a space — a nested query
+        // token like ?token=a+b must survive verbatim.
+        val link = "clash://install-config?url=https://h.example.com/s?token=a+b"
+        assertEquals(
+            "https://h.example.com/s?token=a+b",
+            ImportUrlExtractor.extract(view, link, null),
+        )
+    }
+
+    @Test
+    fun `encoded plus inside url param decodes to plus`() {
+        val link = "clash://install-config?url=https%3A%2F%2Fh.example.com%2Fs%3Ftoken%3Da%2Bb"
+        assertEquals(
+            "https://h.example.com/s?token=a+b",
+            ImportUrlExtractor.extract(view, link, null),
+        )
+    }
+
+    @Test
     fun `trailing name param is stripped from unencoded url`() {
         val link = "clash://install-config?url=https://example.com/s?a=1&b=2&name=MySub"
         assertEquals(

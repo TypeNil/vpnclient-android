@@ -1,13 +1,46 @@
 package dev.typenil.vpnclient.core.subscription.parse
 
 import java.security.MessageDigest
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+
+/**
+ * Deterministic node id — stable across re-parses of identical input.
+ *
+ * Identity is the subscription plus the canonical serialization of the
+ * outbound object with its generated `tag` removed: two share links that
+ * differ only in display name/tag collapse to one id, while links that
+ * share uuid/host/port but differ in transport, TLS, or SNI do not.
+ * Canonicalization sorts object keys recursively so input key order
+ * (sing-box configs are user-authored) can't perturb the hash.
+ */
+internal fun stableNodeId(subscriptionId: Long, outbound: JsonObject): String {
+    val input = "$subscriptionId|${canonicalJson(JsonObject(outbound - "tag"))}"
+    return MessageDigest.getInstance("SHA-256")
+        .digest(input.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+}
+
+/** Deterministic serialization: object keys sorted, arrays order-preserved. */
+private fun canonicalJson(element: JsonElement): String = when (element) {
+    is JsonObject -> element.entries
+        .sortedBy { it.key }
+        .joinToString(prefix = "{", postfix = "}", separator = ",") {
+            "${JsonPrimitive(it.key)}:${canonicalJson(it.value)}"
+        }
+    is JsonArray -> element.joinToString(prefix = "[", postfix = "]", separator = ",") {
+        canonicalJson(it)
+    }
+    else -> element.toString() // JsonPrimitive / JsonNull serialize canonically
+}
 
 /**
  * Shared builders for engine-native sing-box outbound objects (v1.13/1.14).
@@ -16,14 +49,6 @@ import kotlinx.serialization.json.putJsonObject
  * through the local DNS resolver instead of looping through the proxy itself.
  * Output is compact — [JsonObject.toString] is the serialized form.
  */
-
-/** Deterministic node id — stable across re-parses of identical input. */
-internal fun stableNodeId(subscriptionId: Long, scheme: String, server: String, port: Int, credential: String): String {
-    val input = "$subscriptionId|${scheme.lowercase()}|${server.lowercase()}:$port|$credential"
-    return MessageDigest.getInstance("SHA-256")
-        .digest(input.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
-}
 
 /** Networks sing-box cannot express — nodes on them must be skipped entirely. */
 internal fun isUnsupportedNetwork(network: String?): Boolean =

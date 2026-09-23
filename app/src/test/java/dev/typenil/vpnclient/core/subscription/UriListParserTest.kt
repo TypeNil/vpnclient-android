@@ -267,6 +267,31 @@ class UriListParserTest {
     }
 
     @Test
+    fun `vless links sharing uuid host port but different network get distinct ids`() {
+        // Regression: identity used to hash only scheme|server:port|credential,
+        // so transport/TLS differences collided and distinctBy dropped a node.
+        val uuid = "11111111-2222-3333-4444-555555555555"
+        val tcp = "vless://$uuid@shared.example.com:443?security=tls&sni=a.example.com#TCP"
+        val ws = "vless://$uuid@shared.example.com:443?security=tls&sni=a.example.com" +
+            "&type=ws&host=cdn.example.com&path=%2Fws#WS"
+        val nodes = parser.parse("$tcp\n$ws", 1)
+        assertEquals(2, nodes.size)
+        assertNotEquals(nodes[0].id, nodes[1].id)
+        // Both survive the repository's distinctBy { it.id } dedupe.
+        assertEquals(2, nodes.distinctBy { it.id }.size)
+    }
+
+    @Test
+    fun `links differing only in display name share an id`() {
+        val a = "trojan://pw@tr.example.com:443#Alpha"
+        val b = "trojan://pw@tr.example.com:443#Beta"
+        val nodes = parser.parse("$a\n$b", 1)
+        assertEquals(2, nodes.size)
+        assertEquals(nodes[0].id, nodes[1].id)
+        assertEquals(1, nodes.distinctBy { it.id }.size)
+    }
+
+    @Test
     fun `fragment name is percent decoded including unicode`() {
         val uri = "ss://aes-256-gcm:pw123@ss.example.com:8388#" +
             "%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%201"
