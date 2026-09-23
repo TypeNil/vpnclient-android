@@ -498,7 +498,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
         startJob = scope.launch {
             // Same-process fast path uses the handed-off session; after a
             // process death the service rebuilds from persisted state itself.
-            val config = session?.config
+            // A connect() racing this job leaves a pendingSession — adopt it
+            // wholesale: its config is the fresher compile and its generation
+            // is what the state machine is waiting on.
+            var effective = session ?: connectionManager.pendingSession
+            val config = effective?.config
                 ?: try {
                     configProvider.compileSelected()
                 } catch (e: CancellationException) {
@@ -509,9 +513,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 }
             if (config == null) {
                 try {
-                    if (session != null) {
+                    if (effective != null) {
                         connectionManager.onServiceFailed(
-                            VpnError.NoNodeSelected, session.generation,
+                            VpnError.NoNodeSelected, effective.generation,
                         )
                     } else {
                         // Rebuild with nothing usable — don't loop on it.
@@ -529,26 +533,46 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 stopSelf()
                 return@launch
             }
-            val generation = session?.generation
+            var generation = effective?.generation
                 ?: connectionManager.adoptSession(config.node)
             if (generation < 0) {
-                // A live session owns the state machine — bail quietly.
-                cleanup()
-                stopSelf()
-                return@launch
+                // The state machine is owned — but a connect() that raced us
+                // may have left a pendingSession still needing a start (its
+                // ACTION_CONNECT was dropped by the in-flight guard). Take it
+                // over instead of dying with it orphaned.
+                effective = connectionManager.pendingSession
+                if (effective == null) {
+                    // A live session owns the service — bail quietly.
+                    cleanup()
+                    stopSelf()
+                    return@launch
+                }
+                generation = effective.generation
             }
+            val launchConfig = effective?.config ?: config
             activeGeneration = generation
-            activeConfig = config
+            activeConfig = launchConfig
             // On adopted sessions adoptSession published Connecting before
             // the generation was set — that emission was gated out, and the
             // early post above had no session to read the node name from.
             // Re-post with the compiled config so the text is right.
             showNotification(
                 title = getString(R.string.notification_connecting),
-                text = config.node.name,
+                text = launchConfig.node.name,
                 showDisconnect = true,
             )
-            if (!launchEngine(config, generation)) return@launch
+            if (!launchEngine(launchConfig, generation)) return@launch
+            // A connect() that raced this start may have superseded our
+            // generation while the engine was coming up (its ACTION_CONNECT
+            // was dropped by the in-flight guard). Hand the live engine to
+            // the newer session instead of dying with it orphaned.
+            val pending = connectionManager.pendingSession
+            if (pending != null && pending.generation != generation) {
+                connectionManager.detachEngine()
+                connectionManager.attachEngine(engine ?: return@launch, pending.generation)
+                generation = pending.generation
+                activeGeneration = generation
+            }
             connectionManager.onServiceStarted(generation)
             // A network loss during start() left no further callbacks —
             // re-evaluate so we don't publish Connected while offline.
@@ -644,7 +668,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
                         } else {
                             VpnError.Unexpected(e.message ?: "engine start failed")
                         },
-                        generation,
+                        // A connect() may have superseded our generation —
+                        // the error belongs to the session now waiting.
+                        connectionManager.pendingSession?.generation ?: generation,
                     )
                 }
                 stopSelf()
