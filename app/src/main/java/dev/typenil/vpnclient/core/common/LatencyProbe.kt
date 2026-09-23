@@ -6,6 +6,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Direct TCP-connect latency probe.
@@ -33,16 +34,23 @@ class LatencyProbe @Inject constructor() {
         port: Int,
         timeoutMs: Int = DEFAULT_TIMEOUT_MS,
     ): Int? = withContext(Dispatchers.IO) {
-        try {
-            Socket().use { socket ->
-                val start = System.nanoTime()
-                socket.connect(InetSocketAddress(host, port), timeoutMs)
-                ((System.nanoTime() - start) / 1_000_000L).toInt()
+        // One deadline for DNS + connect: InetSocketAddress resolves eagerly
+        // and its lookup is NOT covered by Socket.connect's timeout — a slow
+        // resolver would otherwise stall the probe far past timeoutMs.
+        // (JVM DNS isn't interruptible; on expiry the worker thread may
+        // linger briefly in the syscall, but the caller is bounded.)
+        withTimeoutOrNull(timeoutMs.toLong()) {
+            try {
+                Socket().use { socket ->
+                    val start = System.nanoTime()
+                    socket.connect(InetSocketAddress(host, port), timeoutMs)
+                    ((System.nanoTime() - start) / 1_000_000L).toInt()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
         }
     }
 

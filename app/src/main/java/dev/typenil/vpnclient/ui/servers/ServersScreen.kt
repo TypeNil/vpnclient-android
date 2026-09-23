@@ -84,6 +84,14 @@ fun ServersScreen(
                 ) {
                     Text("Test latency")
                 }
+                Text(
+                    // Name the measurement: connected → urltest through the
+                    // proxy chain; disconnected → direct TCP connect.
+                    text = if (ui.connected) "via proxy" else "TCP connect",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
             }
         }
         ui.groups.forEach { group ->

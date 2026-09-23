@@ -35,6 +35,10 @@ data class ServersUiState(
     /** Tags a latency run has covered — distinguishes "timeout" from
      *  "never tested" on the badge. */
     val testedNodeIds: Set<String> = emptySet(),
+    /** Connected → badges come from the engine's urltest (through the
+     *  proxy); disconnected → direct TCP-connect probe. Names the
+     *  measurement so the UI doesn't imply one means the other. */
+    val connected: Boolean = false,
 )
 
 /** Engine-reported surface: connection state + per-outbound delays. */
@@ -102,6 +106,7 @@ class ServersViewModel @Inject constructor(
             // full proxy chain; probe results fill in the rest.
             delays = probe.delays + engine.delays,
             testedNodeIds = probe.tested,
+            connected = engine.connected,
         )
     }.stateIn(
         scope = viewModelScope,
