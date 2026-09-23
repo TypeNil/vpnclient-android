@@ -45,6 +45,35 @@ class ImportUrlExtractorTest {
     }
 
     @Test
+    fun `unencoded ampersands inside url param are preserved`() {
+        // The defect Uri.getQueryParameter has: a subscription URL with a
+        // raw '&' must not be cut at the query boundary.
+        val link = "clash://install-config?url=https://example.com/sub?a=1&b=2"
+        assertEquals(
+            "https://example.com/sub?a=1&b=2",
+            ImportUrlExtractor.extract(view, link, null),
+        )
+    }
+
+    @Test
+    fun `trailing name param is stripped from unencoded url`() {
+        val link = "clash://install-config?url=https://example.com/s?a=1&b=2&name=MySub"
+        assertEquals(
+            "https://example.com/s?a=1&b=2",
+            ImportUrlExtractor.extract(view, link, null),
+        )
+    }
+
+    @Test
+    fun `url param not in first position still resolves`() {
+        val link = "sing-box://import-remote-profile?name=x&url=https%3A%2F%2Fexample.com%2Fs"
+        assertEquals(
+            "https://example.com/s",
+            ImportUrlExtractor.extract(view, link, null),
+        )
+    }
+
+    @Test
     fun `unknown scheme rejected`() {
         assertNull(ImportUrlExtractor.extract(view, "vless://abc@1.2.3.4:443", null))
         assertNull(ImportUrlExtractor.extract(view, "ftp://example.com/sub", null))

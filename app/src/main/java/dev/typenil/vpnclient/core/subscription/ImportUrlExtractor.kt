@@ -34,10 +34,19 @@ object ImportUrlExtractor {
 
     private fun extractUrlParam(uri: String): String? {
         val query = uri.substringAfter('?', "")
-        val encoded = query.split('&')
-            .firstOrNull { it.startsWith("url=") }
-            ?.substringAfter('=')
-            ?: return null
+        // url= runs to end-of-string: splitting the query on '&' truncates
+        // subscription URLs carrying unencoded '&' params (the same defect
+        // as Uri.getQueryParameter). `name` is the only other param these
+        // schemes define and is conventionally last — a literal "&name="
+        // inside an unencoded URL is ambiguous, so the last occurrence wins.
+        val start = when {
+            query.startsWith("url=") -> "url=".length
+            else -> query.indexOf("&url=")
+                .takeIf { it >= 0 }
+                ?.plus("&url=".length)
+                ?: return null
+        }
+        val encoded = query.substring(start).substringBeforeLast("&name=")
         return runCatching { URLDecoder.decode(encoded, "UTF-8") }
             .getOrNull()
             ?.takeIf { it.startsWithHttp() }

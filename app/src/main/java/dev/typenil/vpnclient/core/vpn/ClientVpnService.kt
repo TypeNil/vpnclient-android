@@ -149,6 +149,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
             scope.launch { activeEngine.onDeviceIdle(idle) }
         }
     }
+
+    /**
+     * Screen-off suppression (SFA pattern): while the screen is off the
+     * engine's status channel is disconnected — no 1 Hz stats/groups pushes
+     * nobody can see. Forwarded unconditionally; the engine no-ops when it
+     * has no client yet.
+     */
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val on = intent.action == Intent.ACTION_SCREEN_ON
+            val activeEngine = engine ?: return
+            scope.launch { activeEngine.setStatusUpdatesEnabled(on) }
+        }
+    }
+    private var screenReceiverRegistered = false
     /** Session generation this service instance is serving; -1 = none yet. */
     private var activeGeneration: Long = -1L
     /** Config the live session was started with — reused by in-session
@@ -285,6 +300,18 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     spec?.let { showNotification(it.title, it.text, it.showDisconnect) }
                 }
         }
+
+        // Screen on/off drives the engine's status channel — registered for
+        // the service lifetime, forwarded only while an engine is alive.
+        ContextCompat.registerReceiver(
+            this, screenReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        screenReceiverRegistered = true
     }
 
     // The core rarely raises user-facing notifications; forwarded for
@@ -493,6 +520,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
             connectionManager.attachEngine(created, generation)
             registerDozeReceiver()
             created.start(config)
+            // A fresh engine always connects its status channel — apply the
+            // current screen state so a start while the screen is off
+            // doesn't churn stats nobody sees.
+            if (!getSystemService(PowerManager::class.java).isInteractive) {
+                created.setStatusUpdatesEnabled(false)
+            }
             // start() returned → openTun succeeded inside it; tunnel is up.
             if (engine !== created) {
                 // A disconnect raced us while start() was suspended. If a
@@ -707,6 +740,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // application scope — the service scope is cancelled below and
         // blocking the main thread here risks an ANR on system teardown.
         runCatching { closeTun() }
+        if (screenReceiverRegistered) {
+            runCatching { unregisterReceiver(screenReceiver) }
+            screenReceiverRegistered = false
+        }
         // Drain engines captured by teardown coroutines (stopTunnel/onRevoke)
         // that the cancelled scope can no longer finish.
         val toStop = pendingTeardown.toList() + listOfNotNull(current)
@@ -874,6 +911,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
         connectivity.registerNetworkCallback(
             NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                // The tunnel's own network must never fire this callback —
+                // it's the underlay tracker, not a default-network probe.
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                 .build(),
             cb,
             Handler(Looper.getMainLooper()),

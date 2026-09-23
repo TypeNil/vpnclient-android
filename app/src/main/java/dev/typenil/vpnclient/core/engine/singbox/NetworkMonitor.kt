@@ -59,26 +59,34 @@ class NetworkMonitor(
         if (callback != null) return
         defaultNetwork = physicalNetwork(connectivity.activeNetwork)
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val physical = physicalNetwork(network) ?: return
+            // NOT_VPN-scoped request: the tunnel's own network never fires
+            // these callbacks, so the core can't be pushed onto itself.
+            // Every event recomputes from activeNetwork — this request
+            // matches any non-VPN network, not just the default.
+            override fun onAvailable(network: Network) = recompute()
+
+            override fun onCapabilitiesChanged(
+                network: Network,
+                caps: NetworkCapabilities,
+            ) = recompute()
+
+            override fun onLost(network: Network) = recompute()
+
+            private fun recompute() {
+                val physical = physicalNetwork(connectivity.activeNetwork)
+                if (physical == defaultNetwork) return
                 defaultNetwork = physical
                 pushDefaultInterface(physical)
             }
-
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-                pushDefaultInterface(network)
-            }
-
-            override fun onLost(network: Network) {
-                if (defaultNetwork == network || defaultNetwork == null) {
-                    defaultNetwork = physicalNetwork(connectivity.activeNetwork)
-                    pushDefaultInterface(defaultNetwork)
-                }
-            }
         }
         callback = cb
-        connectivity.registerDefaultNetworkCallback(cb)
+        connectivity.registerNetworkCallback(
+            NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build(),
+            cb,
+        )
         pushDefaultInterface(defaultNetwork)
     }
 

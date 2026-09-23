@@ -96,6 +96,9 @@ class ConfigCompiler @Inject constructor() {
                 put("url", "https://www.gstatic.com/generate_204")
                 put("interval", "3m")
                 put("tolerance", 50)
+                // Stop probing when the group carries no traffic — without
+                // this the core pings every node every 3m forever.
+                put("idle_timeout", "20m")
                 put("interrupt_exist_connections", false)
             }
             nodes.forEach { node ->
