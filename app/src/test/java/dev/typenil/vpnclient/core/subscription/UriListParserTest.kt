@@ -225,8 +225,11 @@ class UriListParserTest {
             |not-a-uri-at-all
         """.trimMargin()
         val nodes = parser.parse(body, 1)
-        assertEquals(1, nodes.size)
-        assertEquals(ProtocolType.SHADOWSOCKS, nodes[0].protocol)
+        // hysteria1 and the non-URI line are skipped; the wireguard link has
+        // no key material so it drops too — socks5 and ss survive.
+        assertEquals(2, nodes.size)
+        assertEquals(ProtocolType.SOCKS, nodes[0].protocol)
+        assertEquals(ProtocolType.SHADOWSOCKS, nodes[1].protocol)
     }
 
     @Test
@@ -309,5 +312,101 @@ class UriListParserTest {
     fun `crlf line endings parse`() {
         val body = "ss://aes-256-gcm:pw@a.example.com:1\r\nss://aes-256-gcm:pw@b.example.com:2\r\n"
         assertEquals(2, parser.parse(body, 1).size)
+    }
+
+    @Test
+    fun `anytls link builds anytls outbound with tls`() {
+        val uri = "anytls://secretpass@at.example.com:443?sni=at.example.com&insecure=0#AnyTLS"
+        val n = parser.parse(uri, 1).single()
+        assertEquals(ProtocolType.ANYTLS, n.protocol)
+        assertEquals("at.example.com", n.server)
+        assertEquals(443, n.port)
+        assertEquals("AnyTLS", n.name)
+
+        val o = outbound(n)
+        assertEquals("anytls", o["type"]!!.jsonPrimitive.content)
+        assertEquals("secretpass", o["password"]!!.jsonPrimitive.content)
+        val tls = o["tls"]!!.jsonObject
+        assertTrue(tls["enabled"]!!.jsonPrimitive.boolean)
+        assertEquals("at.example.com", tls["server_name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `wireguard link builds endpoint-shaped config`() {
+        val uri = "wireguard://cPrivKey@wg.example.com:51820" +
+            "?publickey=peerPub&address=10.0.0.2/32,fd00::2/128" +
+            "&presharedkey=psk123&reserved=1,2,3&mtu=1280#WG"
+        val n = parser.parse(uri, 1).single()
+        assertEquals(ProtocolType.WIREGUARD, n.protocol)
+
+        // sing-box >=1.13 shape: endpoints[] entry — address/peers, not
+        // the removed outbound's local_address/peer_public_key.
+        val o = outbound(n)
+        assertEquals("wireguard", o["type"]!!.jsonPrimitive.content)
+        assertEquals("cPrivKey", o["private_key"]!!.jsonPrimitive.content)
+        assertEquals(1280, o["mtu"]!!.jsonPrimitive.int)
+        assertEquals("local", o["domain_resolver"]!!.jsonPrimitive.content)
+        val addrs = o["address"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("10.0.0.2/32", "fd00::2/128"), addrs)
+        val peer = o["peers"]!!.jsonArray.single().jsonObject
+        assertEquals("wg.example.com", peer["address"]!!.jsonPrimitive.content)
+        assertEquals(51820, peer["port"]!!.jsonPrimitive.int)
+        assertEquals("peerPub", peer["public_key"]!!.jsonPrimitive.content)
+        assertEquals("psk123", peer["pre_shared_key"]!!.jsonPrimitive.content)
+        val reserved = peer["reserved"]!!.jsonArray.map { it.jsonPrimitive.int }
+        assertEquals(listOf(1, 2, 3), reserved)
+        val allowed = peer["allowed_ips"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("0.0.0.0/0", "::/0"), allowed)
+    }
+
+    @Test
+    fun `wireguard missing publickey or address is skipped`() {
+        val noKey = "wireguard://cPrivKey@wg.example.com:51820?address=10.0.0.2/32"
+        val noAddr = "wireguard://cPrivKey@wg.example.com:51820?publickey=peerPub"
+        val ok = "wireguard://cPrivKey@wg.example.com:51820" +
+            "?publickey=peerPub&address=10.0.0.2/32"
+        val nodes = parser.parse("$noKey\n$noAddr\n$ok", 1)
+        assertEquals(1, nodes.size)
+        assertEquals("wg.example.com", nodes[0].server)
+    }
+
+    @Test
+    fun `socks link with auth builds socks5 outbound`() {
+        val n = parser.parse("socks://user:p%40ss@socks.example.com:1080#S", 1).single()
+        assertEquals(ProtocolType.SOCKS, n.protocol)
+        val o = outbound(n)
+        assertEquals("socks", o["type"]!!.jsonPrimitive.content)
+        assertEquals("5", o["version"]!!.jsonPrimitive.content)
+        assertEquals("user", o["username"]!!.jsonPrimitive.content)
+        assertEquals("p@ss", o["password"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `socks userinfo splits on literal colon before decoding`() {
+        // %3A inside the username is data, not the user:pass separator.
+        val n = parser.parse("socks5://a%3Ab:p%40ss@proxy.example.com:1080", 1).single()
+        val o = outbound(n)
+        assertEquals("a:b", o["username"]!!.jsonPrimitive.content)
+        assertEquals("p@ss", o["password"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `socks link without auth omits credentials`() {
+        val n = parser.parse("socks://socks.example.com:1080", 1).single()
+        val o = outbound(n)
+        assertEquals("socks", o["type"]!!.jsonPrimitive.content)
+        assertNull(o["username"])
+        assertNull(o["password"])
+    }
+
+    @Test
+    fun `ech param lands in tls ech config`() {
+        val uri = "vless://11111111-2222-3333-4444-555555555555@e.example.com:443" +
+            "?security=tls&sni=e.example.com&ech=AAAA%2Bconfig#E"
+        val n = parser.parse(uri, 1).single()
+        val tls = outbound(n)["tls"]!!.jsonObject
+        val ech = tls["ech"]!!.jsonObject
+        assertTrue(ech["enabled"]!!.jsonPrimitive.boolean)
+        assertEquals("AAAA+config", ech["config"]!!.jsonPrimitive.content)
     }
 }

@@ -4,6 +4,7 @@ import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.parse.ShareLink
+import dev.typenil.vpnclient.core.subscription.parse.anytlsOutbound
 import dev.typenil.vpnclient.core.subscription.parse.base64Decode
 import dev.typenil.vpnclient.core.subscription.parse.commaList
 import dev.typenil.vpnclient.core.subscription.parse.hysteria2Outbound
@@ -19,6 +20,8 @@ import dev.typenil.vpnclient.core.subscription.parse.truthyParam
 import dev.typenil.vpnclient.core.subscription.parse.tuicOutbound
 import dev.typenil.vpnclient.core.subscription.parse.vlessOutbound
 import dev.typenil.vpnclient.core.subscription.parse.vmessOutbound
+import dev.typenil.vpnclient.core.subscription.parse.socksOutbound
+import dev.typenil.vpnclient.core.subscription.parse.wireguardEndpoint
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
@@ -60,7 +63,10 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             "ss" -> parseShadowsocks(line, subscriptionId)
             "hysteria2", "hy2" -> parseHysteria2(line, subscriptionId)
             "tuic" -> parseTuic(line, subscriptionId)
-            // hysteria1, socks, http(s), wireguard, unknown schemes — unsupported for MVP
+            "anytls" -> parseAnytls(line, subscriptionId)
+            "wireguard", "wg" -> parseWireguard(line, subscriptionId)
+            "socks", "socks5" -> parseSocks(line, subscriptionId)
+            // hysteria1, http(s), unknown schemes — unsupported
             else -> null
         }
 
@@ -80,6 +86,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
                 fingerprint = p["fp"],
                 realityPublicKey = if (security == "reality") p["pbk"] else null,
                 realityShortId = p["sid"],
+                ech = p["ech"],
             )
             else -> null
         }
@@ -129,6 +136,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
                 fingerprint = obj.str("fp"),
                 realityPublicKey = if (security == "reality") obj.str("pbk") else null,
                 realityShortId = obj.str("sid"),
+                ech = obj.str("ech"),
             )
             else -> null
         }
@@ -162,6 +170,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             fingerprint = p["fp"],
             realityPublicKey = if (p["security"]?.lowercase() == "reality") p["pbk"] else null,
             realityShortId = p["sid"],
+            ech = p["ech"],
         )
         val transport = transportBlock(
             network = network,
@@ -246,6 +255,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val tls = tlsBlock(
             serverName = p["sni"] ?: link.host,
             insecure = truthyParam(p["insecure"]),
+            ech = p["ech"],
         )
         val obfsPassword = if (p["obfs"] != null) p["obfs-password"].orEmpty() else null
         return node(
@@ -269,6 +279,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             serverName = if (truthyParam(p["disable_sni"])) null else p["sni"] ?: link.host,
             insecure = truthyParam(p.param("allow_insecure", "allowInsecure", "insecure")),
             alpn = commaList(p["alpn"]) ?: listOf("h3"),
+            ech = p["ech"],
         )
         return node(subscriptionId, ProtocolType.TUIC, link, line) { tag ->
             tuicOutbound(
@@ -277,6 +288,66 @@ class UriListParser @Inject constructor() : SubscriptionParser {
                 udpRelayMode = p["udp_relay_mode"],
                 tls = tls,
             )
+        }
+    }
+
+    // anytls://<password>@<server>:<port>?<params>#<name> — TLS is mandatory.
+    private fun parseAnytls(line: String, subscriptionId: Long): ProxyNode? {
+        val link = ShareLink.parse(line)
+        val password = link.userinfo?.let(::percentDecode)?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val p = link.params
+        val tls = tlsBlock(
+            serverName = p["sni"] ?: link.host,
+            insecure = truthyParam(p.param("allowInsecure", "allow_insecure", "insecure")),
+            alpn = commaList(p["alpn"]),
+            fingerprint = p["fp"],
+            ech = p["ech"],
+        )
+        return node(subscriptionId, ProtocolType.ANYTLS, link, line) { tag ->
+            anytlsOutbound(tag, link.host, link.port, password, tls = tls)
+        }
+    }
+
+    // wireguard://<private_key>@<server>:<port>?publickey=<pk>&address=<cidrs>&…#<name>
+    private fun parseWireguard(line: String, subscriptionId: Long): ProxyNode? {
+        val link = ShareLink.parse(line)
+        val privateKey = link.userinfo?.let(::percentDecode)?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val p = link.params
+        val peerPublicKey = p.param("publickey", "public_key", "peer_public_key")
+            ?: return null
+        val localAddress = commaList(p.param("address", "local_address", "addresses"))
+            ?: return null
+        val reserved = commaList(p["reserved"])?.mapNotNull(String::toIntOrNull)
+        val mtu = p["mtu"]?.toIntOrNull()
+        return node(subscriptionId, ProtocolType.WIREGUARD, link, line) { tag ->
+            wireguardEndpoint(
+                tag, link.host, link.port,
+                privateKey = privateKey,
+                peerPublicKey = peerPublicKey,
+                localAddress = localAddress,
+                preSharedKey = p.param("presharedkey", "pre_shared_key", "preshared_key"),
+                reserved = reserved,
+                mtu = mtu,
+            )
+        }
+    }
+
+    // socks://[user:pass@]<server>:<port>#<name>  (also socks5://)
+    private fun parseSocks(line: String, subscriptionId: Long): ProxyNode? {
+        val link = ShareLink.parse(line)
+        // Split on the first LITERAL colon before decoding — a %3A inside the
+        // username is data, not the user:pass separator (RFC 3986 §2.4).
+        val rawUserinfo = link.userinfo
+        val (username, password) = when {
+            rawUserinfo.isNullOrEmpty() -> null to null
+            ':' in rawUserinfo -> percentDecode(rawUserinfo.substringBefore(':')) to
+                percentDecode(rawUserinfo.substringAfter(':'))
+            else -> percentDecode(rawUserinfo) to null
+        }
+        return node(subscriptionId, ProtocolType.SOCKS, link, line) { tag ->
+            socksOutbound(tag, link.host, link.port, username = username, password = password)
         }
     }
 

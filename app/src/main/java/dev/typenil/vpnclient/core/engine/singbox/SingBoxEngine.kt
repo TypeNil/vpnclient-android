@@ -142,7 +142,17 @@ class SingBoxEngine(
                 closing = false
                 protectFailureReported.set(false)
                 networkMonitor.start()
-                server.startOrReloadService(config.configJson, OverrideOptions())
+                val overrides = OverrideOptions().apply {
+                    if (config.includedPackages.isNotEmpty()) {
+                        includePackage =
+                            NetworkMonitor.StringArray(config.includedPackages.iterator())
+                    }
+                    if (config.excludedPackages.isNotEmpty()) {
+                        excludePackage =
+                            NetworkMonitor.StringArray(config.excludedPackages.iterator())
+                    }
+                }
+                server.startOrReloadService(config.configJson, overrides)
             } catch (e: CancellationException) {
                 // Still tear down what we built — cancellation is not an
                 // excuse to leak a half-started CommandServer.

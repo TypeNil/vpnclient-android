@@ -10,6 +10,8 @@ enum class ProtocolType(val scheme: String, val label: String) {
     TUIC("tuic", "TUIC"),
     SOCKS("socks", "SOCKS"),
     HTTP("http", "HTTP"),
+    ANYTLS("anytls", "AnyTLS"),
+    WIREGUARD("wireguard", "WireGuard"),
     OTHER("", "Other"),
     ;
 
@@ -23,6 +25,8 @@ enum class ProtocolType(val scheme: String, val label: String) {
             "tuic" -> TUIC
             "socks", "socks5" -> SOCKS
             "http", "https" -> HTTP
+            "anytls" -> ANYTLS
+            "wireguard", "wg" -> WIREGUARD
             else -> null
         }
     }

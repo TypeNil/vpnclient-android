@@ -4,6 +4,7 @@ import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.summary
 import io.nekohasekai.libbox.Libbox
@@ -101,7 +102,10 @@ class ConfigCompiler @Inject constructor() {
                 put("idle_timeout", "20m")
                 put("interrupt_exist_connections", false)
             }
-            nodes.forEach { node ->
+            // Outbound-shaped nodes only — WireGuard nodes compile to
+            // `endpoints[]` below (the wireguard outbound was removed in
+            // sing-box 1.13; endpoint tags are still selectable/urltestable).
+            nodes.filter { it.protocol != ProtocolType.WIREGUARD }.forEach { node ->
                 add(json.parseToJsonElement(node.outboundJson))
             }
             addJsonObject {
@@ -109,6 +113,7 @@ class ConfigCompiler @Inject constructor() {
                 put("tag", "direct")
             }
         }
+        val endpointNodes = nodes.filter { it.protocol == ProtocolType.WIREGUARD }
 
         val config = buildJsonObject {
             putJsonObject("log") {
@@ -180,6 +185,13 @@ class ConfigCompiler @Inject constructor() {
                 }
             }
             put("outbounds", outbounds)
+            if (endpointNodes.isNotEmpty()) {
+                putJsonArray("endpoints") {
+                    endpointNodes.forEach { node ->
+                        add(json.parseToJsonElement(node.outboundJson))
+                    }
+                }
+            }
             putJsonObject("route") {
                 putJsonArray("rules") {
                     addJsonObject { put("action", "sniff") }

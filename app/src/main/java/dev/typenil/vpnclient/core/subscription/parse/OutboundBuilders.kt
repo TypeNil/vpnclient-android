@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -62,6 +63,8 @@ internal fun tlsBlock(
     fingerprint: String? = null,
     realityPublicKey: String? = null,
     realityShortId: String? = null,
+    /** Base64 ECHConfigList — passed through verbatim to `tls.ech.config`. */
+    ech: String? = null,
 ): JsonObject = buildJsonObject {
     put("enabled", true)
     if (!serverName.isNullOrBlank()) put("server_name", serverName)
@@ -76,6 +79,12 @@ internal fun tlsBlock(
             put("enabled", true)
             put("public_key", realityPublicKey)
             if (!realityShortId.isNullOrBlank()) put("short_id", realityShortId)
+        }
+    }
+    if (!ech.isNullOrBlank()) {
+        putJsonObject("ech") {
+            put("enabled", true)
+            put("config", ech)
         }
     }
 }
@@ -199,6 +208,63 @@ internal fun tuicOutbound(
     put("congestion_control", congestionControl?.takeIf { it.isNotBlank() } ?: "bbr")
     put("udp_relay_mode", udpRelayMode?.takeIf { it.isNotBlank() } ?: "native")
     put("tls", tls)
+}
+
+internal fun anytlsOutbound(
+    tag: String, server: String, port: Int, password: String,
+    tls: JsonObject,
+): JsonObject = baseOutbound("anytls", tag, server, port) {
+    put("password", password)
+    put("tls", tls)
+}
+
+/**
+ * WireGuard as a sing-box `endpoints[]` entry — the `wireguard` *outbound*
+ * was removed in sing-box 1.13 (pinned core is 1.14.x); endpoints are the
+ * supported shape and are referenceable from selector/urltest groups.
+ */
+internal fun wireguardEndpoint(
+    tag: String, server: String, port: Int,
+    privateKey: String,
+    peerPublicKey: String,
+    localAddress: List<String>,
+    preSharedKey: String? = null,
+    reserved: List<Int>? = null,
+    mtu: Int? = null,
+): JsonObject = buildJsonObject {
+    put("type", "wireguard")
+    put("tag", tag)
+    putJsonArray("address") { localAddress.forEach { add(it) } }
+    put("private_key", privateKey)
+    putJsonArray("peers") {
+        addJsonObject {
+            put("address", server)
+            put("port", port)
+            put("public_key", peerPublicKey)
+            putJsonArray("allowed_ips") {
+                add("0.0.0.0/0")
+                add("::/0")
+            }
+            if (!preSharedKey.isNullOrBlank()) put("pre_shared_key", preSharedKey)
+            if (!reserved.isNullOrEmpty()) {
+                putJsonArray("reserved") { reserved.forEach { add(it) } }
+            }
+        }
+    }
+    if (mtu != null) put("mtu", mtu)
+    // Same resolver rule as outbounds: the peer's domain resolves locally,
+    // never through the tunnel the endpoint is part of.
+    put("domain_resolver", "local")
+}
+
+internal fun socksOutbound(
+    tag: String, server: String, port: Int,
+    username: String? = null,
+    password: String? = null,
+): JsonObject = baseOutbound("socks", tag, server, port) {
+    put("version", "5")
+    if (!username.isNullOrBlank()) put("username", username)
+    if (!password.isNullOrBlank()) put("password", password)
 }
 
 private fun baseOutbound(

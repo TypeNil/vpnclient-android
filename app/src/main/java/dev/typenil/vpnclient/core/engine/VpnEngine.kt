@@ -9,6 +9,10 @@ data class EngineConfig(
     /** Complete engine config (sing-box JSON) including the tun inbound. */
     val configJson: String,
     val node: NodeSummary,
+    /** Resolved per-app plan handed to the core — the Builder applies the
+     *  same lists at openTun; the core needs them for `route.find_process`. */
+    val includedPackages: List<String> = emptyList(),
+    val excludedPackages: List<String> = emptyList(),
 )
 
 /** Periodic traffic + health snapshot from the running core. */

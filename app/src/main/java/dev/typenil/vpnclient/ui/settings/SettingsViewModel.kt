@@ -27,6 +27,8 @@ data class SettingsUiState(
      *  keeps its old config until reconnect. Pending state, not an event:
      *  survives recomposition and is cleared on accept/session end. */
     val reconnectRecommended: Boolean = false,
+    /** Start the VPN automatically when the app opens. */
+    val autoConnectOnLaunch: Boolean = false,
 ) {
     val autoRefreshEnabled: Boolean get() = autoRefreshMinutes >= 0
 }
@@ -59,7 +61,13 @@ class SettingsViewModel @Inject constructor(
             )
         },
         reconnectRecommended,
-    ) { state, recommended -> state.copy(reconnectRecommended = recommended) }
+        settings.autoConnectOnLaunch,
+    ) { state, recommended, autoConnect ->
+        state.copy(
+            reconnectRecommended = recommended,
+            autoConnectOnLaunch = autoConnect,
+        )
+    }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
@@ -92,6 +100,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setDozePowerSave(enabled: Boolean) {
         viewModelScope.launch { settings.setDozePowerSave(enabled) }
+    }
+
+    fun setAutoConnectOnLaunch(enabled: Boolean) {
+        viewModelScope.launch { settings.setAutoConnectOnLaunch(enabled) }
     }
 
     /** Routing policy — baked into the config at compile time, so a running

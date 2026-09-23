@@ -1,8 +1,10 @@
 package dev.typenil.vpnclient.ui.settings
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -62,6 +64,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     // Pending-state prompt: shows once per recommendation, re-shows after a
     // process/config change only if the flag flips back to true.
     LaunchedEffect(ui.reconnectRecommended) {
@@ -98,6 +101,12 @@ fun SettingsScreen(
             checked = ui.dozePowerSave,
             onCheckedChange = viewModel::setDozePowerSave,
         )
+        SwitchRow(
+            title = "Connect on launch",
+            subtitle = "Start the VPN when the app opens",
+            checked = ui.autoConnectOnLaunch,
+            onCheckedChange = viewModel::setAutoConnectOnLaunch,
+        )
         RouteModeRow(
             mode = ui.routeMode,
             onSelect = viewModel::setRouteMode,
@@ -113,6 +122,30 @@ fun SettingsScreen(
                 Text("Per-app VPN", style = MaterialTheme.typography.bodyLarge)
                 Text(
                     "Choose which apps use the tunnel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    // Apps can't enable lockdown themselves — the system VPN
+                    // settings screen is the only supported path.
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                    }.onFailure {
+                        context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                    }
+                }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Always-on & kill switch", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Open system VPN settings to enable",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -7,11 +7,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import dagger.hilt.android.AndroidEntryPoint
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
+import dev.typenil.vpnclient.core.vpn.VpnConnectionState
+import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.ui.VpnApp
 import javax.inject.Inject
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -19,8 +25,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var connectionManager: ConnectionManager
 
-    private val _importUrl = MutableStateFlow<String?>(null)
-    val importUrl: StateFlow<String?> get() = _importUrl
+    @Inject
+    lateinit var settings: SettingsRepository
+    private val _importUrl = MutableStateFlow<ExtractedImport?>(null)
+    val importUrl: StateFlow<ExtractedImport?> get() = _importUrl
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,12 +42,31 @@ class MainActivity : ComponentActivity() {
         }
         // Only on a fresh launch — the launch intent survives recreation, so
         // a process-death/config-change restore must not re-fire it.
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null) {
+            maybeAutoConnect(intent)
+            handleIntent(intent)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // singleTask: a launcher reopen lands here, not in onCreate — the
+        // same auto-connect check applies to MAIN intents only.
+        maybeAutoConnect(intent)
         handleIntent(intent)
+    }
+
+    private fun maybeAutoConnect(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_MAIN) return
+        // Auto-connect: consent flows through the existing
+        // prepareIntent/PermissionRequired path — no silent start.
+        lifecycleScope.launch {
+            if (settings.autoConnectOnLaunch.first() &&
+                connectionManager.state.value is VpnConnectionState.Idle
+            ) {
+                connectionManager.connect()
+            }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {

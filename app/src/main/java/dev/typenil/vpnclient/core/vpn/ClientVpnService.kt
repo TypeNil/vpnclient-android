@@ -583,7 +583,14 @@ class ClientVpnService : VpnService(), EnginePlatform {
             engine = created
             connectionManager.attachEngine(created, generation)
             registerDozeReceiver()
-            created.start(config)
+            val (perAppMode, perAppPackages) = settings.perAppPolicySnapshot()
+            val plan = resolvePerAppPlan(perAppMode, perAppPackages, packageName)
+            created.start(
+                config.copy(
+                    includedPackages = plan.allowed,
+                    excludedPackages = plan.disallowed,
+                ),
+            )
             // A fresh engine always connects its status channel — apply the
             // current screen state so a start while the screen is off
             // doesn't churn stats nobody sees.
