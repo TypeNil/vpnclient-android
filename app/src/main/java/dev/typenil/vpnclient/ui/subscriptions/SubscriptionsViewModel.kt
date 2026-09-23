@@ -7,9 +7,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.data.db.NodeDao
 import javax.inject.Inject
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -17,11 +15,17 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** A snackbar message waiting to be shown — held in state so it survives
+ *  the destination not being composed when the failure lands. [id] lets the
+ *  screen re-trigger its effect when one message replaces another. */
+data class PendingMessage(val id: Long, val text: String)
+
 data class SubscriptionsUiState(
     val profiles: List<SubscriptionProfile> = emptyList(),
     /** subscriptionId → enabled node count (computed from observeEnabled). */
     val nodeCounts: Map<Long, Int> = emptyMap(),
     val refreshingIds: Set<Long> = emptySet(),
+    val pendingMessage: PendingMessage? = null,
 )
 
 @HiltViewModel
@@ -30,9 +34,7 @@ class SubscriptionsViewModel @Inject constructor(
     nodeDao: NodeDao,
 ) : ViewModel() {
 
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    /** One-shot snackbar messages (add/refresh failures). */
-    val messages: SharedFlow<String> = _messages
+    private val pendingMessage = MutableStateFlow<PendingMessage?>(null)
 
     private val refreshing = MutableStateFlow<Set<Long>>(emptySet())
 
@@ -40,11 +42,13 @@ class SubscriptionsViewModel @Inject constructor(
         repository.profiles,
         nodeDao.observeEnabled(),
         refreshing,
-    ) { profiles, nodes, refreshingIds ->
+        pendingMessage,
+    ) { profiles, nodes, refreshingIds, message ->
         SubscriptionsUiState(
             profiles = profiles,
             nodeCounts = nodes.groupingBy { it.subscriptionId }.eachCount(),
             refreshingIds = refreshingIds,
+            pendingMessage = message,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -52,10 +56,20 @@ class SubscriptionsViewModel @Inject constructor(
         initialValue = SubscriptionsUiState(),
     )
 
+    /** Queue a snackbar message; a newer failure replaces an unshown one. */
+    private fun postMessage(text: String) {
+        pendingMessage.update { PendingMessage(id = (it?.id ?: 0) + 1, text = text) }
+    }
+
+    /** The screen consumed the message — clear it so it can't re-show. */
+    fun acknowledgeMessage() {
+        pendingMessage.value = null
+    }
+
     fun add(url: String, requestedName: String?, allowInsecureHttp: Boolean = false) {
         viewModelScope.launch {
             repository.add(url, requestedName?.trim()?.ifEmpty { null }, allowInsecureHttp)
-                .onFailure { _messages.emit(it.message ?: "Failed to add subscription") }
+                .onFailure { postMessage(it.message ?: "Failed to add subscription") }
         }
     }
 
@@ -64,7 +78,7 @@ class SubscriptionsViewModel @Inject constructor(
             refreshing.update { it + id }
             try {
                 repository.refresh(id)
-                    .onFailure { _messages.emit(it.message ?: "Refresh failed") }
+                    .onFailure { postMessage(it.message ?: "Refresh failed") }
             } finally {
                 refreshing.update { it - id }
             }

@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -61,9 +62,10 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
-
-    LaunchedEffect(Unit) {
-        viewModel.promptReconnect.collect {
+    // Pending-state prompt: shows once per recommendation, re-shows after a
+    // process/config change only if the flag flips back to true.
+    LaunchedEffect(ui.reconnectRecommended) {
+        if (ui.reconnectRecommended) {
             val result = snackbarHostState.showSnackbar(
                 message = "Reconnect the VPN to apply the new settings",
                 actionLabel = "Reconnect",
@@ -266,6 +268,15 @@ private fun AutoRefreshIntervalRow(
     var text by remember {
         mutableStateOf(TextFieldValue(if (minutes > 0) minutes.toString() else ""))
     }
+    var focused by remember { mutableStateOf(false) }
+    // Adopt the persisted value once it loads — but never while the user is
+    // typing, so an in-progress edit isn't clobbered by a DataStore round-trip.
+    LaunchedEffect(minutes, focused) {
+        if (!focused) {
+            val persisted = if (minutes > 0) minutes.toString() else ""
+            if (text.text != persisted) text = TextFieldValue(persisted)
+        }
+    }
     val focusManager = LocalFocusManager.current
     Row(
         modifier = Modifier
@@ -289,7 +300,9 @@ private fun AutoRefreshIntervalRow(
                     focusManager.clearFocus()
                 },
             ),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { focused = it.isFocused },
         )
     }
 }

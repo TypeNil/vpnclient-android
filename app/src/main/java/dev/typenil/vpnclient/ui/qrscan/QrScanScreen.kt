@@ -67,6 +67,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -113,6 +115,22 @@ fun QrScanScreen(
         ) {
             permissionPermanentlyDenied = true
         }
+    }
+
+    // Granting/revoking CAMERA in system settings doesn't recompose this
+    // screen — re-check on resume (same pattern as NotificationPermissionRow).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                cameraGranted = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.CAMERA,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (cameraGranted) permissionPermanentlyDenied = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(Unit) {
         if (!cameraGranted && !permissionPermanentlyDenied) {

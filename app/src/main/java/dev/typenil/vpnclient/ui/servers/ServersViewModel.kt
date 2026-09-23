@@ -132,12 +132,16 @@ class ServersViewModel @Inject constructor(
                 if (connectionManager.state.value is VpnConnectionState.Connected) {
                     val groups = connectionManager.groups.value
                     groups.forEach { connectionManager.urlTest(it.tag) }
+                    val covered = groups.flatMap { g -> g.items.map { item -> item.tag } }
                     // Mark covered tags now — a node that stays without a
                     // delay after the run shows "timeout" instead of "—".
+                    // Drop their stale direct-probe delays too: the badge
+                    // prefers any number over "timeout", so a node that just
+                    // timed out must not keep showing an old TCP latency.
                     probeSurface.update {
                         it.copy(
-                            tested = it.tested +
-                                groups.flatMap { g -> g.items.map { item -> item.tag } },
+                            delays = it.delays - covered,
+                            tested = it.tested + covered,
                         )
                     }
                 } else {

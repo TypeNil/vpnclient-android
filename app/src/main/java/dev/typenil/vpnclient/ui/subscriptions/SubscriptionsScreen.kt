@@ -88,8 +88,13 @@ fun SubscriptionsScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        viewModel.messages.collect { snackbarHostState.showSnackbar(it) }
+    // Durable message: held in uiState until shown, so a failure that lands
+    // while this destination isn't composed still surfaces on return.
+    LaunchedEffect(ui.pendingMessage?.id) {
+        ui.pendingMessage?.let { message ->
+            snackbarHostState.showSnackbar(message.text)
+            viewModel.acknowledgeMessage()
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
