@@ -97,6 +97,10 @@ the tunnel instead of dead-ending in `direct`.
   rejects mixing `addAllowed`/`addDisallowed` calls, so the plan fills exactly
   one side — include-mode wins when any allowed package exists, and our own
   package is never allowed (its core sockets would loop back into the TUN).
+- `excludeRoute()` exists only on API 33+: below it the Builder can't honor
+  route exclusions. The compiler emits no `route_exclude_address` today, so
+  the lists are empty; if a future config produces them, `openTun` logs a
+  warning on API 26–32 rather than silently diverging.
 - The package lists are baked into the TUN fd, so a policy change can't be
   hot-swapped: while Connected, a debounced watcher in `ClientVpnService`
   restarts the engine inside the same session (stop → start → `openTun`
@@ -147,6 +151,10 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   and return `NOT_STICKY`. A null-intent restart (process death) or system
   start rebuilds the config from Room/DataStore via `NodeConfigProvider` and
   adopts a fresh session generation — no `pendingSession` handoff needed.
+- Socket protection: `autoDetectInterfaceControl` → `protect(fd)`. A `false`
+  return means the core's outbound socket loops back into the TUN — the
+  engine reports it once as `EngineEvent.Failed` and the bounded
+  auto-reconnect rebuilds the session (fail-closed posture, WG Tunnel style).
 - Network change: one `ConnectivityManager.NetworkCallback` (service-owned) →
   `setUnderlyingNetworks` + `ConnectionManager` (`Connected`↔`Reconnecting`)
   + coalesced `engine.onUnderlyingNetworkChanged()` → `commandServer.resetNetwork()`.

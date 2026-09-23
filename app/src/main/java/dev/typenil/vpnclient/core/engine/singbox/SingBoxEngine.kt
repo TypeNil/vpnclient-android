@@ -106,6 +106,10 @@ class SingBoxEngine(
     @Volatile
     private var closing = false
 
+    /** One-shot latch for [PlatformBridge.autoDetectInterfaceControl] — the
+     *  first protect() failure fails the session; later ones stay quiet. */
+    private val protectFailureReported = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val _stats = MutableSharedFlow<TrafficStats>(replay = 1)
     private val _events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 64)
     private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
@@ -136,6 +140,7 @@ class SingBoxEngine(
             commandServer = server
             try {
                 closing = false
+                protectFailureReported.set(false)
                 networkMonitor.start()
                 server.startOrReloadService(config.configJson, OverrideOptions())
             } catch (e: CancellationException) {
@@ -541,7 +546,28 @@ class SingBoxEngine(
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
         override fun autoDetectInterfaceControl(fd: Int) {
-            platform.protectSocket(fd)
+            // protect() == false means the core's outbound socket is NOT
+            // excluded from the VPN — it loops back into the TUN and the
+            // tunnel is dead. WG Tunnel treats a missing protector as a
+            // dial failure; we can't fail the dial from this callback, so
+            // surface it once as a fatal engine event — the bounded
+            // auto-reconnect then rebuilds the session honestly instead of
+            // leaving a zombie tunnel up.
+            if (platform.protectSocket(fd)) return
+            if (protectFailureReported.compareAndSet(false, true)) {
+                SecureLog.e(TAG, "protect() failed — outbound socket not excluded from VPN")
+                if (!closing) {
+                    scope.launch {
+                        if (!closing) {
+                            _events.emit(
+                                EngineEvent.Failed(
+                                    EngineError.CoreError("socket protect failed"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {

@@ -19,6 +19,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
+/** A network is safe as the engine underlay only with known, positive evidence. */
+internal fun isUsableUnderlyingNetwork(
+    capabilitiesKnown: Boolean,
+    hasInternet: Boolean,
+    isVpn: Boolean,
+): Boolean = capabilitiesKnown && hasInternet && !isVpn
+
 /**
  * Tracks the default network and feeds interface changes to the core.
  * Replaces SFA's DefaultNetworkMonitor/DefaultNetworkListener pair.
@@ -36,25 +43,28 @@ class NetworkMonitor(
     private var listener: InterfaceUpdateListener? = null
 
     private var callback: ConnectivityManager.NetworkCallback? = null
-
-    /**
-     * The default network the core should dial out on — never the VPN
-     * interface itself. Once the tunnel is up, `registerDefaultNetworkCallback`
-     * reports the VPN network (the app's own traffic is VPN-subject); pushing
-     * it to the core makes outbounds bind to tun and loop into themselves.
-     */
     private fun physicalNetwork(candidate: Network?): Network? {
-        if (candidate != null && !isVpn(candidate)) return candidate
+        if (candidate != null) {
+            val caps = connectivity.getNetworkCapabilities(candidate)
+            if (isUsableUnderlyingNetwork(
+                    capabilitiesKnown = caps != null,
+                    hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+                    isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true,
+                )
+            ) {
+                return candidate
+            }
+        }
         return connectivity.allNetworks.firstOrNull { network ->
-            val caps = connectivity.getNetworkCapabilities(network) ?: return@firstOrNull false
-            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            val caps = connectivity.getNetworkCapabilities(network)
+            isUsableUnderlyingNetwork(
+                capabilitiesKnown = caps != null,
+                hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+                isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true,
+            )
         }
     }
 
-    private fun isVpn(network: Network): Boolean =
-        connectivity.getNetworkCapabilities(network)
-            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
 
     fun start() {
         if (callback != null) return

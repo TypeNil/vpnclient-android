@@ -27,6 +27,7 @@ import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.TunRequest
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
+import dev.typenil.vpnclient.core.engine.singbox.isUsableUnderlyingNetwork
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -924,7 +925,20 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     }.forEach { builder.addRoute(it.address, it.prefix) }
                 }
                 // excludeRoute() doesn't exist below API 33 — excluded routes
-                // are silently ignored there.
+                // can't be honored there. Warn loudly instead of silently
+                // diverging: today the core never emits exclusions (the
+                // compiler sets no route_exclude_address), so this fires
+                // only if a future config starts producing them.
+                if (request.inet4ExcludedRoutes.isNotEmpty() ||
+                    request.inet6ExcludedRoutes.isNotEmpty()
+                ) {
+                    SecureLog.w(
+                        TAG,
+                        "route exclusions ignored below API 33 " +
+                            "(v4=${request.inet4ExcludedRoutes.size} " +
+                            "v6=${request.inet6ExcludedRoutes.size})",
+                    )
+                }
             }
 
             // Builder rejects mixing allowed+disallowed calls; the resolver
@@ -1021,13 +1035,23 @@ class ClientVpnService : VpnService(), EnginePlatform {
         lastUnderlyingNetwork = null
     }
 
+    private fun isUsablePhysicalNetwork(network: Network): Boolean {
+        val caps = connectivity.getNetworkCapabilities(network)
+        return isUsableUnderlyingNetwork(
+            capabilitiesKnown = caps != null,
+            hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+            isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true,
+        )
+    }
+
     private fun updateUnderlyingNetworks() {
+        // activeNetwork can be the VPN interface itself, or capabilities can
+        // temporarily be unavailable during teardown. Only choose a network
+        // with known INTERNET + NOT_VPN evidence; otherwise fall back to any
+        // positively identified physical network, and publish null if none.
         val active = connectivity.activeNetwork
-            ?.takeIf { network ->
-                // Never feed the tunnel its own interface as "underlying".
-                val caps = connectivity.getNetworkCapabilities(network)
-                caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            }
+            ?.takeIf(::isUsablePhysicalNetwork)
+            ?: connectivity.allNetworks.firstOrNull(::isUsablePhysicalNetwork)
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1035,9 +1059,6 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 setUnderlyingNetworks(if (active != null) arrayOf(active) else null)
             }
         }
-        // Feed the state machine: loss while Connected → Reconnecting;
-        // a new network while Reconnecting → Connected. The UI transition is
-        // always honest; the engine reset honors the user's toggle.
         if (active == null) {
             connectionManager.onUnderlyingNetworkLost()
         } else {
