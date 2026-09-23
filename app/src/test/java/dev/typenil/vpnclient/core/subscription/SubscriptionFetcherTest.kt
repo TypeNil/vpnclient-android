@@ -201,4 +201,101 @@ class SubscriptionFetcherTest {
         assertTrue(fetched.body.isNotEmpty())
         assertEquals(1, other.requestCount)
     }
+
+    @Test
+    fun `basic auth goes to the origin only`() = runTest {
+        // URL-embedded credentials: sent to the exact origin, stripped on a
+        // cross-origin redirect — same scoping rule as the HWID headers.
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", other.url("/landing").toString()),
+        )
+        other.enqueue(MockResponse().setBody(body))
+
+        val url = "http://user:pass@${server.hostName}:${server.port}/sub"
+        fetcher.fetch(url, hwid, allowInsecure = true)
+
+        val first = server.takeRequest()
+        assertEquals(
+            okhttp3.Credentials.basic("user", "pass"),
+            first.getHeader("Authorization"),
+        )
+        val second = other.takeRequest()
+        assertNull(second.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `basic auth survives an absolute same-origin redirect`() = runTest {
+        // A canonicalization redirect to an absolute URL without userinfo
+        // must not drop the origin's credentials.
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", server.url("/sub/final").toString()),
+        )
+        server.enqueue(MockResponse().setBody(body))
+
+        val url = "http://user:pass@${server.hostName}:${server.port}/sub"
+        fetcher.fetch(url, hwid, allowInsecure = true)
+
+        val expected = okhttp3.Credentials.basic("user", "pass")
+        assertEquals(expected, server.takeRequest().getHeader("Authorization"))
+        assertEquals(expected, server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `content-disposition filename becomes the profile title`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setBody(body)
+                .setHeader("content-disposition", "attachment; filename=\"Foo.sub\""),
+        )
+        val fetched = fetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+        assertEquals("Foo", fetched.profileTitle)
+    }
+
+    @Test
+    fun `profile-title wins over content-disposition`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setBody(body)
+                .setHeader("profile-title", "Panel Name")
+                .setHeader("content-disposition", "attachment; filename=\"Foo.sub\""),
+        )
+        val fetched = fetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+        assertEquals("Panel Name", fetched.profileTitle)
+    }
+
+    @Test
+    fun `provider metadata headers are captured`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setBody(body)
+                .setHeader("update-always", "1")
+                .setHeader("moved-permanently-to", "https://new.example.com/sub")
+                .setHeader("new-url", "https://alt.example.com/sub")
+                .setHeader("new-domain", "cdn.example.com")
+                .setHeader("fallback-url", "https://fb.example.com/sub"),
+        )
+        val fetched = fetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+        assertTrue(fetched.updateAlways)
+        assertEquals("https://new.example.com/sub", fetched.movedPermanentlyTo)
+        assertEquals("https://alt.example.com/sub", fetched.newUrl)
+        assertEquals("cdn.example.com", fetched.newDomain)
+        assertEquals("https://fb.example.com/sub", fetched.fallbackUrl)
+    }
+
+    @Test
+    fun `private fallback-url is rejected to null`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setBody(body)
+                .setHeader("fallback-url", "http://127.0.0.1:9/sub")
+                .setHeader("new-domain", "localhost"),
+        )
+        val fetched = fetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+        assertNull(fetched.fallbackUrl)
+        assertNull(fetched.newDomain)
+    }
 }

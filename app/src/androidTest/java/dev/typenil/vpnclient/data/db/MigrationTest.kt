@@ -83,6 +83,32 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate3To4AddsProviderMetadataColumns() {
+        helper.createDatabase(TEST_DB, 3).use { db ->
+            db.execSQL(
+                """INSERT INTO subscriptions
+                    (name, url, createdAtEpochMs, lastUpdatedAtEpochMs,
+                     lastAttemptAtEpochMs, lastError, enabled, userInfoJson,
+                     supportUrl, updateIntervalMinutes, allowInsecureHttp)
+                   VALUES ('sub', ?, 1, NULL, NULL, NULL, 1, NULL, NULL, 12, 0)""",
+                arrayOf("https://127.0.0.1:9/sub"),
+            )
+        }
+        helper.runMigrationsAndValidate(
+            TEST_DB, 4, true, AppDatabase.MIGRATION_3_4,
+        ).use { db ->
+            db.query(
+                "SELECT announce, updateAlways, fallbackUrl FROM subscriptions",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertTrue(c.isNull(0))
+                assertEquals(0, c.getInt(1))
+                assertTrue(c.isNull(2))
+            }
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

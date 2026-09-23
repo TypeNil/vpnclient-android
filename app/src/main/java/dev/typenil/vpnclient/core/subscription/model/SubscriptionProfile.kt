@@ -17,6 +17,10 @@ data class SubscriptionProfile(
     val userInfo: SubscriptionUserInfo?,
     val supportUrl: String?,
     val updateIntervalMinutes: Int?,
+    /** Provider announcement text, when the panel publishes one. */
+    val announce: String?,
+    /** Provider asks the client to refresh this subscription on every launch. */
+    val updateAlways: Boolean,
     /** User opted this source into cleartext HTTP fetches. */
     val allowInsecureHttp: Boolean,
 )
@@ -79,7 +83,6 @@ sealed class SubscriptionError : Exception() {
     }
     /** Remnawave HWID device-limit rejection. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()
-    data class RemnawaveError(val statusCode: Int, override val message: String) : SubscriptionError()
     /** The subscription row no longer exists (removed mid-flight). */
     data object NotFound : SubscriptionError() {
         override val message = "subscription no longer exists"

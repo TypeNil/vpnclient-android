@@ -9,6 +9,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionParserDispatcher
 import dev.typenil.vpnclient.core.subscription.SubscriptionRefreshScheduler
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.subscription.SubscriptionExpiryNotifier
 import dev.typenil.vpnclient.core.subscription.UriListParser
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
@@ -71,6 +72,9 @@ class SubscriptionsViewModelTest {
             userInfoJson: String?,
             supportUrl: String?,
             updateIntervalMinutes: Int?,
+            announce: String?,
+            updateAlways: Boolean,
+            fallbackUrl: String?,
         ) = Unit
     }
 
@@ -97,6 +101,8 @@ class SubscriptionsViewModelTest {
         override suspend fun setSelectedNodeId(id: String?) = Unit
         override suspend fun clearSelectedNodeIdIf(expected: String) = Unit
         override val autoRefreshMinutes: Flow<Int> = MutableStateFlow(0)
+        override val expiryAlerted: Flow<Set<String>> = MutableStateFlow(emptySet())
+        override suspend fun markExpiryAlerted(key: String) = Unit
     }
 
     private lateinit var viewModel: SubscriptionsViewModel
@@ -128,6 +134,13 @@ class SubscriptionsViewModelTest {
                 override fun cancel(subscriptionId: Long) = Unit
             },
             settings = FakeSettings(),
+            expiryNotifier = object : SubscriptionExpiryNotifier {
+                override fun notifyExpiring(
+                    subscriptionId: Long,
+                    subscriptionName: String,
+                    expireEpochSeconds: Long,
+                ): Boolean = true
+            },
         )
         viewModel = SubscriptionsViewModel(repository, FakeNodeDao())
     }

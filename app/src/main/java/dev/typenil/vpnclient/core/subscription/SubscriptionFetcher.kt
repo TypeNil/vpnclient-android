@@ -1,9 +1,12 @@
 package dev.typenil.vpnclient.core.subscription
 
+import dev.typenil.vpnclient.BuildConfig
 import dev.typenil.vpnclient.core.common.log.Redactor
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
+import dev.typenil.vpnclient.core.subscription.parse.percentDecode
+import dev.typenil.vpnclient.core.subscription.parse.truthyParam
 import java.io.IOException
 import java.io.InterruptedIOException
 import javax.inject.Inject
@@ -13,6 +16,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,6 +30,14 @@ data class FetchedSubscription(
     val supportUrl: String?,
     val announce: String?,
     val updateIntervalMinutes: Int?,
+    /** `update-always` — provider asks the client to refresh on every launch. */
+    val updateAlways: Boolean,
+    /** Provider migration hints — validated remote URLs, never applied blindly. */
+    val movedPermanentlyTo: String?,
+    val newUrl: String?,
+    val newDomain: String?,
+    /** Alternate fetch URL tried when the primary is unreachable. */
+    val fallbackUrl: String?,
     /** Raw header values relevant to Remnawave HWID/device-limit diagnostics. */
     val hwidHeaders: Map<String, String>,
 ) {
@@ -52,6 +64,11 @@ class SubscriptionFetcher @Inject constructor(
         private const val TAG = "SubscriptionFetcher"
         private const val MAX_BODY_BYTES = 8L * 1024 * 1024 // 8 MiB — generous for node lists
         private const val MAX_REDIRECTS = 5
+
+        /** Container extensions stripped from a Content-Disposition title. */
+        private val STRIPPABLE_EXTENSIONS = setOf(
+            "sub", "txt", "yaml", "yml", "json", "conf", "base64",
+        )
 
         /**
          * The panel chooses a response format from the path suffix and/or User-Agent.
@@ -83,6 +100,11 @@ class SubscriptionFetcher @Inject constructor(
                 throw SubscriptionError.InsecureTransport
             }
             var current = origin
+            // Credentials belong to the origin URL, not to whatever a redirect
+            // target happens to carry — capture once so an absolute same-origin
+            // Location without userinfo doesn't drop them.
+            val originUser = origin.username
+            val originPassword = origin.password
             var redirectsLeft = MAX_REDIRECTS
             while (true) {
                 // HWID headers go only to the exact origin (scheme+host+port) —
@@ -97,6 +119,16 @@ class SubscriptionFetcher @Inject constructor(
                             header("x-device-os", "android")
                             header("x-ver-os", android.os.Build.VERSION.RELEASE ?: "unknown")
                             header("x-device-model", android.os.Build.MODEL ?: "unknown")
+                            header("x-app-version", BuildConfig.VERSION_NAME)
+                        }
+                        // HTTP Basic auth (sing-box client spec): credentials
+                        // embedded in the URL go only to the exact origin —
+                        // same rule as the HWID headers above.
+                        if (originUser.isNotEmpty() && current.sameOriginAs(origin)) {
+                            header(
+                                "Authorization",
+                                Credentials.basic(originUser, originPassword),
+                            )
                         }
                     }
                     .build()
@@ -195,7 +227,8 @@ class SubscriptionFetcher @Inject constructor(
                 FetchedSubscription(
                     body = bytes,
                     contentType = body.contentType()?.toString(),
-                    profileTitle = decodeHeaderValue(headers["profile-title"]),
+                    profileTitle = decodeHeaderValue(headers["profile-title"])
+                        ?: contentDispositionFilename(headers["content-disposition"]),
                     userInfo = parseUserInfo(headers["subscription-userinfo"]),
                     supportUrl = headers["profile-web-page-url"] ?: headers["support-url"],
                     announce = decodeHeaderValue(headers["announce"]),
@@ -207,6 +240,11 @@ class SubscriptionFetcher @Inject constructor(
                         ?.toLongOrNull()
                         ?.takeIf { it in 1..(Int.MAX_VALUE / 60L) }
                         ?.let { (it * 60).toInt() },
+                    updateAlways = truthyParam(headers["update-always"]),
+                    movedPermanentlyTo = validRemoteUrl(headers["moved-permanently-to"]),
+                    newUrl = validRemoteUrl(headers["new-url"]),
+                    newDomain = validDomain(headers["new-domain"]),
+                    fallbackUrl = validRemoteUrl(headers["fallback-url"]),
                     hwidHeaders = headers.names()
                         .filter { it.lowercase().startsWith("x-hwid") }
                         .associateWith { headers[it]!! },
@@ -249,6 +287,56 @@ class SubscriptionFetcher @Inject constructor(
         return runCatching {
             String(java.util.Base64.getDecoder().decode(value.removePrefix("base64:")))
         }.getOrNull()
+    }
+
+    /**
+     * A provider-supplied URL the client may later act on (migration target,
+     * fallback). Must parse as http(s) and must not point at a private/local
+     * host — the same SSRF rule as redirect targets.
+     */
+    internal fun validRemoteUrl(raw: String?): String? {
+        val url = raw?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { runCatching { it.toHttpUrl() }.getOrNull() }
+            ?: return null
+        if (isPrivateHost(url.host)) return null
+        return url.toString()
+    }
+
+    /**
+     * A bare replacement domain (`new-domain` header): no scheme, path,
+     * userinfo, or port — and never a private/local host.
+     */
+    internal fun validDomain(raw: String?): String? {
+        val domain = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (domain.contains("://") || domain.any { it == '/' || it == '@' || it == ':' || it.isWhitespace() }) {
+            return null
+        }
+        if (isPrivateHost(domain)) return null
+        return domain
+    }
+
+    /**
+     * `Content-Disposition` filename as a profile-title fallback. RFC 5987
+     * `filename*=UTF-8''…` wins over plain `filename=`; a known container
+     * extension (.sub/.txt/.yaml/…) is stripped so the title reads cleanly.
+     */
+    internal fun contentDispositionFilename(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val params = value.split(';').map { it.trim() }
+        val fromStar = params
+            .firstOrNull { it.startsWith("filename*=", ignoreCase = true) }
+            ?.substringAfter('=')?.trim()?.trim('"')
+            ?.takeIf { it.startsWith("utf-8''", ignoreCase = true) }
+            ?.substringAfter("''")
+            ?.let { runCatching { percentDecode(it) }.getOrNull() }
+            ?.takeIf { it.isNotBlank() }
+        val plain = params
+            .firstOrNull { it.startsWith("filename=", ignoreCase = true) }
+            ?.substringAfter('=')?.trim()?.trim('"')
+            ?.takeIf { it.isNotBlank() }
+        val name = fromStar ?: plain ?: return null
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return if (ext in STRIPPABLE_EXTENSIONS) name.substringBeforeLast('.') else name
     }
 
     private fun String.hostOrNull(): String =
@@ -300,3 +388,4 @@ class SubscriptionFetcher @Inject constructor(
     private fun okhttp3.HttpUrl.sameOriginAs(other: okhttp3.HttpUrl): Boolean =
         scheme == other.scheme && host == other.host && port == other.port
 }
+

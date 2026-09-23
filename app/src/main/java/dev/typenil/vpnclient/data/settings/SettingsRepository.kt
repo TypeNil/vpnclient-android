@@ -58,6 +58,10 @@ class SettingsRepository @Inject constructor(
         /** Set when the restart guard disabled auto-start — persisted so the
          *  UI can warn even when notifications are denied. */
         val VPN_RESTART_GUARD_TRIPPED = booleanPreferencesKey("vpn_restart_guard_tripped")
+        /** Expiry alerts already posted — `"$subscriptionId:$expireEpochSeconds"`. */
+        val EXPIRY_ALERTED = stringSetPreferencesKey("expiry_alerted")
+        /** Connect the tunnel automatically when the app is opened. */
+        val AUTO_CONNECT_ON_LAUNCH = booleanPreferencesKey("auto_connect_on_launch")
     }
 
     override val selectedNodeId: Flow<String?> = context.settingsStore.data
@@ -269,6 +273,25 @@ class SettingsRepository @Inject constructor(
             prefs.remove(Keys.VPN_RESTART_COUNT)
             prefs.remove(Keys.VPN_RESTART_GUARD_TRIPPED)
         }
+    }
+
+    override val expiryAlerted: Flow<Set<String>> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.EXPIRY_ALERTED] ?: emptySet() }
+
+    override suspend fun markExpiryAlerted(key: String) {
+        context.settingsStore.edit { prefs ->
+            prefs[Keys.EXPIRY_ALERTED] = (prefs[Keys.EXPIRY_ALERTED] ?: emptySet()) + key
+        }
+    }
+
+    /** Start the VPN automatically when the app opens (consent still applies). */
+    val autoConnectOnLaunch: Flow<Boolean> = context.settingsStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[Keys.AUTO_CONNECT_ON_LAUNCH] ?: false }
+
+    suspend fun setAutoConnectOnLaunch(enabled: Boolean) {
+        context.settingsStore.edit { it[Keys.AUTO_CONNECT_ON_LAUNCH] = enabled }
     }
 
     internal companion object {

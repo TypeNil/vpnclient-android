@@ -15,8 +15,10 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -59,8 +61,22 @@ class SubscriptionRepositoryTest {
             userInfoJson: String?,
             supportUrl: String?,
             updateIntervalMinutes: Int?,
+            announce: String?,
+            updateAlways: Boolean,
+            fallbackUrl: String?,
         ) {
             successCalls++
+            subs[id]?.let { subs[id] = it.copy(
+                lastUpdatedAtEpochMs = updatedAt,
+                lastAttemptAtEpochMs = attemptAt,
+                lastError = null,
+                userInfoJson = userInfoJson,
+                supportUrl = supportUrl,
+                updateIntervalMinutes = updateIntervalMinutes,
+                announce = announce,
+                updateAlways = updateAlways,
+                fallbackUrl = fallbackUrl,
+            ) }
         }
     }
 
@@ -123,6 +139,11 @@ class SubscriptionRepositoryTest {
             if (selected.value == expected) selected.value = null
         }
         override val autoRefreshMinutes: Flow<Int> get() = autoRefresh
+        val alerted = MutableStateFlow<Set<String>>(emptySet())
+        override val expiryAlerted: Flow<Set<String>> get() = alerted
+        override suspend fun markExpiryAlerted(key: String) {
+            alerted.value = alerted.value + key
+        }
     }
 
     private class FakeScheduler : SubscriptionRefreshScheduler {
@@ -146,11 +167,28 @@ class SubscriptionRepositoryTest {
         override suspend fun reconcile(activeSubscriptionIds: Set<Long>) = Unit
     }
 
+    private class FakeExpiryNotifier : SubscriptionExpiryNotifier {
+        data class Call(val id: Long, val name: String, val expire: Long)
+        val calls = mutableListOf<Call>()
+        override fun notifyExpiring(
+            subscriptionId: Long,
+            subscriptionName: String,
+            expireEpochSeconds: Long,
+        ): Boolean {
+            calls.add(Call(subscriptionId, subscriptionName, expireEpochSeconds))
+            return posted
+        }
+
+        /** False simulates a denied POST_NOTIFICATIONS — nothing was shown. */
+        var posted: Boolean = true
+    }
+
     private lateinit var subscriptionDao: FakeSubscriptionDao
     private lateinit var nodeDao: FakeNodeDao
     private lateinit var validator: FakeValidator
-    private lateinit var settings: FakeSettings
     private lateinit var scheduler: FakeScheduler
+    private lateinit var settings: FakeSettings
+    private lateinit var expiryNotifier: FakeExpiryNotifier
     private lateinit var transactions: FakeTransactions
     private lateinit var repository: SubscriptionRepository
 
@@ -176,11 +214,12 @@ class SubscriptionRepositoryTest {
         )
     }
 
-    private fun seedSubscription(id: Long = 1L) {
+
+    private fun seedSubscription(id: Long, url: String, fallbackUrl: String? = null) {
         subscriptionDao.subs[id] = SubscriptionEntity(
             id = id,
             name = "sub",
-            url = server.url("/sub").toString(),
+            url = url,
             createdAtEpochMs = 1,
             lastUpdatedAtEpochMs = null,
             lastAttemptAtEpochMs = null,
@@ -189,9 +228,14 @@ class SubscriptionRepositoryTest {
             userInfoJson = null,
             supportUrl = null,
             updateIntervalMinutes = null,
-            // MockWebServer speaks plain HTTP — opt the fixture in.
+            announce = null,
+            fallbackUrl = fallbackUrl,
             allowInsecureHttp = true,
         )
+    }
+
+    private fun seedSubscription(id: Long = 1L) {
+        seedSubscription(id, server.url("/sub").toString())
     }
 
     @Before
@@ -202,6 +246,7 @@ class SubscriptionRepositoryTest {
         settings = FakeSettings()
         scheduler = FakeScheduler()
         transactions = FakeTransactions()
+        expiryNotifier = FakeExpiryNotifier()
         repository = SubscriptionRepository(
             subscriptionDao = subscriptionDao,
             nodeDao = nodeDao,
@@ -214,6 +259,7 @@ class SubscriptionRepositoryTest {
             transactions = transactions,
             scheduler = scheduler,
             settings = settings,
+            expiryNotifier = expiryNotifier,
         )
     }
 
@@ -398,5 +444,162 @@ class SubscriptionRepositoryTest {
 
         assertTrue(result.isFailure)
         assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `network failure retries once against fallback url`() = runTest {
+        val fallback = MockWebServer()
+        try {
+            fallback.start()
+            seedSubscription(
+                1,
+                url = server.url("/sub").toString(),
+                fallbackUrl = fallback.url("/sub").toString(),
+            )
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            fallback.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+            val result = repository.refresh(1)
+
+            assertTrue(result.isSuccess)
+            assertEquals(1, nodeDao.forSubscription(1).size)
+        } finally {
+            fallback.shutdown()
+        }
+    }
+
+    @Test
+    fun `http error does not retry fallback`() = runTest {
+        val fallback = MockWebServer()
+        try {
+            fallback.start()
+            seedSubscription(
+                1,
+                url = server.url("/sub").toString(),
+                fallbackUrl = fallback.url("/sub").toString(),
+            )
+            server.enqueue(MockResponse().setResponseCode(500))
+
+            assertTrue(repository.refresh(1).isFailure)
+            assertEquals(0, fallback.requestCount)
+        } finally {
+            fallback.shutdown()
+        }
+    }
+
+    @Test
+    fun `moved-permanently-to migrates the stored url`() = runTest {
+        seedSubscription()
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("moved-permanently-to", "https://new.example.com/sub"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals("https://new.example.com/sub", subscriptionDao.subs[1]?.url)
+    }
+
+    @Test
+    fun `http migration target honored only under cleartext opt-in`() = runTest {
+        // Opted-in subscription: an http migration target is permitted.
+        seedSubscription()
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("moved-permanently-to", "http://public.example.com/sub"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals("http://public.example.com/sub", subscriptionDao.subs[1]?.url)
+    }
+
+    @Test
+    fun `migration transport policy`() {
+        // The fetch can't be exercised over HTTPS without okhttp-tls, so the
+        // transport gate is a pure function: https always allowed, http only
+        // under the per-subscription opt-in.
+        assertTrue(isMigrationAllowed("https://new.example.com/sub", allowInsecureHttp = false))
+        assertFalse(isMigrationAllowed("http://new.example.com/sub", allowInsecureHttp = false))
+        assertTrue(isMigrationAllowed("http://new.example.com/sub", allowInsecureHttp = true))
+        assertFalse(isMigrationAllowed("not-a-url", allowInsecureHttp = true))
+    }
+
+    @Test
+    fun `successful fallback keeps the stored fallback url`() = runTest {
+        val fallback = MockWebServer()
+        try {
+            fallback.start()
+            seedSubscription(
+                1,
+                url = server.url("/sub").toString(),
+                fallbackUrl = fallback.url("/sub").toString(),
+            )
+            // Fallback answers without its own fallback-url header — the
+            // known-working endpoint must survive markSuccess.
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            fallback.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+            assertTrue(repository.refresh(1).isSuccess)
+            assertEquals(fallback.url("/sub").toString(), subscriptionDao.subs[1]?.fallbackUrl)
+        } finally {
+            fallback.shutdown()
+        }
+    }
+
+    @Test
+    fun `private new-url is ignored`() = runTest {
+        seedSubscription()
+        val original = subscriptionDao.subs[1]!!.url
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("new-url", "http://127.0.0.1:9/sub"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(original, subscriptionDao.subs[1]?.url)
+    }
+
+    @Test
+    fun `expiry inside the window posts one alert`() = runTest {
+        seedSubscription()
+        val expire = (System.currentTimeMillis() / 1000) + 3600
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("subscription-userinfo", "upload=0; download=0; total=0; expire=$expire"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(1, expiryNotifier.calls.size)
+        assertEquals("1:$expire" in settings.alerted.value, true)
+
+        // Second refresh with the same expiry — already alerted, stays quiet.
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("subscription-userinfo", "upload=0; download=0; total=0; expire=$expire"),
+        )
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(1, expiryNotifier.calls.size)
+    }
+
+    @Test
+    fun `denied notification is not recorded as alerted`() = runTest {
+        seedSubscription()
+        expiryNotifier.posted = false
+        val expire = (System.currentTimeMillis() / 1000) + 3600
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("subscription-userinfo", "upload=0; download=0; total=0; expire=$expire"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(1, expiryNotifier.calls.size)
+        // Nothing was posted — the key must stay unmarked so a later
+        // refresh can alert once permission is granted.
+        assertFalse("1:$expire" in settings.alerted.value)
     }
 }

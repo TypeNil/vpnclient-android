@@ -42,6 +42,7 @@ class SubscriptionRepository @Inject constructor(
     private val transactions: DbTransactionRunner,
     private val scheduler: SubscriptionRefreshScheduler,
     private val settings: SubscriptionSettings,
+    private val expiryNotifier: SubscriptionExpiryNotifier,
 ) {
 
     private val refreshMutex = Mutex()
@@ -76,6 +77,8 @@ class SubscriptionRepository @Inject constructor(
             userInfoJson = null,
             supportUrl = null,
             updateIntervalMinutes = null,
+            announce = null,
+            fallbackUrl = null,
         )
         val id = subscriptionDao.insert(entity)
         val result = refresh(id)
@@ -109,7 +112,23 @@ class SubscriptionRepository @Inject constructor(
         val result = try {
             val sub = subscriptionDao.get(id) ?: throw SubscriptionError.NotFound
             val hwid = settings.getOrCreateHwid()
-            val body = fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
+            var usedFallback = false
+            val body = try {
+                fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
+            } catch (e: SubscriptionError) {
+                // Provider-published fallback URL: retry once on transport
+                // failures only — HTTP/parse/policy errors are authoritative.
+                val fallback = sub.fallbackUrl
+                if ((e is SubscriptionError.Network || e is SubscriptionError.Timeout) &&
+                    fallback != null
+                ) {
+                    SecureLog.i(TAG, "primary fetch failed sub=$id — trying fallback")
+                    usedFallback = true
+                    fetcher.fetch(fallback, hwid, sub.allowInsecureHttp)
+                } else {
+                    throw e
+                }
+            }
             fetched = body
             val classified = classifier.classify(body.body, body.contentType)
             // Parsing is CPU-bound over up to 8 MiB — keep it off the caller's
@@ -154,6 +173,13 @@ class SubscriptionRepository @Inject constructor(
                     userInfoJson = body.userInfo?.let { json.encodeToString(it) },
                     supportUrl = body.supportUrl,
                     updateIntervalMinutes = body.updateIntervalMinutes,
+                    announce = body.announce,
+                    updateAlways = body.updateAlways,
+                    // A fallback response that doesn't re-publish its own
+                    // fallback-url must not erase the endpoint that just
+                    // worked — keep the stored one in that case.
+                    fallbackUrl = body.fallbackUrl
+                        ?: if (usedFallback) sub.fallbackUrl else null,
                 )
             }
             SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} fmt=${classified.format}")
@@ -177,7 +203,23 @@ class SubscriptionRepository @Inject constructor(
             // Post-commit bookkeeping must not flip a committed success into a
             // reported failure — log and move on.
             runCatching {
-                val sub = subscriptionDao.get(id) ?: return@runCatching
+                var sub = subscriptionDao.get(id) ?: return@runCatching
+                // Provider-declared migration: repoint the stored URL at the
+                // new location. The header was already validated (public
+                // http(s) URL / bare domain) at fetch time.
+                val migrated = committed.movedPermanentlyTo ?: committed.newUrl
+                    ?: committed.newDomain?.let { domain ->
+                        runCatching {
+                            sub.url.toHttpUrl().newBuilder().host(domain).build().toString()
+                        }.getOrNull()
+                    }
+                if (migrated != null && migrated != sub.url &&
+                    isMigrationAllowed(migrated, sub.allowInsecureHttp)
+                ) {
+                    subscriptionDao.update(sub.copy(url = migrated))
+                    sub = subscriptionDao.get(id) ?: return@runCatching
+                    SecureLog.i(TAG, "subscription migrated sub=$id")
+                }
                 // If the selected node vanished (disabled subs' nodes count as
                 // unusable too), clear it so the next connect picks a sane
                 // default. The conditional clear can't wipe a selection the
@@ -193,6 +235,7 @@ class SubscriptionRepository @Inject constructor(
                     sub.name == deriveName(sub.url)
                 ) {
                     subscriptionDao.update(sub.copy(name = committed.profileTitle))
+                    sub = sub.copy(name = committed.profileTitle)
                 }
                 // (Re)register background refresh — the provider interval may
                 // have changed, and a removed/re-added job must be reconciled.
@@ -202,6 +245,21 @@ class SubscriptionRepository @Inject constructor(
                     userOverrideMinutes = settings.autoRefreshMinutes.first(),
                     enabled = sub.enabled,
                 )
+                // Expiry alert: once per expiry value, inside the warning
+                // window. The alerted-key embeds the expiry so a renewal
+                // re-arms the alert.
+                val expire = committed.userInfo?.expireEpochSeconds
+                val alertKey = "$id:$expire"
+                if (expiryAlertDue(
+                        expire,
+                        System.currentTimeMillis(),
+                        alreadyAlerted = alertKey in settings.expiryAlerted.first(),
+                    )
+                ) {
+                    if (expiryNotifier.notifyExpiring(id, sub.name, expire!!)) {
+                        settings.markExpiryAlerted(alertKey)
+                    }
+                }
             }.onFailure {
                 SecureLog.w(TAG, "post-commit bookkeeping failed sub=$id: ${it.javaClass.simpleName}")
             }
@@ -241,7 +299,6 @@ class SubscriptionRepository @Inject constructor(
         is SubscriptionError.InsecureTransport -> "https required"
         is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"
         is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
-        is SubscriptionError.RemnawaveError -> "panel status $statusCode"
         is SubscriptionError.NotFound -> "subscription removed"
     }
 
@@ -258,10 +315,23 @@ class SubscriptionRepository @Inject constructor(
         userInfo = userInfoJson?.let { runCatching { json.decodeFromString<SubscriptionUserInfo>(it) }.getOrNull() },
         supportUrl = supportUrl,
         updateIntervalMinutes = updateIntervalMinutes,
+        announce = announce,
+        updateAlways = updateAlways,
         allowInsecureHttp = allowInsecureHttp,
     )
 
     private companion object {
         const val TAG = "SubscriptionRepository"
     }
+}
+
+/**
+ * A provider-declared migration target is honored only when the stored
+ * subscription's transport policy permits it: HTTPS always, cleartext HTTP
+ * only under the per-subscription opt-in — otherwise the row would be
+ * repointed somewhere the next fetch must reject, losing the working URL.
+ */
+internal fun isMigrationAllowed(migratedUrl: String, allowInsecureHttp: Boolean): Boolean {
+    val url = runCatching { migratedUrl.toHttpUrl() }.getOrNull() ?: return false
+    return url.isHttps || allowInsecureHttp
 }

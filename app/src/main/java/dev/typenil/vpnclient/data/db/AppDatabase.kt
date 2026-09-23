@@ -33,6 +33,12 @@ data class SubscriptionEntity(
      * HTTPS is the default; an https→http redirect is never followed.
      */
     @ColumnInfo(defaultValue = "0") val allowInsecureHttp: Boolean = false,
+    /** Provider announcement text (Remnawave `announce` header). */
+    val announce: String?,
+    /** Provider asks the client to refresh this subscription on every launch. */
+    @ColumnInfo(defaultValue = "0") val updateAlways: Boolean = false,
+    /** Alternate fetch URL tried when the primary is unreachable. */
+    val fallbackUrl: String?,
 )
 
 @Entity(
@@ -89,7 +95,10 @@ interface SubscriptionDao {
             lastError = NULL,
             userInfoJson = :userInfoJson,
             supportUrl = :supportUrl,
-            updateIntervalMinutes = :updateIntervalMinutes
+            updateIntervalMinutes = :updateIntervalMinutes,
+            announce = :announce,
+            updateAlways = :updateAlways,
+            fallbackUrl = :fallbackUrl
         WHERE id = :id""",
     )
     suspend fun markSuccess(
@@ -99,6 +108,9 @@ interface SubscriptionDao {
         userInfoJson: String?,
         supportUrl: String?,
         updateIntervalMinutes: Int?,
+        announce: String?,
+        updateAlways: Boolean,
+        fallbackUrl: String?,
     )
 }
 
@@ -143,7 +155,7 @@ abstract class NodeDao {
 
 @Database(
     entities = [SubscriptionEntity::class, NodeEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -176,6 +188,18 @@ abstract class AppDatabase : RoomDatabase() {
                     "UPDATE subscriptions SET allowInsecureHttp = 1 " +
                         "WHERE url LIKE 'http://%'",
                 )
+            }
+        }
+
+        /** v4: provider metadata — announcement, refresh-on-launch, fallback URL. */
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE subscriptions ADD COLUMN announce TEXT")
+                db.execSQL(
+                    "ALTER TABLE subscriptions " +
+                        "ADD COLUMN updateAlways INTEGER NOT NULL DEFAULT 0",
+                )
+                db.execSQL("ALTER TABLE subscriptions ADD COLUMN fallbackUrl TEXT")
             }
         }
     }

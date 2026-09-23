@@ -32,6 +32,10 @@ interface SubscriptionSettings {
      * provider's `profile-update-interval`, `>0` = fixed user interval.
      */
     val autoRefreshMinutes: Flow<Int>
+    /** Keys of expiry alerts already posted — `"$subscriptionId:$expireEpochSeconds"`. */
+    val expiryAlerted: Flow<Set<String>>
+    /** Record an expiry alert as posted (see [expiryAlerted] for the key format). */
+    suspend fun markExpiryAlerted(key: String)
 }
 
 /**

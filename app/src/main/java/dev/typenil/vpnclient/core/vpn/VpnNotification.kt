@@ -19,6 +19,8 @@ class VpnNotification(private val service: Service) {
         const val ALERT_CHANNEL_ID = "vpn_alerts"
         const val NOTIFICATION_ID = 1
         const val ALERT_NOTIFICATION_ID = 2
+        /** Per-subscription expiry alerts: BASE + subscriptionId. */
+        const val EXPIRY_NOTIFICATION_ID_BASE = 100
         private const val REQUEST_OPEN = 0
         private const val REQUEST_DISCONNECT = 1
 

@@ -1,0 +1,185 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "a769b39749fb3648bcea5a63bd4d9d81",
+    "entities": [
+      {
+        "tableName": "subscriptions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `url` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `lastUpdatedAtEpochMs` INTEGER, `lastAttemptAtEpochMs` INTEGER, `lastError` TEXT, `enabled` INTEGER NOT NULL, `userInfoJson` TEXT, `supportUrl` TEXT, `updateIntervalMinutes` INTEGER, `allowInsecureHttp` INTEGER NOT NULL DEFAULT 0, `announce` TEXT, `updateAlways` INTEGER NOT NULL DEFAULT 0, `fallbackUrl` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "url",
+            "columnName": "url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUpdatedAtEpochMs",
+            "columnName": "lastUpdatedAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastAttemptAtEpochMs",
+            "columnName": "lastAttemptAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userInfoJson",
+            "columnName": "userInfoJson",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "supportUrl",
+            "columnName": "supportUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updateIntervalMinutes",
+            "columnName": "updateIntervalMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "allowInsecureHttp",
+            "columnName": "allowInsecureHttp",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "announce",
+            "columnName": "announce",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updateAlways",
+            "columnName": "updateAlways",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "fallbackUrl",
+            "columnName": "fallbackUrl",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "nodes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `subscriptionId` INTEGER NOT NULL, `name` TEXT NOT NULL, `protocol` TEXT NOT NULL, `server` TEXT NOT NULL, `port` INTEGER NOT NULL, `outboundJson` TEXT NOT NULL, `rawUri` TEXT, `position` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subscriptionId",
+            "columnName": "subscriptionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protocol",
+            "columnName": "protocol",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "server",
+            "columnName": "server",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "port",
+            "columnName": "port",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outboundJson",
+            "columnName": "outboundJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawUri",
+            "columnName": "rawUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_nodes_subscriptionId",
+            "unique": false,
+            "columnNames": [
+              "subscriptionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_nodes_subscriptionId` ON `${TABLE_NAME}` (`subscriptionId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a769b39749fb3648bcea5a63bd4d9d81')"
+    ]
+  }
+}
