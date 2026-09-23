@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,6 +97,13 @@ class ConnectionManager @Inject constructor(
      *  persisted pick, so queued runs converge instead of racing. */
     private val selectionMutex = Mutex()
 
+    /** Bounded auto-reconnect bookkeeping: consecutive engine failures
+     *  retry with backoff; a stable session or a user action resets it. */
+    private var failureReconnectAttempts = 0
+    private var failureReconnectJob: Job? = null
+    private var failureResetJob: Job? = null
+    private var lastFailureError: VpnError? = null
+
     init {
         // The persisted pick is the desired outbound for any live session:
         // a tap in Servers lands here and is applied to the running engine.
@@ -133,55 +141,65 @@ class ConnectionManager @Inject constructor(
 
     /** User pressed Connect. */
     fun connect() {
-        scope.launch {
-            mutex.withLock {
-                when (_state.value) {
-                    is VpnConnectionState.Connected,
-                    is VpnConnectionState.Connecting,
-                    is VpnConnectionState.Reconnecting,
-                    is VpnConnectionState.Stopping,
-                    // A consent intent may already be outstanding — a second
-                    // connect() would burn a generation and recompile.
-                    is VpnConnectionState.Preparing,
-                    is VpnConnectionState.PermissionRequired,
-                    -> return@withLock
-                    else -> Unit
-                }
-                val config = try {
-                    configProvider.compileSelected()
-                } catch (e: EngineError) {
-                    publish(VpnConnectionState.Error(VpnError.fromEngine(e), null))
-                    return@withLock
-                } catch (e: CancellationException) {
-                    // Cancelled work is not a user-visible failure.
-                    throw e
-                } catch (e: Exception) {
-                    publish(
-                        VpnConnectionState.Error(
-                            VpnError.Unexpected(e.message ?: "config build failed"), null,
-                        ),
-                    )
-                    return@withLock
-                }
-                if (config == null) {
-                    publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
-                    return@withLock
-                }
-                val generation = ++sessionGeneration
-                pendingSession = PendingSession(config, generation)
-                sessionNode = config.node
-                compiledNodeId = config.node.id
-                publish(VpnConnectionState.Preparing(config.node))
+        scope.launch { mutex.withLock { startConnect(resetFailureBudget = true) } }
+    }
 
-                val prepare = serviceControl.prepareVpn()
-                if (prepare != null) {
-                    _prepareIntent.value = prepare
-                    publish(VpnConnectionState.PermissionRequired)
-                    return@withLock
-                }
-                launchService(config)
-            }
+    /**
+     * Shared connect body. [resetFailureBudget] distinguishes a user-initiated
+     * connect (fresh auto-reconnect budget) from a retry driven by
+     * reconnect() — resetting there would make the budget never exhaust.
+     */
+    private suspend fun startConnect(resetFailureBudget: Boolean) {
+        when (_state.value) {
+            is VpnConnectionState.Connected,
+            is VpnConnectionState.Connecting,
+            is VpnConnectionState.Reconnecting,
+            is VpnConnectionState.Stopping,
+            // A consent intent may already be outstanding — a second
+            // connect() would burn a generation and recompile.
+            is VpnConnectionState.Preparing,
+            is VpnConnectionState.PermissionRequired,
+            -> return
+            else -> Unit
         }
+        if (resetFailureBudget) {
+            failureReconnectJob?.cancel()
+            failureReconnectAttempts = 0
+            lastFailureError = null
+        }
+        val config = try {
+            configProvider.compileSelected()
+        } catch (e: EngineError) {
+            publish(VpnConnectionState.Error(VpnError.fromEngine(e), null))
+            return
+        } catch (e: CancellationException) {
+            // Cancelled work is not a user-visible failure.
+            throw e
+        } catch (e: Exception) {
+            publish(
+                VpnConnectionState.Error(
+                    VpnError.Unexpected(e.message ?: "config build failed"), null,
+                ),
+            )
+            return
+        }
+        if (config == null) {
+            publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
+            return
+        }
+        val generation = ++sessionGeneration
+        pendingSession = PendingSession(config, generation)
+        sessionNode = config.node
+        compiledNodeId = config.node.id
+        publish(VpnConnectionState.Preparing(config.node))
+
+        val prepare = serviceControl.prepareVpn()
+        if (prepare != null) {
+            _prepareIntent.value = prepare
+            publish(VpnConnectionState.PermissionRequired)
+            return
+        }
+        launchService(config)
     }
 
     /** System VPN-consent dialog result. */
@@ -221,6 +239,11 @@ class ConnectionManager @Inject constructor(
                 ) {
                     return@withLock
                 }
+                // A user disconnect ends the retry chain — a pending
+                // auto-reconnect must not fire after it.
+                failureReconnectJob?.cancel()
+                failureReconnectAttempts = 0
+                lastFailureError = null
                 // User intent supersedes any pending terminal error — a normal
                 // disconnect must land on Idle, not on a stale failure.
                 pendingTerminalError = null
@@ -261,7 +284,7 @@ class ConnectionManager @Inject constructor(
             is VpnConnectionState.PermissionRequired -> {
                 pendingSession = null
                 publish(VpnConnectionState.Idle)
-                connect()
+                startConnect(resetFailureBudget = false)
                 return@withLock true
             }
             else -> return@withLock false
@@ -291,7 +314,7 @@ class ConnectionManager @Inject constructor(
             return@withLock false
         }
         if (_state.value is VpnConnectionState.Error) return@withLock false
-        connect()
+        startConnect(resetFailureBudget = false)
         true
     }
 
@@ -501,23 +524,104 @@ class ConnectionManager @Inject constructor(
     }
 
     private fun onEngineTerminated(error: VpnError) {
-        // Only meaningful while a session is alive; teardown converges through
-        // the service so TUN/collectors are cleaned before the error is shown.
-        when (_state.value) {
-            is VpnConnectionState.Connecting,
-            is VpnConnectionState.Connected,
-            is VpnConnectionState.Reconnecting,
-            -> {
-                if (pendingTerminalError == null) pendingTerminalError = error
-                if (!teardownRequested) {
-                    teardownRequested = true
-                    // startService can throw under background-start
-                    // restrictions — the state machine must survive it.
-                    runCatching { serviceControl.startDisconnectService() }
-                        .onFailure { SecureLog.w(TAG, "disconnect intent failed") }
+        // Serialized through the same launch+mutex path as the other state
+        // transitions — a terminal event must not race a user disconnect.
+        scope.launch {
+            mutex.withLock {
+                // Only meaningful while a session is alive; teardown converges
+                // through the service so TUN/collectors are cleaned first.
+                when (_state.value) {
+                    is VpnConnectionState.Connecting,
+                    is VpnConnectionState.Connected,
+                    is VpnConnectionState.Reconnecting,
+                    -> {
+                        failureResetJob?.cancel()
+                        val attempt = ++failureReconnectAttempts
+                        if (attempt <= MAX_FAILURE_RECONNECTS) {
+                            // Bounded auto-reconnect: the error is parked and
+                            // the session restarts once teardown settles — a
+                            // transient core/network failure shouldn't drop
+                            // the user to a dead Error state. Reconnecting
+                            // stays published through the whole backoff +
+                            // teardown window (no Stopping/Idle flicker).
+                            lastFailureError = error
+                            val current = _state.value
+                            val node = when (current) {
+                                is VpnConnectionState.Connecting -> current.node
+                                is VpnConnectionState.Connected -> current.node
+                                is VpnConnectionState.Reconnecting -> current.node
+                                else -> sessionNode
+                            } ?: return@withLock
+                            publish(
+                                VpnConnectionState.Reconnecting(
+                                    node, "core failure", attempt,
+                                ),
+                            )
+                            if (!teardownRequested) {
+                                teardownRequested = true
+                                // startService can throw under background-start
+                                // restrictions — the state machine must survive it.
+                                runCatching { serviceControl.startDisconnectService() }
+                                    .onFailure {
+                                        SecureLog.w(TAG, "disconnect intent failed")
+                                    }
+                            }
+                            scheduleFailureReconnect(attempt)
+                        } else {
+                            // Budget exhausted — converge to a terminal error.
+                            if (pendingTerminalError == null) pendingTerminalError = error
+                            if (!teardownRequested) {
+                                teardownRequested = true
+                                // startService can throw under background-start
+                                // restrictions — the state machine must survive it.
+                                runCatching { serviceControl.startDisconnectService() }
+                                    .onFailure {
+                                        SecureLog.w(TAG, "disconnect intent failed")
+                                    }
+                            }
+                        }
+                    }
+                    else -> Unit
                 }
             }
-            else -> Unit
+        }
+    }
+
+    /**
+     * One scheduled auto-reconnect at a time — a new failure replaces the
+     * pending retry. Waits out the backoff, then waits for the teardown to
+     * converge (onServiceStopped → Idle) before connecting again. A user
+     * disconnect cancels the job, so a retry can never fire after it; a
+     * wedged teardown surfaces the parked failure instead of hanging.
+     */
+    private fun scheduleFailureReconnect(attempt: Int) {
+        failureReconnectJob?.cancel()
+        failureReconnectJob = scope.launch {
+            delay(failureBackoffMs(attempt))
+            val settled = withTimeoutOrNull(RECONNECT_SETTLE_MS) {
+                _state.first {
+                    it is VpnConnectionState.Idle || it is VpnConnectionState.Error
+                }
+            }
+            when {
+                settled == null -> {
+                    if (_state.value is VpnConnectionState.Reconnecting) {
+                        publish(
+                            VpnConnectionState.Error(
+                                lastFailureError
+                                    ?: VpnError.EngineFailed("reconnect failed"),
+                                sessionNode,
+                            ),
+                        )
+                    }
+                }
+                settled is VpnConnectionState.Error -> Unit
+                else -> mutex.withLock {
+                    if (_state.value is VpnConnectionState.Idle) {
+                        startConnect(resetFailureBudget = false)
+                    }
+                }
+            }
         }
     }
 
@@ -528,6 +632,14 @@ class ConnectionManager @Inject constructor(
         pendingSession = null
         teardownRequested = false
         publish(VpnConnectionState.Connected(node, Instant.now(), null))
+        // A session that stays up past the stability window proves the
+        // failure was transient — the next failure gets a fresh budget.
+        failureResetJob?.cancel()
+        failureResetJob = scope.launch {
+            delay(FAILURE_STABLE_MS)
+            failureReconnectAttempts = 0
+            lastFailureError = null
+        }
         // A pick made while Connecting missed the reconcile gate — apply it
         // now that the session is live.
         reconcileSelection()
@@ -535,6 +647,7 @@ class ConnectionManager @Inject constructor(
 
     fun onServiceFailed(error: VpnError, generation: Long) {
         if (!isCurrent(generation)) return
+        failureResetJob?.cancel()
         detachEngine()
         pendingSession = null
         publish(VpnConnectionState.Error(error, sessionNode))
@@ -542,6 +655,7 @@ class ConnectionManager @Inject constructor(
 
     fun onServiceStopped(generation: Long) {
         if (!isCurrent(generation)) return
+        failureResetJob?.cancel()
         detachEngine()
         pendingSession = null
         teardownRequested = false
@@ -553,6 +667,9 @@ class ConnectionManager @Inject constructor(
             // A failure was already published (onServiceFailed / onRevoke) —
             // teardown completion must not regress it to Idle.
             current is VpnConnectionState.Error -> return
+            // A pending auto-reconnect waits on Idle here — publishing it is
+            // what resumes reconnect(); the brief Idle is invisible in
+            // practice because the retry republishes immediately.
             else -> VpnConnectionState.Idle
         }
         publish(next)
@@ -582,7 +699,9 @@ class ConnectionManager @Inject constructor(
         scope.launch {
             mutex.withLock {
                 val current = _state.value
-                if (current is VpnConnectionState.Reconnecting) {
+                // teardownRequested marks a failure-reconnect — the engine is
+                // dead and teardown is in flight, so Connected would be fake.
+                if (current is VpnConnectionState.Reconnecting && !teardownRequested) {
                     publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
                 }
             }
@@ -622,7 +741,10 @@ class ConnectionManager @Inject constructor(
             mutex.withLock {
                 if (!isCurrent(generation)) return@withLock
                 val current = _state.value
-                if (current is VpnConnectionState.Reconnecting) {
+                // teardownRequested marks a failure-reconnect — the rebuilt
+                // engine is about to be torn down by the pending disconnect
+                // anyway, so Connected would be fake.
+                if (current is VpnConnectionState.Reconnecting && !teardownRequested) {
                     publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
                 }
             }
@@ -632,6 +754,11 @@ class ConnectionManager @Inject constructor(
     /** onRevoke — the tunnel is already gone. */
     fun onServiceRevoked(generation: Long) {
         if (!isCurrent(generation)) return
+        // Revoke is user/system intent — no auto-reconnect after it.
+        failureReconnectJob?.cancel()
+        failureResetJob?.cancel()
+        failureReconnectAttempts = 0
+        lastFailureError = null
         pendingSession = null
         pendingTerminalError = null
         detachEngine()
@@ -654,8 +781,18 @@ class ConnectionManager @Inject constructor(
         _state.value = next
     }
 
-    private companion object {
+    companion object {
         const val TAG = "ConnectionManager"
+        /** Consecutive engine failures retried before giving up to Error. */
+        internal const val MAX_FAILURE_RECONNECTS = 5
+
+        /** A session stable this long proves the failure was transient. */
+        internal const val FAILURE_STABLE_MS = 60_000L
+
+        /** Exponential backoff: 1s, 2s, 4s, 8s, 16s. */
+        internal fun failureBackoffMs(attempt: Int): Long =
+            (1_000L shl (attempt - 1).coerceIn(0, 4))
+
         /** Bound on waiting for a fresh engine's outbound groups before
          *  falling back to a reconnect. */
         const val GROUPS_WAIT_MS = 5_000L

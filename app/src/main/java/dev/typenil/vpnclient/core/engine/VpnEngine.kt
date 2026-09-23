@@ -115,6 +115,15 @@ interface VpnEngine {
     /** Device idle (Doze) hint; engines may pause background work when true. */
     suspend fun onDeviceIdle(idle: Boolean) = Unit
 
+    /**
+     * Screen-on/off hint: false disconnects the status channel (stats,
+     * groups, connections stop flowing) to save battery while the screen is
+     * off; true reconnects it. Control calls (selectOutbound, urlTest) are
+     * unaffected — they re-dial on demand. Default no-op for engines without
+     * a status channel.
+     */
+    suspend fun setStatusUpdatesEnabled(enabled: Boolean) = Unit
+
     val stats: Flow<TrafficStats>
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>

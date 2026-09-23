@@ -50,6 +50,7 @@ import java.net.InetSocketAddress
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,14 +160,18 @@ class SingBoxEngine(
         }
     }
 
+    private var clientJob: Job? = null
+
     private fun connectClient() {
+        // A retry loop may still be in flight — don't stack a second client.
+        if (clientJob?.isActive == true) return
         val options = CommandClientOptions().apply {
             addCommand(Libbox.CommandStatus)
             addCommand(Libbox.CommandGroup)
             addCommand(Libbox.CommandConnections)
             statusInterval = STATUS_INTERVAL_NS
         }
-        scope.launch(Dispatchers.IO) {
+        clientJob = scope.launch(Dispatchers.IO) {
             var attempt = 0
             while (isActive && !closing) {
                 attempt++
@@ -196,6 +201,25 @@ class SingBoxEngine(
         }
     }
 
+    /**
+     * Screen-off suppression (SFA pattern): disconnecting the client stops
+     * the core's status pushes at the source — no 1 Hz stats churn while
+     * nobody is looking. Reconnects on screen-on via the same bounded retry.
+     */
+    override suspend fun setStatusUpdatesEnabled(enabled: Boolean) {
+        withContext(Dispatchers.IO) {
+            if (enabled) {
+                connectClient()
+            } else {
+                clientJob?.cancel()
+                clientJob = null
+                val client = commandClient
+                commandClient = null
+                client?.let { runCatching { it.disconnect() } }
+            }
+        }
+    }
+
     override suspend fun stop(): Unit = lifecycleMutex.withLock {
         withContext(Dispatchers.IO) {
             val server = commandServer ?: return@withContext
@@ -204,6 +228,8 @@ class SingBoxEngine(
             closing = true
             commandServer = null
             val client = commandClient
+            clientJob?.cancel()
+            clientJob = null
             commandClient = null
             networkMonitor.stop()
             client?.let { runCatching { it.disconnect() } }

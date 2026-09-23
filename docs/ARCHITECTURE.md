@@ -57,7 +57,8 @@ A failed refresh never touches stored nodes (last-known-good).
 - every node → outbound tagged by node id
 - `selector` group `proxy` (default = selected node) — runtime-switchable via
   `CommandClient.selectOutbound`
-- `urltest` group `auto` over all nodes — `urlTest` latency measurement
+- `urltest` group `auto` over all nodes — `urlTest` latency measurement;
+  `idle_timeout: 20m` stops background probing when the group is idle
 - `tun` inbound (mtu 9000, `auto_route`, `stack: gvisor` — required on pinned
   libbox 1.14.1; IPv6 optional)
 - `dns`: `local` (platform, via LocalDnsResolver) + `remote` (https://1.1.1.1
@@ -149,7 +150,20 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 - Network change: one `ConnectivityManager.NetworkCallback` (service-owned) →
   `setUnderlyingNetworks` + `ConnectionManager` (`Connected`↔`Reconnecting`)
   + coalesced `engine.onUnderlyingNetworkChanged()` → `commandServer.resetNetwork()`.
-  The engine's `NetworkMonitor` additionally feeds libbox internals.
+- Engine failure: `Failed`/`StoppedUnexpectedly` while a session is alive →
+  `Reconnecting(node, "core failure", attempt)` + bounded auto-reconnect —
+  up to 5 retries at 1/2/4/8/16 s, each waiting for the teardown to settle
+  (`onServiceStopped` → `Idle`) before `startConnect`. A session stable for
+  60 s resets the budget; a user connect/disconnect/revoke cancels it.
+  Budget exhausted → the parked error converges through teardown to `Error`.
+  Network callbacks never resume a failure `Reconnecting` (`teardownRequested`
+  gate) — `Connected` over a dead engine would be a fake state.
+- Screen off: a service-owned `ACTION_SCREEN_ON/OFF` receiver toggles
+  `engine.setStatusUpdatesEnabled` — the command client disconnects, so the
+  core stops pushing 1 Hz stats/groups nobody can see (SFA pattern).
+  The engine's `NetworkMonitor` additionally feeds libbox internals; both
+  callbacks request `NET_CAPABILITY_NOT_VPN` so the tunnel's own network can
+  never be picked as its own underlay.
 - Doze: a service-owned `ACTION_DEVICE_IDLE_MODE_CHANGED` receiver forwards
   `onDeviceIdle` to the engine (`commandServer.pause()`/`wake()`), but only
   when the opt-in `dozePowerSave` setting is on — `pause()` drops open TCP

@@ -219,30 +219,81 @@ class ConnectionManagerTest {
     }
 
     @Test
-    fun `unexpected core stop converges to Error after teardown`() = testScope.runTest {
+    fun `unexpected core stop auto-reconnects after teardown`() = testScope.runTest {
         val generation = connectToRunning()
         engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
-        advanceUntilIdle()
+        runCurrent()
+        // The failure parks as Reconnecting and requests teardown — the
+        // retry fires only after the service reports stopped.
+        val reconnecting = manager.state.value
+        assertTrue(reconnecting is VpnConnectionState.Reconnecting)
+        assertEquals(1, (reconnecting as VpnConnectionState.Reconnecting).attempt)
         assertEquals(1, serviceControl.disconnectStarts)
-        // Error is published only once teardown completes.
+
         manager.onServiceStopped(generation)
-        val state = manager.state.value
-        assertTrue(state is VpnConnectionState.Error)
-        assertTrue(
-            (state as VpnConnectionState.Error).error is VpnError.EngineFailed,
-        )
+        advanceTimeBy(1_100) // first backoff step
+        runCurrent()
+        assertEquals(2, serviceControl.connectStarts)
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
     }
+
+    @Test
+    fun `failure reconnect budget exhausts into Error`() = testScope.runTest {
+        var generation = connectToRunning()
+        // Each retry brings a fresh session up; each fresh session dies.
+        repeat(ConnectionManager.MAX_FAILURE_RECONNECTS) {
+            engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+            runCurrent()
+            assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+            manager.onServiceStopped(generation)
+            advanceTimeBy(17_000) // covers the largest backoff step (16s)
+            runCurrent()
+            val gen = manager.pendingSession!!.generation
+            engine = FakeEngine()
+            manager.attachEngine(engine, gen)
+            runCurrent()
+            manager.onServiceStarted(gen)
+            generation = gen
+        }
+        // One failure past the budget — terminal teardown, no retry.
+        engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+        runCurrent()
+        manager.onServiceStopped(generation)
+        assertTrue(manager.state.value is VpnConnectionState.Error)
+    }
+
+    @Test
+    fun `network recovery during failure reconnect does not fake Connected`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
+            runCurrent()
+            assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+            // The underlay callback must not resurrect Connected over a dead
+            // engine — the retry owns this Reconnecting.
+            manager.onUnderlyingNetworkAvailable()
+            runCurrent()
+            assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+
+            manager.onServiceStopped(generation)
+            advanceTimeBy(1_100)
+            runCurrent()
+            assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        }
 
     @Test
     fun `user disconnect during pending failure lands on Idle`() = testScope.runTest {
         val generation = connectToRunning()
         engine.eventsFlow.emit(EngineEvent.StoppedUnexpectedly)
-        advanceUntilIdle()
+        runCurrent()
 
         manager.disconnect()
         advanceUntilIdle()
         manager.onServiceStopped(generation)
         assertTrue(manager.state.value is VpnConnectionState.Idle)
+        // The cancelled retry must not fire after the user's disconnect.
+        assertEquals(1, serviceControl.connectStarts)
     }
 
     @Test
