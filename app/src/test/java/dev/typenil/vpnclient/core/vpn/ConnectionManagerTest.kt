@@ -6,6 +6,7 @@ import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
+import dev.typenil.vpnclient.core.engine.OutboundItemInfo
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
@@ -16,14 +17,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -66,29 +71,45 @@ class ConnectionManagerTest {
         var config: EngineConfig?,
         var failure: Exception? = null,
     ) : NodeConfigProvider {
+        val selected = MutableStateFlow<String?>(null)
+        var summaries = mapOf<String, NodeSummary>()
         override suspend fun compileSelected(): EngineConfig? {
             failure?.let { throw it }
             return config
         }
+        override val selectedNodeId: Flow<String?> get() = selected
+        override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id]
     }
 
     private class FakeEngine : VpnEngine {
         val statsFlow = MutableSharedFlow<TrafficStats>(replay = 1)
         val eventsFlow = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 16)
+        val groupsFlow = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
         val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
         val closedConnectionIds = mutableListOf<String>()
+        val selections = mutableListOf<Pair<String, String>>()
+        var selectOutboundResult = true
         override val stats: Flow<TrafficStats> get() = statsFlow
         override val events: Flow<EngineEvent> get() = eventsFlow
-        override val groups: StateFlow<List<OutboundGroupInfo>> =
-            MutableStateFlow(emptyList())
+        override val groups: StateFlow<List<OutboundGroupInfo>> get() = groupsFlow
         override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
         var stopCalls = 0
         override suspend fun validate(config: EngineConfig) = Unit
         override suspend fun start(config: EngineConfig) = Unit
         override suspend fun stop() { stopCalls++ }
         override suspend fun onUnderlyingNetworkChanged() = Unit
+        override suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean {
+            selections += groupTag to outboundTag
+            if (selectOutboundResult) {
+                // Mirror the real engine: a successful switch is reflected
+                // in the next groups push as the group's selected item.
+                groupsFlow.value = groupsFlow.value.map { g ->
+                    if (g.tag == groupTag) g.copy(selected = outboundTag) else g
+                }
+            }
+            return selectOutboundResult
+        }
         override suspend fun onDeviceIdle(idle: Boolean) = Unit
-        override suspend fun selectOutbound(groupTag: String, outboundTag: String) = true
         override suspend fun urlTest(groupTag: String) = Unit
         override suspend fun closeConnection(id: String): Boolean {
             closedConnectionIds += id
@@ -507,4 +528,154 @@ class ConnectionManagerTest {
         )
         assertEquals(0, serviceControl.connectStarts)
     }
+
+    private val node2 = NodeSummary(
+        id = "node-2",
+        name = "Second Node",
+        protocol = ProtocolType.VLESS,
+        server = "second.invalid",
+    )
+
+    private fun proxyGroup(selected: String? = null) = OutboundGroupInfo(
+        tag = "proxy",
+        type = "selector",
+        selectable = true,
+        selected = selected,
+        items = listOf(
+            OutboundItemInfo("node-1", "vless", null),
+            OutboundItemInfo("node-2", "vless", null),
+        ),
+    )
+
+    @Test
+    fun `selection change live-switches the engine and updates the shown node`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            engine.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+            configProvider.summaries = mapOf("node-2" to node2)
+
+            configProvider.selected.value = "node-2"
+            advanceUntilIdle()
+
+            assertEquals(listOf("proxy" to "node-2"), engine.selections)
+            val state = manager.state.value
+            assertTrue(state is VpnConnectionState.Connected)
+            assertEquals(node2, (state as VpnConnectionState.Connected).node)
+            // No teardown — the switch happened inside the live session.
+            assertEquals(0, serviceControl.disconnectStarts)
+        }
+
+    @Test
+    fun `a rebuilt engine re-applies the persisted selection`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            engine.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+            configProvider.summaries = mapOf("node-2" to node2)
+            configProvider.selected.value = "node-2"
+            advanceUntilIdle()
+            assertEquals(node2, (manager.state.value as VpnConnectionState.Connected).node)
+
+            // In-session rebuild: the fresh engine starts on its compiled
+            // default ("node-1") — attach must push the pick back to node-2.
+            val rebuilt = FakeEngine()
+            rebuilt.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+            manager.attachEngine(rebuilt, generation)
+            advanceUntilIdle()
+
+            assertEquals(listOf("proxy" to "node-2"), rebuilt.selections)
+            assertEquals(node2, (manager.state.value as VpnConnectionState.Connected).node)
+        }
+
+    @Test
+    fun `a rejected live switch falls back to reconnect`() = testScope.runTest {
+        val generation = connectToRunning()
+        engine.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+        engine.selectOutboundResult = false
+
+        configProvider.selected.value = "node-2"
+        runCurrent()
+        // Live switch failed → teardown requested; the session waits for
+        // the service to finish stopping before connecting again.
+        assertEquals(1, serviceControl.disconnectStarts)
+        assertTrue(manager.state.value is VpnConnectionState.Stopping)
+
+        manager.onServiceStopped(generation)
+        advanceUntilIdle()
+        assertEquals(2, serviceControl.connectStarts)
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+    }
+
+    @Test
+    fun `engine with no groups falls back to reconnect when the pick moved`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            // Control channel never reports groups — the live path is dead.
+            configProvider.selected.value = "node-2"
+            advanceTimeBy(6_000)
+            runCurrent()
+            assertEquals(1, serviceControl.disconnectStarts)
+            assertTrue(manager.state.value is VpnConnectionState.Stopping)
+
+            manager.onServiceStopped(generation)
+            advanceUntilIdle()
+            assertEquals(2, serviceControl.connectStarts)
+        }
+
+    @Test
+    fun `engine already on the pick does not switch or reconnect`() =
+        testScope.runTest {
+            connectToRunning()
+            engine.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+            configProvider.selected.value = "node-1"
+            advanceUntilIdle()
+            assertTrue(engine.selections.isEmpty())
+            assertEquals(0, serviceControl.disconnectStarts)
+        }
+
+    @Test
+    fun `selection while idle does not touch the engine`() = testScope.runTest {
+        configProvider.selected.value = "node-2"
+        advanceUntilIdle()
+        assertTrue(engine.selections.isEmpty())
+        assertEquals(0, serviceControl.disconnectStarts)
+        assertTrue(manager.state.value is VpnConnectionState.Idle)
+    }
+
+    @Test
+    fun `reconnect stops the session and connects again`() = testScope.runTest {
+        val generation = connectToRunning()
+        val job = async { manager.reconnect() }
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Stopping)
+        assertEquals(1, serviceControl.disconnectStarts)
+
+        manager.onServiceStopped(generation)
+        advanceUntilIdle()
+        assertTrue(job.await())
+        assertEquals(2, serviceControl.connectStarts)
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+    }
+
+    @Test
+    fun `reconnect is a no-op while idle`() = testScope.runTest {
+        assertFalse(manager.reconnect())
+        assertEquals(0, serviceControl.disconnectStarts)
+        assertEquals(0, serviceControl.connectStarts)
+    }
+
+    @Test
+    fun `reconnect during consent re-runs connect with fresh settings`() =
+        testScope.runTest {
+            serviceControl.permissionIntent = Intent()
+            manager.connect()
+            advanceUntilIdle()
+            assertTrue(manager.state.value is VpnConnectionState.PermissionRequired)
+
+            assertTrue(manager.reconnect())
+            advanceUntilIdle()
+            // Recompiled and re-prepared — consent is asked again for the
+            // new session (the fake always returns an intent).
+            assertTrue(manager.state.value is VpnConnectionState.PermissionRequired)
+            assertTrue(manager.pendingSession != null)
+        }
 }

@@ -1,7 +1,5 @@
-package dev.typenil.vpnclient.ui.servers
+package dev.typenil.vpnclient.core.engine
 
-import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
-import dev.typenil.vpnclient.core.engine.OutboundItemInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

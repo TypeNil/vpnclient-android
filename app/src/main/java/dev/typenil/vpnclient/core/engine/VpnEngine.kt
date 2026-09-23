@@ -39,6 +39,16 @@ data class OutboundItemInfo(
 )
 
 /**
+ * The group a node tag should be selected in: the first selectable group
+ * that actually contains it. Null when the engine hasn't reported groups
+ * yet or no selectable group carries the tag.
+ */
+fun resolveSelectionTarget(
+    groups: List<OutboundGroupInfo>,
+    tag: String,
+): String? = groups.firstOrNull { g -> g.selectable && g.items.any { it.tag == tag } }?.tag
+
+/**
  * One live connection tracked through the tunnel. Plain Kotlin data —
  * the engine maps its internal connection objects onto this.
  */

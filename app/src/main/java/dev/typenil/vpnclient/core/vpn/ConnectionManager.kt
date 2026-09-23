@@ -8,6 +8,7 @@ import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.VpnEngine
+import dev.typenil.vpnclient.core.engine.resolveSelectionTarget
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import java.time.Instant
 import javax.inject.Inject
@@ -17,11 +18,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Provides the engine config for the currently selected node.
@@ -31,6 +36,12 @@ import kotlinx.coroutines.sync.withLock
 interface NodeConfigProvider {
     /** Compile the engine config for the selected node, or null if none. */
     suspend fun compileSelected(): EngineConfig?
+
+    /** Persisted server pick — the desired outbound for any live session. */
+    val selectedNodeId: Flow<String?>
+
+    /** Display summary for a node id, or null when the node is gone. */
+    suspend fun nodeSummary(id: String): NodeSummary?
 }
 
 /**
@@ -77,6 +88,23 @@ class ConnectionManager @Inject constructor(
     /** Monotonic in-process session id; incremented once per connect attempt. */
     private var sessionGeneration = 0L
     private var sessionNode: NodeSummary? = null
+    /** Node the current engine's config was compiled with — its selector
+     *  default. Diverges from [sessionNode] after a live outbound switch. */
+    private var compiledNodeId: String? = null
+
+    /** Serializes selection reconciliation — every run re-reads the latest
+     *  persisted pick, so queued runs converge instead of racing. */
+    private val selectionMutex = Mutex()
+
+    init {
+        // The persisted pick is the desired outbound for any live session:
+        // a tap in Servers lands here and is applied to the running engine.
+        scope.launch {
+            configProvider.selectedNodeId
+                .distinctUntilChanged()
+                .collect { reconcileSelection() }
+        }
+    }
 
     /**
      * Terminal error observed while a session was running; published by
@@ -142,6 +170,7 @@ class ConnectionManager @Inject constructor(
                 val generation = ++sessionGeneration
                 pendingSession = PendingSession(config, generation)
                 sessionNode = config.node
+                compiledNodeId = config.node.id
                 publish(VpnConnectionState.Preparing(config.node))
 
                 val prepare = serviceControl.prepareVpn()
@@ -210,6 +239,60 @@ class ConnectionManager @Inject constructor(
                     }
             }
         }
+    }
+
+    /**
+     * Stop the live session and connect again with freshly compiled
+     * settings — the apply path for changes baked into the config at
+     * compile time (route mode, IPv6) and the fallback when a live
+     * outbound switch can't be honored. Returns false when there is no
+     * session to restart (Idle/Error already pick up new settings on the
+     * next connect) or while a connect is still in its pre-service phase.
+     */
+    suspend fun reconnect(): Boolean = mutex.withLock {
+        when (_state.value) {
+            is VpnConnectionState.Connected,
+            is VpnConnectionState.Connecting,
+            is VpnConnectionState.Reconnecting,
+            -> Unit
+            // Consent pending: drop the stale pending session and re-run
+            // connect() — it recompiles with the new settings and the
+            // already-granted consent skips the dialog.
+            is VpnConnectionState.PermissionRequired -> {
+                pendingSession = null
+                publish(VpnConnectionState.Idle)
+                connect()
+                return@withLock true
+            }
+            else -> return@withLock false
+        }
+        pendingTerminalError = null
+        publish(VpnConnectionState.Stopping)
+        val sent = runCatching { serviceControl.startDisconnectService() }
+            .onFailure { SecureLog.w(TAG, "disconnect intent failed") }
+            .isSuccess
+        if (!sent) {
+            publish(
+                VpnConnectionState.Error(
+                    VpnError.Unexpected("failed to stop service"), sessionNode,
+                ),
+            )
+            return@withLock false
+        }
+        // Teardown converges through the service → onServiceStopped → Idle.
+        // The bound keeps a wedged teardown from hanging the caller.
+        val settled = withTimeoutOrNull(RECONNECT_SETTLE_MS) {
+            _state.first {
+                it is VpnConnectionState.Idle || it is VpnConnectionState.Error
+            }
+        }
+        if (settled == null) {
+            SecureLog.w(TAG, "reconnect: teardown did not settle")
+            return@withLock false
+        }
+        if (_state.value is VpnConnectionState.Error) return@withLock false
+        connect()
+        true
     }
 
     private fun launchService(config: EngineConfig) {
@@ -281,6 +364,10 @@ class ConnectionManager @Inject constructor(
                 }
             }
         }
+        // A fresh engine starts on its compiled selector default — re-apply
+        // the persisted pick so a rebuilt tunnel doesn't silently revert to
+        // the node the session originally connected with.
+        reconcileSelection()
     }
 
     /**
@@ -304,12 +391,75 @@ class ConnectionManager @Inject constructor(
     }
 
     /**
-     * Live-switch the active outbound inside [groupTag] — the selector stays
-     * consistent with the persisted selection for the next connect.
-     * Returns false while detached or when the engine rejected the switch.
+     * Re-apply the persisted server pick to the live engine. Triggered by
+     * selection changes and by every engine attach (connect, in-session
+     * rebuild): the selector's compiled default is only right when the pick
+     * hasn't moved since compile time.
      */
-    suspend fun selectOutbound(groupTag: String, outboundTag: String): Boolean =
-        engine?.selectOutbound(groupTag, outboundTag) ?: false
+    private fun reconcileSelection() {
+        scope.launch { applyDesiredSelection() }
+    }
+
+    /**
+     * Serialized under [selectionMutex]: each run re-reads the latest pick,
+     * so a burst of taps converges on the final one. A live switch updates
+     * the session node so Home/notification show what the tunnel actually
+     * uses; when the engine can't honor it (control channel down, group
+     * missing) the pick is applied by a full reconnect instead.
+     */
+    private suspend fun applyDesiredSelection() = selectionMutex.withLock {
+        val eng = engine ?: return@withLock
+        val desired = configProvider.selectedNodeId.first() ?: return@withLock
+        if (_state.value !is VpnConnectionState.Connected &&
+            _state.value !is VpnConnectionState.Reconnecting
+        ) {
+            return@withLock
+        }
+        // Groups arrive after the command client connects — a fresh engine
+        // reports none yet, so wait briefly before falling back.
+        val groups = withTimeoutOrNull(GROUPS_WAIT_MS) {
+            eng.groups.first { it.isNotEmpty() }
+        }
+        if (engine !== eng) return@withLock // detached/replaced while waiting
+        if (groups == null) {
+            // Control channel never came up: a live switch is impossible.
+            // Reconnect only when the compiled default isn't already the
+            // pick — otherwise the tunnel is on the right node anyway.
+            if (compiledNodeId != desired) reconnect()
+            return@withLock
+        }
+        val target = resolveSelectionTarget(groups, desired)
+        if (target == null) {
+            // The pick isn't in any selectable group (stale id, group
+            // vanished) — a reconnect compiles with it as the default.
+            if (compiledNodeId != desired) reconnect()
+            return@withLock
+        }
+        if (groups.first { it.tag == target }.selected == desired) {
+            // Engine already on the pick — just fix a stale label.
+            updateSessionNode(desired)
+            return@withLock
+        }
+        if (eng.selectOutbound(target, desired)) {
+            updateSessionNode(desired)
+        } else {
+            reconnect()
+        }
+    }
+
+    /** Point the session's displayed node at [nodeId] — the engine's
+     *  selector is the source of truth, so the label follows the switch. */
+    private suspend fun updateSessionNode(nodeId: String) {
+        val summary = configProvider.nodeSummary(nodeId) ?: return
+        sessionNode = summary
+        when (val current = _state.value) {
+            is VpnConnectionState.Connected ->
+                publish(current.copy(node = summary))
+            is VpnConnectionState.Reconnecting ->
+                publish(current.copy(node = summary))
+            else -> Unit
+        }
+    }
 
     /** Ask the engine to run urltest on [groupTag]; results arrive via [groups]. */
     suspend fun urlTest(groupTag: String) {
@@ -344,6 +494,7 @@ class ConnectionManager @Inject constructor(
         }
         val generation = ++sessionGeneration
         sessionNode = node
+        compiledNodeId = node.id
         teardownRequested = false
         publish(VpnConnectionState.Connecting(node))
         return generation
@@ -377,6 +528,9 @@ class ConnectionManager @Inject constructor(
         pendingSession = null
         teardownRequested = false
         publish(VpnConnectionState.Connected(node, Instant.now(), null))
+        // A pick made while Connecting missed the reconcile gate — apply it
+        // now that the session is live.
+        reconcileSelection()
     }
 
     fun onServiceFailed(error: VpnError, generation: Long) {
@@ -502,5 +656,10 @@ class ConnectionManager @Inject constructor(
 
     private companion object {
         const val TAG = "ConnectionManager"
+        /** Bound on waiting for a fresh engine's outbound groups before
+         *  falling back to a reconnect. */
+        const val GROUPS_WAIT_MS = 5_000L
+        /** Bound on waiting for teardown to settle inside [reconnect]. */
+        const val RECONNECT_SETTLE_MS = 10_000L
     }
 }

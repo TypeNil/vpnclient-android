@@ -8,7 +8,9 @@ import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
 import dev.typenil.vpnclient.core.engine.singbox.RuleSetStore
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
+import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.core.subscription.model.summary
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
@@ -16,6 +18,7 @@ import dev.typenil.vpnclient.data.settings.SettingsRepository
 import java.net.Inet6Address
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
 @Singleton
@@ -26,6 +29,11 @@ class NodeConfigProviderImpl @Inject constructor(
     private val compiler: ConfigCompiler,
     private val ruleSetStore: RuleSetStore,
 ) : NodeConfigProvider {
+
+    override val selectedNodeId: Flow<String?> = settings.selectedNodeId
+
+    override suspend fun nodeSummary(id: String): NodeSummary? =
+        nodeDao.get(id)?.toDomain()?.summary()
 
     override suspend fun compileSelected(): EngineConfig? {
         val nodes = nodeDao.getEnabled().map { it.toDomain() }

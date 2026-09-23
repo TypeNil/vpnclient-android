@@ -64,6 +64,8 @@ class ConnectionsViewModelTest {
         private val config: EngineConfig,
     ) : NodeConfigProvider {
         override suspend fun compileSelected(): EngineConfig = config
+        override val selectedNodeId: Flow<String?> = MutableStateFlow(null)
+        override suspend fun nodeSummary(id: String): NodeSummary? = null
     }
 
     private class FakeEngine : VpnEngine {
