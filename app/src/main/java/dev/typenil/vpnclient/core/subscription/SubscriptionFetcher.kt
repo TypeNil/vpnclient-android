@@ -123,6 +123,16 @@ class SubscriptionFetcher @Inject constructor(
                     if (!isAllowedTransport(current, next, allowInsecure)) {
                         throw SubscriptionError.InsecureTransport
                     }
+                    // SSRF guard: a public origin must not pivot the fetcher
+                    // into loopback/private/link-local space (cloud metadata
+                    // endpoints, LAN services). Private origins stay legal —
+                    // the user confirmed that URL — so only the
+                    // public→private transition is rejected. Literal IPs and
+                    // "localhost" only; DNS names resolving to private
+                    // addresses are out of scope (TOCTOU either way).
+                    if (!isPrivateHost(current.host) && isPrivateHost(next.host)) {
+                        throw SubscriptionError.ForbiddenAddress
+                    }
                     current = next
                     redirectsLeft--
                     continue
@@ -243,6 +253,38 @@ class SubscriptionFetcher @Inject constructor(
 
     private fun String.hostOrNull(): String =
         runCatching { this.toHttpUrl().host }.getOrNull() ?: "unknown"
+
+    /**
+     * True for hosts that must never be a redirect *target* from a public
+     * origin: `localhost`, IPv4/IPv6 literals in loopback/link-local/
+     * site-local/CGNAT/unspecified space. Hostnames are left alone —
+     * resolving them here would be a DNS lookup the fetch itself repeats.
+     */
+    internal fun isPrivateHost(host: String): Boolean {
+        if (host.equals("localhost", ignoreCase = true)) return true
+        val literal = host.removePrefix("[").removeSuffix("]")
+        val looksLikeIp = literal.all { it.isDigit() || it == '.' } ||
+            literal.contains(':')
+        if (!looksLikeIp) return false
+        val addr = runCatching { java.net.InetAddress.getByName(literal) }
+            .getOrNull() ?: return false
+        if (addr.isLoopbackAddress || addr.isLinkLocalAddress ||
+            addr.isSiteLocalAddress || addr.isAnyLocalAddress ||
+            addr.isMulticastAddress
+        ) {
+            return true
+        }
+        val raw = addr.address
+        // CGNAT 100.64.0.0/10 — JDK has no helper for it.
+        if (raw.size == 4 &&
+            (raw[0].toInt() and 0xFF) == 100 &&
+            ((raw[1].toInt() and 0xFF) in 64..127)
+        ) {
+            return true
+        }
+        // IPv6 ULA fc00::/7 — JDK's isSiteLocalAddress only covers fec0::/10.
+        return raw.size == 16 && (raw[0].toInt() and 0xFE) == 0xFC
+    }
 
     /**
      * Cleartext policy: http is allowed only when the user opted this

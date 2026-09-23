@@ -23,6 +23,11 @@
   `https→http` redirect is never followed even with the opt-in. Redirects are
   followed manually (max 5); Remnawave HWID headers are sent only to the exact
   origin (scheme+host+port). 8 MiB cap, 15/30 s timeouts.
+  Redirect targets are also screened: a hop from a public host to a
+  loopback/private/link-local/CGNAT/ULA literal (or `localhost`) is rejected
+  (`SubscriptionError.ForbiddenAddress`) — SSRF pivot guard. Private origins
+  stay legal (user-confirmed local subscriptions); DNS names resolving to
+  private addresses are out of scope.
   `usesCleartextTraffic="true"` stays in the manifest because the opt-in needs
   the OS to permit cleartext — the fetcher enforces the policy itself.
 

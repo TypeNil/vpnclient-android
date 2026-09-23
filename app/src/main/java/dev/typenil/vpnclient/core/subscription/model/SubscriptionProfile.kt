@@ -70,6 +70,13 @@ sealed class SubscriptionError : Exception() {
     data object InsecureTransport : SubscriptionError() {
         override val message = "insecure transport not allowed for this subscription"
     }
+    /** A redirect hop pointed at a loopback/private/link-local address while
+     *  the previous hop was public — classic SSRF pivot. The origin URL is
+     *  user-confirmed, so private origins stay legal; only the public→private
+     *  transition is rejected. */
+    data object ForbiddenAddress : SubscriptionError() {
+        override val message = "redirect to a private/local address is not allowed"
+    }
     /** Remnawave HWID device-limit rejection. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()
     data class RemnawaveError(val statusCode: Int, override val message: String) : SubscriptionError()

@@ -239,6 +239,7 @@ class SubscriptionRepository @Inject constructor(
         is SubscriptionError.EmptyResult -> "no usable nodes"
         is SubscriptionError.ConfigRejected -> "rejected by engine"
         is SubscriptionError.InsecureTransport -> "https required"
+        is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"
         is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
         is SubscriptionError.RemnawaveError -> "panel status $statusCode"
         is SubscriptionError.NotFound -> "subscription removed"

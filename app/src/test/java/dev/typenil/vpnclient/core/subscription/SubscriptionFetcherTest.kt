@@ -160,4 +160,45 @@ class SubscriptionFetcherTest {
             assertTrue(e is SubscriptionError.Timeout)
         }
     }
+
+    @Test
+    fun `private host detection matrix`() {
+        // Redirect targets that must be rejected from a public origin.
+        listOf(
+            "localhost", "LOCALHOST",
+            "127.0.0.1", "127.1", "0.0.0.0",
+            "10.0.0.1", "172.16.0.1", "172.31.255.1", "192.168.1.1",
+            "169.254.169.254", // cloud metadata
+            "100.64.0.1", "100.127.255.254", // CGNAT
+            "[::1]", "::1", "[fe80::1]", "[fd00::1]", "[::ffff:127.0.0.1]",
+        ).forEach { host ->
+            assertTrue("$host must be private", fetcher.isPrivateHost(host))
+        }
+        // Public hosts and plain names stay legal targets.
+        listOf(
+            "panel.example.com", "8.8.8.8", "1.1.1.1",
+            "100.63.255.255", "100.128.0.1", // just outside CGNAT
+            "172.15.0.1", "172.32.0.1", // just outside 172.16/12
+            "192.167.0.1", "11.0.0.1",
+            "[2606:4700:4700::1111]",
+        ).forEach { host ->
+            assertFalse("$host must be public", fetcher.isPrivateHost(host))
+        }
+    }
+
+    @Test
+    fun `redirect between private hosts stays allowed`() = runTest {
+        // MockWebServer is loopback — a private→private hop must not trip the
+        // SSRF guard (local subscriptions are legitimate).
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", other.url("/landing").toString()),
+        )
+        other.enqueue(MockResponse().setBody(body))
+
+        val fetched = fetcher.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+        assertTrue(fetched.body.isNotEmpty())
+        assertEquals(1, other.requestCount)
+    }
 }
