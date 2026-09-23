@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatDate
@@ -63,7 +68,7 @@ private fun redactedHost(url: String): String =
 fun SubscriptionsScreen(
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
-    importUrl: String? = null,
+    import: ExtractedImport? = null,
     onImportConsumed: () -> Unit = {},
     onScanQr: () -> Unit = {},
     viewModel: SubscriptionsViewModel = hiltViewModel(),
@@ -80,9 +85,10 @@ fun SubscriptionsScreen(
 
     // Deep-link/share funnel: open the add dialog prefilled — the user still
     // confirms; nothing is imported silently.
-    LaunchedEffect(importUrl) {
-        if (importUrl != null) {
-            dialogUrl = importUrl
+    LaunchedEffect(import) {
+        if (import != null) {
+            dialogUrl = import.url
+            dialogName = import.name.orEmpty()
             showAddDialog = true
             onImportConsumed()
         }
@@ -194,6 +200,7 @@ private fun SubscriptionCard(
     onRefresh: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val uriHandler = LocalUriHandler.current
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 4.dp, bottom = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -235,7 +242,8 @@ private fun SubscriptionCard(
 
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "$nodeCount nodes · updated ${formatRelativeTime(profile.lastUpdatedAt)}",
+                text = "$nodeCount nodes · updated ${formatRelativeTime(profile.lastUpdatedAt)}" +
+                    if (profile.updateAlways) " · updates on launch" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -254,6 +262,25 @@ private fun SubscriptionCard(
                     text = usage + expiry,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            profile.announce?.let { announce ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = announce,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Support",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { uriHandler.openUri(url) },
                 )
             }
 
@@ -284,27 +311,45 @@ private fun AddSubscriptionDialog(
     // Stateless: fields live in the caller's saveable state so a QR result
     // fills the open dialog in place instead of recreating it.
     val isHttp = url.trim().startsWith("http://", ignoreCase = true)
-
+    val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add subscription") },
         text = {
             Column {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = onUrlChange,
-                    label = { Text("Subscription URL") },
-                    singleLine = true,
-                    trailingIcon = {
-                        IconButton(onClick = onScanQr) {
-                            Icon(
-                                painterResource(R.drawable.ic_qr_scanner),
-                                contentDescription = "Scan QR code",
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = onUrlChange,
+                        label = { Text("Subscription URL") },
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = onScanQr) {
+                                Icon(
+                                    painterResource(R.drawable.ic_qr_scanner),
+                                    contentDescription = "Scan QR code",
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            val text = clipboard.getText()?.text?.trim()
+                            if (!text.isNullOrEmpty()) {
+                                val parsed = ImportUrlExtractor.extract(null, text, null)
+                                if (parsed != null) {
+                                    onUrlChange(parsed.url)
+                                    if (!parsed.name.isNullOrBlank()) onNameChange(parsed.name)
+                                } else {
+                                    onUrlChange(text)
+                                }
+                            }
+                        },
+                    ) {
+                        Text("Paste")
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,

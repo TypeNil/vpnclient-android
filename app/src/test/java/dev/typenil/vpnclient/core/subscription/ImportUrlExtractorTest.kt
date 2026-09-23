@@ -13,7 +13,7 @@ class ImportUrlExtractorTest {
     fun `view on bare https url`() {
         assertEquals(
             "https://example.com/sub",
-            ImportUrlExtractor.extract(view, "https://example.com/sub", null),
+            ImportUrlExtractor.extract(view, "https://example.com/sub", null)?.url,
         )
     }
 
@@ -21,7 +21,7 @@ class ImportUrlExtractorTest {
     fun `send shared url text`() {
         assertEquals(
             "https://example.com/sub?token=x",
-            ImportUrlExtractor.extract(send, null, "https://example.com/sub?token=x"),
+            ImportUrlExtractor.extract(send, null, "https://example.com/sub?token=x")?.url,
         )
     }
 
@@ -31,7 +31,7 @@ class ImportUrlExtractorTest {
             "https%3A%2F%2Fexample.com%2Fsub%3Fa%3D1%26b%3D2&name=x"
         assertEquals(
             "https://example.com/sub?a=1&b=2",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -40,7 +40,7 @@ class ImportUrlExtractorTest {
         val link = "clash://install-config?url=https%3A%2F%2Fexample.com%2Fs"
         assertEquals(
             "https://example.com/s",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -51,7 +51,7 @@ class ImportUrlExtractorTest {
         val link = "clash://install-config?url=https://example.com/sub?a=1&b=2"
         assertEquals(
             "https://example.com/sub?a=1&b=2",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -62,7 +62,7 @@ class ImportUrlExtractorTest {
         val link = "clash://install-config?url=https://h.example.com/s?token=a+b"
         assertEquals(
             "https://h.example.com/s?token=a+b",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -71,7 +71,7 @@ class ImportUrlExtractorTest {
         val link = "clash://install-config?url=https%3A%2F%2Fh.example.com%2Fs%3Ftoken%3Da%2Bb"
         assertEquals(
             "https://h.example.com/s?token=a+b",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -80,7 +80,7 @@ class ImportUrlExtractorTest {
         val link = "clash://install-config?url=https://example.com/s?a=1&b=2&name=MySub"
         assertEquals(
             "https://example.com/s?a=1&b=2",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
     }
 
@@ -89,8 +89,41 @@ class ImportUrlExtractorTest {
         val link = "sing-box://import-remote-profile?name=x&url=https%3A%2F%2Fexample.com%2Fs"
         assertEquals(
             "https://example.com/s",
-            ImportUrlExtractor.extract(view, link, null),
+            ImportUrlExtractor.extract(view, link, null)?.url,
         )
+    }
+
+    @Test
+    fun `name param is decoded and returned`() {
+        val link = "sing-box://import-remote-profile?url=" +
+            "https%3A%2F%2Fexample.com%2Fsub&name=My%20Sub"
+        val import = ImportUrlExtractor.extract(view, link, null)
+        assertEquals("https://example.com/sub", import?.url)
+        assertEquals("My Sub", import?.name)
+    }
+
+    @Test
+    fun `absent name yields null`() {
+        val link = "clash://install-config?url=https%3A%2F%2Fexample.com%2Fs"
+        val import = ImportUrlExtractor.extract(view, link, null)
+        assertEquals("https://example.com/s", import?.url)
+        assertNull(import?.name)
+    }
+
+    @Test
+    fun `unencoded ampersand inside url plus trailing name still splits`() {
+        // The url carries a raw '&' — only the LAST &name= boundary splits.
+        val link = "sing-box://import-remote-profile?url=" +
+            "https://example.com/sub?a=1&b=2&name=Edge"
+        val import = ImportUrlExtractor.extract(view, link, null)
+        assertEquals("https://example.com/sub?a=1&b=2", import?.url)
+        assertEquals("Edge", import?.name)
+    }
+
+    @Test
+    fun `bare http url carries no name`() {
+        val import = ImportUrlExtractor.extract(view, "https://example.com/sub", null)
+        assertNull(import?.name)
     }
 
     @Test

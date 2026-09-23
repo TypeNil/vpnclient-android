@@ -30,10 +30,10 @@ class QrScanViewModel @Inject constructor() : ViewModel() {
      */
     fun onBarcode(raw: String, nowMs: Long = SystemClock.elapsedRealtime()): ScanOutcome {
         if (consumed) return ScanOutcome.Ignored
-        val url = ImportUrlExtractor.extract(action = null, data = raw, extraText = null)
-        if (url != null) {
+        val import = ImportUrlExtractor.extract(action = null, data = raw, extraText = null)
+        if (import != null) {
             consumed = true
-            return ScanOutcome.Found(url)
+            return ScanOutcome.Found(import.url)
         }
         // Holding an unrelated QR steady re-decodes every frame — report it
         // once per payload per window instead of spamming.

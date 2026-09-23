@@ -15,9 +15,12 @@ import dev.typenil.vpnclient.core.subscription.parse.percentDecode
  */
 object ImportUrlExtractor {
 
+    /** A subscription URL plus the provider-suggested display name, if any. */
+    data class ExtractedImport(val url: String, val name: String?)
+
     private const val ACTION_SEND = "android.intent.action.SEND"
 
-    fun extract(action: String?, data: String?, extraText: String?): String? {
+    fun extract(action: String?, data: String?, extraText: String?): ExtractedImport? {
         val raw = when (action) {
             ACTION_SEND -> extraText
             else -> data
@@ -25,14 +28,14 @@ object ImportUrlExtractor {
         if (raw.isEmpty()) return null
         // Schemes are case-insensitive per RFC 3986 — OEM browsers and
         // keyboards emit HTTPS://… often enough to matter.
-        if (raw.startsWithHttp()) return raw
+        if (raw.startsWithHttp()) return ExtractedImport(raw, null)
         return when (raw.substringBefore("://").lowercase()) {
             "sing-box", "clash", "clashmeta" -> extractUrlParam(raw)
             else -> null
         }
     }
 
-    private fun extractUrlParam(uri: String): String? {
+    private fun extractUrlParam(uri: String): ExtractedImport? {
         val query = uri.substringAfter('?', "")
         // url= runs to end-of-string: splitting the query on '&' truncates
         // subscription URLs carrying unencoded '&' params (the same defect
@@ -46,10 +49,30 @@ object ImportUrlExtractor {
                 ?.plus("&url=".length)
                 ?: return null
         }
-        val encoded = query.substring(start).substringBeforeLast("&name=")
+        val raw = query.substring(start)
+        // `name` is conventionally last; a literal "&name=" inside an
+        // unencoded URL is ambiguous, so the last occurrence wins.
+        val nameIdx = raw.lastIndexOf("&name=")
+        val encoded = if (nameIdx >= 0) raw.substring(0, nameIdx) else raw
+        val suffixName = if (nameIdx >= 0) {
+            percentDecode(raw.substring(nameIdx + "&name=".length))
+                .takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        // `name` may also precede `url=` — the query before url= is a proper
+        // &-separated param list, so a plain split is safe there.
+        val prefix = query.substring(0, start - "url=".length)
+        val prefixName = prefix.split('&')
+            .firstOrNull { it.startsWith("name=") }
+            ?.substringAfter('=')
+            ?.let(::percentDecode)
+            ?.takeIf { it.isNotBlank() }
+        val name = suffixName ?: prefixName
         // percentDecode, not URLDecoder: '+' is a literal in a nested URL's
         // query (e.g. ?token=a+b) — form semantics would corrupt it to 'a b'.
-        return percentDecode(encoded).takeIf { it.startsWithHttp() }
+        val url = percentDecode(encoded).takeIf { it.startsWithHttp() } ?: return null
+        return ExtractedImport(url, name)
     }
 
     private fun String.startsWithHttp(): Boolean =

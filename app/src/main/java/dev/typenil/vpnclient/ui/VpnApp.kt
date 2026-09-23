@@ -34,6 +34,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.typenil.vpnclient.R
 import kotlinx.coroutines.flow.StateFlow
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.connections.ConnectionsScreen
@@ -77,7 +78,7 @@ private val topLevelDestinations = listOf(
 @Composable
 fun VpnApp(
     connectionManager: ConnectionManager,
-    importUrl: StateFlow<String?>,
+    importUrl: StateFlow<ExtractedImport?>,
     onImportConsumed: () -> Unit,
 ) {
     VPNClientTheme {
@@ -167,7 +168,7 @@ fun VpnApp(
                         .collectAsStateWithLifecycle()
                     SubscriptionsScreen(
                         snackbarHostState = snackbarHostState,
-                        importUrl = pendingImport ?: qrResult,
+                        import = pendingImport ?: qrResult?.let { ExtractedImport(it, null) },
                         onImportConsumed = {
                             if (pendingImport != null) onImportConsumed()
                             // Always drop a stale scan result too — it would
