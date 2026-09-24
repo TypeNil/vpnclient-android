@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.core.subscription
 
 import dev.typenil.vpnclient.core.common.log.SecureLog
+import dev.typenil.vpnclient.core.subscription.model.RefreshOutcome
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
@@ -55,7 +56,7 @@ class SubscriptionRepository @Inject constructor(
         url: String,
         requestedName: String?,
         allowInsecureHttp: Boolean = false,
-    ): Result<Long> {
+    ): Result<RefreshOutcome> {
         val trimmed = url.trim()
         val parsed = runCatching { trimmed.toHttpUrl() }.getOrNull()
             ?: return Result.failure(SubscriptionError.ParseFailed("bad url"))
@@ -101,10 +102,10 @@ class SubscriptionRepository @Inject constructor(
                 SecureLog.w(TAG, "post-add scheduling failed sub=$id: ${it.javaClass.simpleName}")
             }
         }
-        return result.map { id }
+        return result
     }
 
-    suspend fun refresh(id: Long): Result<Unit> = refreshMutex.withLock {
+    suspend fun refresh(id: Long): Result<RefreshOutcome> = refreshMutex.withLock {
         val attemptAt = Instant.now().toEpochMilli()
         // `fetched` travels out of the try so post-commit bookkeeping can run
         // only on success — and can't falsify an already-committed refresh.
@@ -134,9 +135,10 @@ class SubscriptionRepository @Inject constructor(
             // Parsing is CPU-bound over up to 8 MiB — keep it off the caller's
             // (often main) dispatcher. Duplicate node ids would emit duplicate
             // outbound tags — dedupe before validate + commit.
-            val nodes = withContext(Dispatchers.Default) {
+            val parsed = withContext(Dispatchers.Default) {
                 dispatcher.parse(classified.format, classified.body, id)
-            }.distinctBy { it.id }
+            }
+            val nodes = parsed.nodes.distinctBy { it.id }
             if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
 
             // Validate the candidate against the engine BEFORE touching the DB:
@@ -182,8 +184,8 @@ class SubscriptionRepository @Inject constructor(
                         ?: if (usedFallback) sub.fallbackUrl else null,
                 )
             }
-            SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} fmt=${classified.format}")
-            Result.success(Unit)
+            SecureLog.i(TAG, "refreshed sub=$id nodes=${nodes.size} skipped=${parsed.skipped.size} fmt=${classified.format}")
+            Result.success(RefreshOutcome(nodeCount = nodes.size, skipped = parsed.skipped))
         } catch (e: CancellationException) {
             throw e
         } catch (e: SubscriptionError) {
@@ -249,15 +251,16 @@ class SubscriptionRepository @Inject constructor(
                 // window. The alerted-key embeds the expiry so a renewal
                 // re-arms the alert.
                 val expire = committed.userInfo?.expireEpochSeconds
-                val alertKey = "$id:$expire"
                 if (expiryAlertDue(
                         expire,
                         System.currentTimeMillis(),
-                        alreadyAlerted = alertKey in settings.expiryAlerted.first(),
+                        alreadyAlerted = expire != null && expiryAlreadyAlerted(
+                            settings.expiryAlerted.first(), id, expire,
+                        ),
                     )
                 ) {
                     if (expiryNotifier.notifyExpiring(id, sub.name, expire!!)) {
-                        settings.markExpiryAlerted(alertKey)
+                        settings.markExpiryAlerted(expiryAlertKey(id, expire))
                     }
                 }
             }.onFailure {
@@ -265,6 +268,34 @@ class SubscriptionRepository @Inject constructor(
             }
         }
         return result
+    }
+
+    /**
+     * Re-check persisted expiry on process start — the refresh path only
+     * evaluates expiry after a successful fetch, so a manual-only or
+     * long-interval subscription would never alert. Runs under
+     * [refreshMutex]: the check→notify→mark sequence must be serialized
+     * with refresh's own expiry check or both can notify for the same
+     * expiry on startup.
+     */
+    suspend fun checkPersistedExpiryAlerts() = refreshMutex.withLock {
+        subscriptionDao.getAll().forEach { sub ->
+            val info = sub.userInfoJson
+                ?.let { runCatching { json.decodeFromString<SubscriptionUserInfo>(it) }.getOrNull() }
+            val expire = info?.expireEpochSeconds ?: return@forEach
+            if (expiryAlertDue(
+                    expire,
+                    System.currentTimeMillis(),
+                    alreadyAlerted = expiryAlreadyAlerted(
+                        settings.expiryAlerted.first(), sub.id, expire,
+                    ),
+                )
+            ) {
+                if (expiryNotifier.notifyExpiring(sub.id, sub.name, expire)) {
+                    settings.markExpiryAlerted(expiryAlertKey(sub.id, expire))
+                }
+            }
+        }
     }
 
     suspend fun remove(id: Long) {

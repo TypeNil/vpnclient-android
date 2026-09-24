@@ -200,7 +200,7 @@ class SubscriptionRepositoryTest {
             "&type=tcp&flow=xtls-rprx-vision#$name"
 
     private fun nodeEntity(uri: String, subId: Long): NodeEntity {
-        val n = uriParser.parse(uri, subId).single()
+        val n = uriParser.parse(uri, subId).nodes.single()
         return NodeEntity(
             id = n.id,
             subscriptionId = subId,
@@ -601,5 +601,25 @@ class SubscriptionRepositoryTest {
         // Nothing was posted — the key must stay unmarked so a later
         // refresh can alert once permission is granted.
         assertFalse("1:$expire" in settings.alerted.value)
+    }
+
+    @Test
+    fun `persisted expiry scan alerts without a refresh`() = runTest {
+        // The startup path: expiry already persisted in userInfoJson, no
+        // fetch involved — checkPersistedExpiryAlerts must still fire.
+        seedSubscription()
+        val expire = (System.currentTimeMillis() / 1000) + 3600
+        subscriptionDao.subs[1] = subscriptionDao.subs[1]!!.copy(
+            userInfoJson = """{"uploadBytes":0,"downloadBytes":0,"totalBytes":0,"expireEpochSeconds":$expire}""",
+        )
+
+        repository.checkPersistedExpiryAlerts()
+
+        assertEquals(1, expiryNotifier.calls.size)
+        assertTrue(expiryAlertKey(1, expire) in settings.alerted.value)
+
+        // Second scan — already alerted, stays quiet.
+        repository.checkPersistedExpiryAlerts()
+        assertEquals(1, expiryNotifier.calls.size)
     }
 }

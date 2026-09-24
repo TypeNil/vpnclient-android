@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.core.subscription
 
+import dev.typenil.vpnclient.core.subscription.model.ParseResult
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionFormat
@@ -14,8 +15,13 @@ import javax.inject.Singleton
  */
 interface SubscriptionParser {
     /** Throws [SubscriptionError.ParseFailed] / [SubscriptionError.EmptyResult] on failure. */
-    fun parse(body: String, subscriptionId: Long): List<ProxyNode>
+    fun parse(body: String, subscriptionId: Long): ParseResult
 }
+
+/** Internal control flow: a node-shaped entry that can't be used — carries
+ *  the skip reason up to the parser's per-entry catch, which records a
+ *  [dev.typenil.vpnclient.core.subscription.model.SkippedNode]. */
+internal class SkipNode(val nodeName: String?, reason: String) : Exception(reason)
 
 @Singleton
 class SubscriptionParserDispatcher @Inject constructor(
@@ -23,7 +29,7 @@ class SubscriptionParserDispatcher @Inject constructor(
     private val singBoxJsonParser: SingBoxJsonParser,
     private val clashYamlParser: ClashYamlParser,
 ) {
-    fun parse(format: SubscriptionFormat, body: String, subscriptionId: Long): List<ProxyNode> =
+    fun parse(format: SubscriptionFormat, body: String, subscriptionId: Long): ParseResult =
         when (format) {
             SubscriptionFormat.UriList,
             SubscriptionFormat.Base64UriList,

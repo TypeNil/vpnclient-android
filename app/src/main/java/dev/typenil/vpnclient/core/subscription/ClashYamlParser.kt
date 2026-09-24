@@ -1,10 +1,14 @@
 package dev.typenil.vpnclient.core.subscription
 
+import dev.typenil.vpnclient.core.subscription.model.ParseResult
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
+import dev.typenil.vpnclient.core.subscription.parse.NetworkClass
+import dev.typenil.vpnclient.core.subscription.parse.classifyNetwork
 import dev.typenil.vpnclient.core.subscription.parse.hysteria2Outbound
-import dev.typenil.vpnclient.core.subscription.parse.isUnsupportedNetwork
+import dev.typenil.vpnclient.core.subscription.parse.portHoppingList
 import dev.typenil.vpnclient.core.subscription.parse.shadowsocksOutbound
 import dev.typenil.vpnclient.core.subscription.parse.stableNodeId
 import dev.typenil.vpnclient.core.subscription.parse.tlsBlock
@@ -24,12 +28,13 @@ import org.yaml.snakeyaml.constructor.SafeConstructor
 /**
  * Extracts nodes from a Clash/Mihomo config's `proxies:` list and re-emits them
  * as sing-box outbound JSON via the shared builders. Unknown proxy types
- * (ssr, hysteria1, snell, socks5, http, …) and `proxy-groups` are skipped.
+ * (ssr, hysteria1, snell, socks5, http, …) and `proxy-groups` are skipped
+ * and reported in [ParseResult.skipped].
  */
 @Singleton
 class ClashYamlParser @Inject constructor() : SubscriptionParser {
 
-    override fun parse(body: String, subscriptionId: Long): List<ProxyNode> {
+    override fun parse(body: String, subscriptionId: Long): ParseResult {
         val loaded = try {
             // SafeConstructor: subscription YAML is untrusted input — never
             // instantiate arbitrary classes via !!-tags.
@@ -40,23 +45,49 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
         val root = loaded as? Map<*, *> ?: throw SubscriptionError.ParseFailed("not a clash config")
         val proxies = root["proxies"] as? List<*> ?: throw SubscriptionError.EmptyResult()
 
+        val skipped = mutableListOf<SkippedNode>()
         val nodes = proxies.mapNotNull { it as? Map<*, *> }
-            .mapNotNull { proxy -> runCatching { toNode(proxy, subscriptionId) }.getOrNull() }
+            .mapNotNull { proxy ->
+                try {
+                    toNode(proxy, subscriptionId)
+                } catch (e: SkipNode) {
+                    skipped += SkippedNode(e.nodeName, e.message!!)
+                    null
+                } catch (e: Exception) {
+                    skipped += SkippedNode(proxy.str("name"), "malformed")
+                    null
+                }
+            }
         if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
-        return nodes
+        return ParseResult(nodes, skipped)
     }
 
-    private fun toNode(m: Map<*, *>, subscriptionId: Long): ProxyNode? {
-        val type = m.str("type")?.lowercase() ?: return null
+    private fun toNode(m: Map<*, *>, subscriptionId: Long): ProxyNode {
+        val type = m.str("type")?.lowercase()
+            ?: throw SkipNode(m.str("name"), "malformed")
         val name = m.str("name")
         val server = m.str("server") ?: ""
-        val port = m.int("port") ?: 0
         val network = m.str("network") ?: "tcp"
-        if (isUnsupportedNetwork(network)) return null
+        if (classifyNetwork(network) == NetworkClass.Unsupported) {
+            throw SkipNode(name, "unsupported transport: $network")
+        }
+        // Port hopping (hysteria2): `ports`/`mport` as "a-b,c" or a YAML
+        // list. server_port stays at the first hop port — sing-box ignores
+        // server_port once server_ports is set, so the displayed port must
+        // be the hop port, not the (often placeholder) `port` field.
+        val isHy2 = type == "hysteria2" || type == "hy2"
+        val serverPorts = (m.strList("ports") ?: m.strList("mport"))
+            ?.flatMap(::portHoppingList)?.takeIf { it.isNotEmpty() }
+        val port = if (isHy2) {
+            serverPorts?.first()?.substringBefore(':')?.toIntOrNull()
+                ?: m.int("port") ?: 0
+        } else {
+            m.int("port") ?: 0
+        }
 
         val (protocol, outbound) = when (type) {
             "vless" -> {
-                val uuid = m.str("uuid") ?: return null
+                val uuid = m.str("uuid") ?: throw SkipNode(name, "malformed")
                 val reality = m.map("reality-opts")
                 val tlsEnabled = reality != null || m.bool("tls")
                     || m.str("security")?.lowercase() in setOf("tls", "reality")
@@ -79,7 +110,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 }
             }
             "vmess" -> {
-                val uuid = m.str("uuid") ?: return null
+                val uuid = m.str("uuid") ?: throw SkipNode(name, "malformed")
                 val tls = if (m.bool("tls")) tlsBlock(
                     serverName = m.str("servername") ?: m.str("sni"),
                     insecure = m.bool("skip-cert-verify"),
@@ -98,7 +129,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 }
             }
             "trojan" -> {
-                val password = m.str("password") ?: return null
+                val password = m.str("password") ?: throw SkipNode(name, "malformed")
                 val tls = tlsBlock(
                     serverName = m.str("sni") ?: m.str("servername") ?: server,
                     insecure = m.bool("skip-cert-verify"),
@@ -110,26 +141,29 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 }
             }
             "ss", "shadowsocks" -> {
-                val method = m.str("cipher") ?: return null
-                val password = m.str("password") ?: return null
+                val method = m.str("cipher") ?: throw SkipNode(name, "malformed")
+                val password = m.str("password") ?: throw SkipNode(name, "malformed")
                 ProtocolType.SHADOWSOCKS to { tag: String ->
                     shadowsocksOutbound(tag, server, port, method, password)
                 }
             }
             "hysteria2", "hy2" -> {
-                val password = m.str("password") ?: return null
+                val password = m.str("password") ?: throw SkipNode(name, "malformed")
                 val tls = tlsBlock(
                     serverName = m.str("sni") ?: m.str("servername") ?: server,
                     insecure = m.bool("skip-cert-verify"),
                 )
                 val obfsPassword = if (m.str("obfs") != null) m.str("obfs-password").orEmpty() else null
                 ProtocolType.HYSTERIA2 to { tag: String ->
-                    hysteria2Outbound(tag, server, port, password, tls = tls, obfsPassword = obfsPassword)
+                    hysteria2Outbound(
+                        tag, server, port, password,
+                        tls = tls, obfsPassword = obfsPassword, serverPorts = serverPorts,
+                    )
                 }
             }
             "tuic" -> {
-                val uuid = m.str("uuid") ?: return null
-                val password = m.str("password") ?: return null
+                val uuid = m.str("uuid") ?: throw SkipNode(name, "malformed")
+                val password = m.str("password") ?: throw SkipNode(name, "malformed")
                 val tls = tlsBlock(
                     serverName = if (m.bool("disable-sni")) null else m.str("sni") ?: m.str("servername") ?: server,
                     insecure = m.bool("skip-cert-verify"),
@@ -145,7 +179,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 }
             }
             // ssr, hysteria1, snell, socks5, http, … — unsupported for MVP
-            else -> return null
+            else -> throw SkipNode(name, "unsupported protocol: $type")
         }
 
         // Identity is the tagless outbound: proxies differing only in `name`
@@ -193,6 +227,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 val opts = m.map("h2-opts") ?: m.map("http-opts")
                 transportBlock("http", host = opts?.str("host"), path = opts?.str("path"))
             }
+            "quic" -> transportBlock("quic")
             else -> null
         }
 

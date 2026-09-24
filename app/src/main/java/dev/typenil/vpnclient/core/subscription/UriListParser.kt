@@ -1,16 +1,20 @@
 package dev.typenil.vpnclient.core.subscription
 
+import dev.typenil.vpnclient.core.subscription.model.ParseResult
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.parse.ShareLink
 import dev.typenil.vpnclient.core.subscription.parse.anytlsOutbound
 import dev.typenil.vpnclient.core.subscription.parse.base64Decode
 import dev.typenil.vpnclient.core.subscription.parse.commaList
 import dev.typenil.vpnclient.core.subscription.parse.hysteria2Outbound
-import dev.typenil.vpnclient.core.subscription.parse.isUnsupportedNetwork
+import dev.typenil.vpnclient.core.subscription.parse.NetworkClass
+import dev.typenil.vpnclient.core.subscription.parse.classifyNetwork
 import dev.typenil.vpnclient.core.subscription.parse.param
 import dev.typenil.vpnclient.core.subscription.parse.percentDecode
+import dev.typenil.vpnclient.core.subscription.parse.portHoppingList
 import dev.typenil.vpnclient.core.subscription.parse.shadowsocksOutbound
 import dev.typenil.vpnclient.core.subscription.parse.stableNodeId
 import dev.typenil.vpnclient.core.subscription.parse.tlsBlock
@@ -36,26 +40,48 @@ import kotlinx.serialization.json.jsonPrimitive
  * Parses newline-separated share links (vless/vmess/trojan/ss/hysteria2/tuic)
  * into nodes carrying sing-box outbound JSON.
  *
- * Malformed lines and unsupported schemes are skipped individually;
- * [SubscriptionError.EmptyResult] is thrown only when nothing usable remains.
+ * Malformed lines and unsupported schemes/transports are skipped
+ * individually and reported in [ParseResult.skipped];
+ * [SubscriptionError.EmptyResult] is thrown only when nothing usable
+ * remains.
  */
 @Singleton
 class UriListParser @Inject constructor() : SubscriptionParser {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    override fun parse(body: String, subscriptionId: Long): List<ProxyNode> {
+    override fun parse(body: String, subscriptionId: Long): ParseResult {
+        val skipped = mutableListOf<SkippedNode>()
         val nodes = body.lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .filterNot { it.startsWith("//") || it.startsWith("#") }
-            .mapNotNull { line -> runCatching { parseLine(line, subscriptionId) }.getOrNull() }
+            // Lines without a scheme separator are junk, not nodes — never
+            // counted as skips.
+            .filter { "://" in it }
+            .mapNotNull { line ->
+                try {
+                    parseLine(line, subscriptionId)
+                } catch (e: SkipNode) {
+                    skipped += SkippedNode(e.nodeName ?: fragmentName(line), e.message!!)
+                    null
+                } catch (e: Exception) {
+                    skipped += SkippedNode(fragmentName(line), "malformed")
+                    null
+                }
+            }
             .toList()
         if (nodes.isEmpty()) throw SubscriptionError.EmptyResult()
-        return nodes
+        return ParseResult(nodes, skipped)
     }
 
-    private fun parseLine(line: String, subscriptionId: Long): ProxyNode? =
+    /** `#fragment` is the node's display name — best-effort for diagnostics. */
+    private fun fragmentName(line: String): String? =
+        line.substringAfter('#', "")
+            .takeIf { it.isNotBlank() }
+            ?.let { runCatching { percentDecode(it) }.getOrNull() ?: it }
+
+    private fun parseLine(line: String, subscriptionId: Long): ProxyNode =
         when (line.substringBefore("://", "").lowercase()) {
             "vless" -> parseVless(line, subscriptionId)
             "vmess" -> parseVmess(line, subscriptionId)
@@ -67,16 +93,19 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             "wireguard", "wg" -> parseWireguard(line, subscriptionId)
             "socks", "socks5" -> parseSocks(line, subscriptionId)
             // hysteria1, http(s), unknown schemes — unsupported
-            else -> null
+            else -> throw SkipNode(null, "unsupported protocol: ${line.substringBefore("://").lowercase()}")
         }
 
     // vless://<uuid>@<server>:<port>?<params>#<name>
-    private fun parseVless(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseVless(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
-        val uuid = link.userinfo?.let(::percentDecode) ?: return null
+        val uuid = link.userinfo?.let(::percentDecode)
+            ?: throw SkipNode(link.fragment, "malformed")
         val p = link.params
         val network = p.param("type", "network") ?: "tcp"
-        if (isUnsupportedNetwork(network)) return null
+        if (classifyNetwork(network) == NetworkClass.Unsupported) {
+            throw SkipNode(link.fragment, "unsupported transport: $network")
+        }
         val security = p["security"]?.lowercase()
         val tls = when (security) {
             "tls", "reality" -> tlsBlock(
@@ -110,15 +139,18 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // vmess://<base64(json)>
-    private fun parseVmess(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseVmess(line: String, subscriptionId: Long): ProxyNode {
         val payload = line.substringAfter("://").substringBefore('#').substringBefore('?')
-        val decoded = base64Decode(payload) ?: return null
+        val decoded = base64Decode(payload)
+            ?: throw SkipNode(null, "malformed")
         val obj = json.parseToJsonElement(String(decoded, Charsets.UTF_8)).jsonObject
-        val server = obj.str("add") ?: return null
-        val port = obj.intField("port") ?: return null
-        val uuid = obj.str("id") ?: return null
+        val server = obj.str("add") ?: throw SkipNode(obj.str("ps"), "malformed")
+        val port = obj.intField("port") ?: throw SkipNode(obj.str("ps"), "malformed")
+        val uuid = obj.str("id") ?: throw SkipNode(obj.str("ps"), "malformed")
         val network = obj.str("net") ?: "tcp"
-        if (isUnsupportedNetwork(network)) return null
+        if (classifyNetwork(network) == NetworkClass.Unsupported) {
+            throw SkipNode(obj.str("ps"), "unsupported transport: $network")
+        }
 
         val path = obj.str("path")
         val serviceName = obj.str("serviceName") ?: when {
@@ -156,12 +188,15 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // trojan://<password>@<server>:<port>?<params>#<name>
-    private fun parseTrojan(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseTrojan(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
-        val password = link.userinfo?.let(::percentDecode) ?: return null
+        val password = link.userinfo?.let(::percentDecode)
+            ?: throw SkipNode(link.fragment, "malformed")
         val p = link.params
         val network = p.param("type", "network") ?: "tcp"
-        if (isUnsupportedNetwork(network)) return null
+        if (classifyNetwork(network) == NetworkClass.Unsupported) {
+            throw SkipNode(link.fragment, "unsupported transport: $network")
+        }
         // Trojan is TLS-only — always emit the tls block (incl. REALITY params).
         val tls = tlsBlock(
             serverName = p["sni"] ?: link.host,
@@ -186,7 +221,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     // ss://<base64(method:password)>@<server>:<port>
     // ss://<method>:<password>@<server>:<port>   (parts may be individually base64'd)
     // ss://<base64(method:password@server:port)>
-    private fun parseShadowsocks(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseShadowsocks(line: String, subscriptionId: Long): ProxyNode {
         var rest = line.substringAfter("://")
         var fragment: String? = null
         val hash = rest.indexOf('#')
@@ -210,11 +245,13 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         }
         var authority = rest
         if ('@' !in authority) {
-            authority = base64Decode(authority)?.toString(Charsets.UTF_8) ?: return null
+            authority = base64Decode(authority)?.toString(Charsets.UTF_8)
+                ?: throw SkipNode(fragment, "malformed")
         }
         val at = authority.lastIndexOf('@')
-        if (at < 0) return null
-        val (method, password) = parseSsUserInfo(authority.substring(0, at)) ?: return null
+        if (at < 0) throw SkipNode(fragment, "malformed")
+        val (method, password) = parseSsUserInfo(authority.substring(0, at))
+            ?: throw SkipNode(fragment, "malformed")
         val (server, port) = ShareLink.splitHostPort(authority.substring(at + 1))
         return node(
             subscriptionId, ProtocolType.SHADOWSOCKS,
@@ -246,12 +283,42 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // hysteria2://<password>@<server>:<port>?<params>#<name>  (also hy2://)
-    private fun parseHysteria2(line: String, subscriptionId: Long): ProxyNode? {
-        val link = ShareLink.parse(line)
-        val password = link.userinfo?.let(::percentDecode) ?: return null
+    private fun parseHysteria2(line: String, subscriptionId: Long): ProxyNode {
+        // mport carries the port-hopping list; the authority port itself may
+        // be a range (host:20000-30000) which ShareLink.splitHostPort
+        // rejects — retry with the authority port replaced by mport's first
+        // entry. A present-but-invalid mport is a skip, never a silent
+        // fallback to a guessed port.
+        // Search only the pre-fragment part: a `#name?mport=...` fragment is
+        // the display name, not a query param — matching it would let a
+        // fragment inject port-hopping into a node that never declared it.
+        val mport = MPORT_REGEX.find(line.substringBefore('#'))?.groupValues?.get(1)
+            ?.let { runCatching { percentDecode(it) }.getOrDefault(it) }
+        val hopList = mport?.let { raw ->
+            val entries = raw.split(',')
+            val parsed = portHoppingList(raw)
+            if (parsed.size != entries.size) {
+                throw SkipNode(fragmentName(line), "malformed")
+            }
+            parsed
+        }
+        val link = try {
+            ShareLink.parse(line)
+        } catch (e: Exception) {
+            if (mport == null) throw e
+            val firstPort = hopList?.first()?.substringBefore(':')
+                ?: throw SkipNode(fragmentName(line), "malformed")
+            ShareLink.parse(replaceAuthorityPort(line, firstPort))
+        }
+        val password = link.userinfo?.let(::percentDecode)
+            ?: throw SkipNode(link.fragment, "malformed")
         val p = link.params
-        // mport carries the port (-hopping) list; the first entry is the connect port.
-        val port = p["mport"]?.let { Regex("[0-9]+").find(it)?.value?.toIntOrNull() } ?: link.port
+        // hopList was already validated — a present-but-invalid mport
+        // threw above rather than silently degrading to the authority port.
+        val serverPorts = hopList?.takeIf { it.isNotEmpty() }
+        // server_port is schema-required but ignored once server_ports is
+        // set — keep it at the first hop port.
+        val port = serverPorts?.first()?.substringBefore(':')?.toIntOrNull() ?: link.port
         val tls = tlsBlock(
             serverName = p["sni"] ?: link.host,
             insecure = truthyParam(p["insecure"]),
@@ -262,16 +329,31 @@ class UriListParser @Inject constructor() : SubscriptionParser {
             subscriptionId, ProtocolType.HYSTERIA2,
             link.host, port, link.fragment, line,
         ) { tag ->
-            hysteria2Outbound(tag, link.host, port, password, tls = tls, obfsPassword = obfsPassword)
+            hysteria2Outbound(
+                tag, link.host, port, password,
+                tls = tls, obfsPassword = obfsPassword, serverPorts = serverPorts,
+            )
         }
     }
 
+    /** Replace the port inside `scheme://authority` — used when the
+     *  authority carries a port range splitHostPort can't parse. */
+    private fun replaceAuthorityPort(line: String, port: String): String {
+        val schemeEnd = line.indexOf("://") + 3
+        val authorityEnd = line.indexOfAny(charArrayOf('?', '#', '/'), schemeEnd)
+            .takeIf { it >= 0 } ?: line.length
+        val authority = line.substring(schemeEnd, authorityEnd)
+        val colon = authority.lastIndexOf(':')
+        if (colon < 0) return line
+        return line.substring(0, schemeEnd + colon + 1) + port + line.substring(authorityEnd)
+    }
+
     // tuic://<uuid>:<password>@<server>:<port>?<params>#<name>
-    private fun parseTuic(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseTuic(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
-        val userinfo = link.userinfo ?: return null
+        val userinfo = link.userinfo ?: throw SkipNode(link.fragment, "malformed")
         val sep = userinfo.indexOf(':')
-        if (sep < 0) return null
+        if (sep < 0) throw SkipNode(link.fragment, "malformed")
         val uuid = percentDecode(userinfo.substring(0, sep))
         val password = percentDecode(userinfo.substring(sep + 1))
         val p = link.params
@@ -292,10 +374,10 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // anytls://<password>@<server>:<port>?<params>#<name> — TLS is mandatory.
-    private fun parseAnytls(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseAnytls(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
         val password = link.userinfo?.let(::percentDecode)?.takeIf { it.isNotEmpty() }
-            ?: return null
+            ?: throw SkipNode(link.fragment, "malformed")
         val p = link.params
         val tls = tlsBlock(
             serverName = p["sni"] ?: link.host,
@@ -310,15 +392,15 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // wireguard://<private_key>@<server>:<port>?publickey=<pk>&address=<cidrs>&…#<name>
-    private fun parseWireguard(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseWireguard(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
         val privateKey = link.userinfo?.let(::percentDecode)?.takeIf { it.isNotEmpty() }
-            ?: return null
+            ?: throw SkipNode(link.fragment, "malformed")
         val p = link.params
         val peerPublicKey = p.param("publickey", "public_key", "peer_public_key")
-            ?: return null
+            ?: throw SkipNode(link.fragment, "malformed")
         val localAddress = commaList(p.param("address", "local_address", "addresses"))
-            ?: return null
+            ?: throw SkipNode(link.fragment, "malformed")
         val reserved = commaList(p["reserved"])?.mapNotNull(String::toIntOrNull)
         val mtu = p["mtu"]?.toIntOrNull()
         return node(subscriptionId, ProtocolType.WIREGUARD, link, line) { tag ->
@@ -335,7 +417,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
     }
 
     // socks://[user:pass@]<server>:<port>#<name>  (also socks5://)
-    private fun parseSocks(line: String, subscriptionId: Long): ProxyNode? {
+    private fun parseSocks(line: String, subscriptionId: Long): ProxyNode {
         val link = ShareLink.parse(line)
         // Split on the first LITERAL colon before decoding — a %3A inside the
         // username is data, not the user:pass separator (RFC 3986 §2.4).
@@ -387,6 +469,10 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         (this[key] as? JsonPrimitive)?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() }
 
     private companion object {
+        /** `mport` may sit anywhere in the query — pre-extract it from the
+         *  raw line so a range-valued authority port can be retried. */
+        val MPORT_REGEX = Regex("[?&]mport=([^&#]*)")
+
         val SS_METHODS = setOf(
             "aes-128-gcm", "aes-192-gcm", "aes-256-gcm",
             "aes-128-cfb", "aes-192-cfb", "aes-256-cfb",

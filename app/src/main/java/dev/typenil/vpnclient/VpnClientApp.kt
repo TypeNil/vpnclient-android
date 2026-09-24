@@ -6,20 +6,15 @@ import android.app.NotificationManager
 import dagger.hilt.android.HiltAndroidApp
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.singbox.LibboxRuntime
-import dev.typenil.vpnclient.core.subscription.SubscriptionExpiryNotifier
 import dev.typenil.vpnclient.core.subscription.SubscriptionRefreshScheduler
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
-import dev.typenil.vpnclient.core.subscription.expiryAlertDue
-import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
 import dev.typenil.vpnclient.core.vpn.VpnNotification
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 
 @HiltAndroidApp
 class VpnClientApp : Application() {
@@ -39,18 +34,17 @@ class VpnClientApp : Application() {
     @Inject
     lateinit var subscriptionRepository: SubscriptionRepository
 
-    @Inject
-    lateinit var expiryNotifier: SubscriptionExpiryNotifier
-
-    private val json = Json { ignoreUnknownKeys = true }
     override fun onCreate() {
         super.onCreate()
         SecureLog.debugEnabled = BuildConfig.DEBUG
         createNotificationChannels()
         LibboxRuntime.init(this)
         reconcileRefreshJobs()
-        refreshUpdateAlwaysSubscriptions()
+        // Expiry scan is DB-only but serializes behind refresh() inside the
+        // repository — launch it before the update-always network refreshes
+        // so N x fetch-timeout can't delay a due alert.
         checkSubscriptionExpiry()
+        refreshUpdateAlwaysSubscriptions()
     }
 
     /**
@@ -112,26 +106,12 @@ class VpnClientApp : Application() {
      */
     private fun checkSubscriptionExpiry() {
         applicationScope.launch {
-            runCatching {
-                subscriptionDao.getAll().forEach { sub ->
-                    val info = sub.userInfoJson
-                        ?.let { runCatching { json.decodeFromString<SubscriptionUserInfo>(it) }.getOrNull() }
-                    val expire = info?.expireEpochSeconds ?: return@forEach
-                    val alertKey = "expiry_alerted_${sub.id}_$expire"
-                    if (expiryAlertDue(
-                            expire,
-                            System.currentTimeMillis(),
-                            alreadyAlerted = alertKey in settings.expiryAlerted.first(),
-                        )
-                    ) {
-                        if (expiryNotifier.notifyExpiring(sub.id, sub.name, expire)) {
-                            settings.markExpiryAlerted(alertKey)
-                        }
-                    }
+            // Serialized with refresh() inside the repository — the
+            // check→notify→mark sequence can't race a startup refresh.
+            runCatching { subscriptionRepository.checkPersistedExpiryAlerts() }
+                .onFailure {
+                    SecureLog.w("VpnClientApp", "expiry check failed", it)
                 }
-            }.onFailure {
-                SecureLog.w("VpnClientApp", "expiry check failed", it)
-            }
         }
     }
 

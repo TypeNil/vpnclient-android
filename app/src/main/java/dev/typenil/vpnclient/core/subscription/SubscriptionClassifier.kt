@@ -83,7 +83,8 @@ class SubscriptionClassifier @Inject constructor() {
         val KNOWN_SCHEMES = listOf(
             "vless://", "vmess://", "trojan://", "ss://",
             "hysteria2://", "hy2://", "tuic://", "hysteria://",
-            "socks://", "http://", "https://", "wireguard://",
+            "socks://", "socks5://", "http://", "https://",
+            "wireguard://", "wg://", "anytls://",
         )
     }
 }

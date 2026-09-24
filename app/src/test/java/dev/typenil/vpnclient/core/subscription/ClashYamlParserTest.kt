@@ -5,6 +5,7 @@ import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -36,7 +37,7 @@ class ClashYamlParserTest {
               public-key: pubkey123
               short-id: ab01
         """.trimIndent()
-        val n = parser.parse(body, 2).single()
+        val n = parser.parse(body, 2).nodes.single()
         assertEquals(ProtocolType.VLESS, n.protocol)
         assertEquals("vless-reality", n.name)
         assertEquals("v.example.com", n.server)
@@ -74,7 +75,7 @@ class ClashYamlParserTest {
               headers:
                 Host: cdn.example.com
         """.trimIndent()
-        val n = parser.parse(body, 1).single()
+        val n = parser.parse(body, 1).nodes.single()
         val o = json.parseToJsonElement(n.outboundJson).jsonObject
         assertEquals("vmess", o["type"]!!.jsonPrimitive.content)
         assertEquals(2, o["alter_id"]!!.jsonPrimitive.int)
@@ -97,7 +98,7 @@ class ClashYamlParserTest {
             cipher: chacha20-ietf-poly1305
             password: pw123
         """.trimIndent()
-        val n = parser.parse(body, 1).single()
+        val n = parser.parse(body, 1).nodes.single()
         assertEquals(ProtocolType.SHADOWSOCKS, n.protocol)
         val o = json.parseToJsonElement(n.outboundJson).jsonObject
         assertEquals("shadowsocks", o["type"]!!.jsonPrimitive.content)
@@ -130,7 +131,7 @@ class ClashYamlParserTest {
             password: pw
             sni: t.example.com
         """.trimIndent()
-        val nodes = parser.parse(body, 1)
+        val nodes = parser.parse(body, 1).nodes
         assertEquals(1, nodes.size)
         assertEquals(ProtocolType.TROJAN, nodes[0].protocol)
     }
@@ -146,7 +147,7 @@ class ClashYamlParserTest {
             password: pw
             skip-cert-verify: true
         """.trimIndent()
-        val n = parser.parse(body, 1).single()
+        val n = parser.parse(body, 1).nodes.single()
         val tls = json.parseToJsonElement(n.outboundJson).jsonObject["tls"]!!.jsonObject
         assertTrue(tls["enabled"]!!.jsonPrimitive.boolean)
         assertTrue(tls["insecure"]!!.jsonPrimitive.boolean)
@@ -168,7 +169,7 @@ class ClashYamlParserTest {
             port: 443
             password: pw
         """.trimIndent()
-        val nodes = parser.parse(body, 1)
+        val nodes = parser.parse(body, 1).nodes
         assertEquals(2, nodes.size)
         assertEquals(nodes[0].id, nodes[1].id)
     }
@@ -176,7 +177,7 @@ class ClashYamlParserTest {
     @Test
     fun `empty proxies throws EmptyResult`() {
         try {
-            parser.parse("proxies: []", 1)
+            parser.parse("proxies: []", 1).nodes
             fail("expected EmptyResult")
         } catch (e: SubscriptionError.EmptyResult) {
             // expected
@@ -186,10 +187,49 @@ class ClashYamlParserTest {
     @Test
     fun `garbage yaml throws ParseFailed or EmptyResult`() {
         try {
-            parser.parse("just a scalar", 1)
+            parser.parse("just a scalar", 1).nodes
             fail("expected error")
         } catch (e: SubscriptionError) {
             // ParseFailed ("not a clash config") — either typed error is acceptable
         }
+    }
+
+    @Test
+    fun `unknown proxy type is reported as skipped`() {
+        val body = """
+        proxies:
+          - name: ssr-node
+            type: ssr
+            server: s.example.com
+            port: 443
+          - name: ok
+            type: ss
+            server: a.example.com
+            port: 8388
+            cipher: aes-256-gcm
+            password: pw
+        """.trimIndent()
+        val result = parser.parse(body, 1)
+        assertEquals(1, result.nodes.size)
+        assertEquals(1, result.skipped.size)
+        assertEquals("unsupported protocol: ssr", result.skipped[0].reason)
+        assertEquals("ssr-node", result.skipped[0].name)
+    }
+
+    @Test
+    fun `hysteria2 ports field emits server_ports`() {
+        val body = """
+        proxies:
+          - name: hy2
+            type: hysteria2
+            server: hy.example.com
+            ports: 5000-5010,6000
+            password: pw
+        """.trimIndent()
+        val n = parser.parse(body, 1).nodes.single()
+        assertEquals(5000, n.port)
+        val o = json.parseToJsonElement(n.outboundJson).jsonObject
+        val ports = o["server_ports"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("5000:5010", "6000"), ports)
     }
 }

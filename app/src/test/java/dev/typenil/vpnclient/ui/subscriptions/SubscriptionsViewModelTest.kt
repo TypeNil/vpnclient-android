@@ -30,6 +30,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -170,7 +172,7 @@ class SubscriptionsViewModelTest {
         viewModel.add("not a url", null)
         advanceUntilIdle()
 
-        viewModel.acknowledgeMessage()
+        viewModel.acknowledgeMessage(viewModel.uiState.value.pendingMessage!!.id)
         advanceUntilIdle()
 
         assertNull(viewModel.uiState.value.pendingMessage)
@@ -200,5 +202,40 @@ class SubscriptionsViewModelTest {
 
         assertEquals("subscription no longer exists", viewModel.uiState.value.pendingMessage?.text)
         assertTrue(viewModel.uiState.value.refreshingIds.isEmpty())
+    }
+
+    @Test
+    fun `a successful add with skipped nodes surfaces a grouped summary`() = testScope.runTest {
+        collectUi()
+        val server = MockWebServer()
+        try {
+            server.start()
+            // One good node + two unsupported ones — the add succeeds and
+            // the snackbar reports the skips grouped by reason.
+            server.enqueue(
+                MockResponse().setBody(
+                    "vless://11111111-1111-1111-1111-111111111111@a.example.com:443?security=none&type=tcp#A\n" +
+                        "snell://x@b.example.com:1#B\n" +
+                        "snell://x@c.example.com:1#C\n",
+                ),
+            )
+
+            viewModel.add(server.url("/sub").toString(), null, allowInsecureHttp = true)
+            // The fetch runs on a real IO thread — pump the test dispatcher
+            // until the result lands back on Main.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (viewModel.uiState.value.pendingMessage == null &&
+                System.currentTimeMillis() < deadline
+            ) {
+                advanceUntilIdle()
+                Thread.sleep(20)
+            }
+
+            val text = viewModel.uiState.value.pendingMessage?.text
+            assertTrue(text!!.startsWith("2 nodes skipped:"))
+            assertTrue("unsupported protocol: snell (2)" in text)
+        } finally {
+            server.shutdown()
+        }
     }
 }

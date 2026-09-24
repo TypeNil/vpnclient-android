@@ -42,4 +42,22 @@ class ExpiryAlertTest {
     fun `not due without an expiry`() {
         assertFalse(expiryAlertDue(null, now, alreadyAlerted = false))
     }
+
+    @Test
+    fun `legacy key format counts as already alerted`() {
+        val alerted = setOf("expiry_alerted_7_1800003600")
+        assertTrue(expiryAlreadyAlerted(alerted, 7, 1_800_003_600))
+    }
+
+    @Test
+    fun `canonical key format counts as already alerted`() {
+        val alerted = setOf("7:1800003600")
+        assertTrue(expiryAlreadyAlerted(alerted, 7, 1_800_003_600))
+    }
+
+    @Test
+    fun `different expiry is not alerted`() {
+        val alerted = setOf("7:1800003600", "expiry_alerted_7_1800003600")
+        assertFalse(expiryAlreadyAlerted(alerted, 7, 1_900_000_000))
+    }
 }

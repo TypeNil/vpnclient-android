@@ -51,9 +51,23 @@ private fun canonicalJson(element: JsonElement): String = when (element) {
  * Output is compact — [JsonObject.toString] is the serialized form.
  */
 
-/** Networks sing-box cannot express — nodes on them must be skipped entirely. */
-internal fun isUnsupportedNetwork(network: String?): Boolean =
-    network?.lowercase() in setOf("xhttp", "splithttp")
+/** How a share-link `network`/`type` value maps onto sing-box transports. */
+internal enum class NetworkClass {
+    /** tcp/none/raw/empty — no transport block emitted. */
+    TcpLike,
+    /** A transport block exists for it. */
+    Supported,
+    /** sing-box cannot express it — the node must be skipped, not degraded. */
+    Unsupported,
+}
+
+/** Classify a `network`/`type` param; unknown values are [NetworkClass.Unsupported]. */
+internal fun classifyNetwork(network: String?): NetworkClass =
+    when (network?.lowercase()) {
+        null, "", "tcp", "none", "raw" -> NetworkClass.TcpLike
+        "ws", "grpc", "httpupgrade", "http", "h2", "quic" -> NetworkClass.Supported
+        else -> NetworkClass.Unsupported
+    }
 
 /** `"tls"` block shared by all TLS-capable outbounds. */
 internal fun tlsBlock(
@@ -89,7 +103,7 @@ internal fun tlsBlock(
     }
 }
 
-/** `"transport"` block; null for tcp-like networks (tcp/none/raw/empty/unmapped). */
+/** `"transport"` block; null for tcp-like networks (tcp/none/raw/empty). */
 internal fun transportBlock(
     network: String?,
     host: String? = null,
@@ -120,6 +134,8 @@ internal fun transportBlock(
         if (!path.isNullOrBlank()) put("path", path)
         put("method", "GET")
     }
+    // sing-box QUIC transport has no other fields.
+    "quic" -> buildJsonObject { put("type", "quic") }
     else -> null
 }
 
@@ -185,6 +201,7 @@ internal fun hysteria2Outbound(
     tag: String, server: String, port: Int, password: String,
     tls: JsonObject,
     obfsPassword: String? = null,
+    serverPorts: List<String>? = null,
 ): JsonObject = baseOutbound("hysteria2", tag, server, port) {
     put("password", password)
     put("tls", tls)
@@ -194,7 +211,31 @@ internal fun hysteria2Outbound(
             put("password", obfsPassword)
         }
     }
+    // Port hopping: `server_ports` ranges ("a:b") or bare ports. No
+    // hop_interval — the sing-box default (30s) already applies.
+    if (!serverPorts.isNullOrEmpty()) {
+        putJsonArray("server_ports") { serverPorts.forEach { add(it) } }
+    }
 }
+
+/**
+ * `mport`/`ports` port-hopping syntax → sing-box `server_ports` entries:
+ * `"5000-5010,6000"` → `["5000:5010", "6000"]`. Unparseable entries drop.
+ */
+internal fun portHoppingList(raw: String): List<String> =
+    raw.split(',').mapNotNull { entry ->
+        val e = entry.trim()
+        when {
+            e.isEmpty() -> null
+            '-' in e -> {
+                val a = e.substringBefore('-').trim()
+                val b = e.substringAfter('-').trim()
+                if (a.toIntOrNull() != null && b.toIntOrNull() != null) "$a:$b" else null
+            }
+            e.toIntOrNull() != null -> e
+            else -> null
+        }
+    }
 
 internal fun tuicOutbound(
     tag: String, server: String, port: Int,

@@ -99,7 +99,7 @@ fun SubscriptionsScreen(
     LaunchedEffect(ui.pendingMessage?.id) {
         ui.pendingMessage?.let { message ->
             snackbarHostState.showSnackbar(message.text)
-            viewModel.acknowledgeMessage()
+            viewModel.acknowledgeMessage(message.id)
         }
     }
 
