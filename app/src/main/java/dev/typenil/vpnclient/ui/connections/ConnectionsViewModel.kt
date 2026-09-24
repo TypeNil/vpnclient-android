@@ -30,10 +30,13 @@ class ConnectionsViewModel @Inject constructor(
         connectionManager.activeConnections,
     ) { state, connections ->
         ConnectionsUiState(
-            // Reconnecting still has a live tunnel pushing snapshots —
-            // hiding them would flash the wrong empty state mid-handover.
+            // Reconnecting after a network loss still has a live tunnel
+            // pushing snapshots — hiding them would flash the wrong empty
+            // state mid-handover. A core-failure reconnect has a dead
+            // engine: its rows are stale, so the list hides.
             connected = state is VpnConnectionState.Connected ||
-                state is VpnConnectionState.Reconnecting,
+                (state is VpnConnectionState.Reconnecting &&
+                    state.reason != VpnConnectionState.Reconnecting.Reason.CoreFailure),
             connections = connections,
         )
     }.stateIn(

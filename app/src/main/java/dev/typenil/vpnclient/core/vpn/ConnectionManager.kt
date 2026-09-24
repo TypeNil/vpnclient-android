@@ -554,7 +554,7 @@ class ConnectionManager @Inject constructor(
                             } ?: return@withLock
                             publish(
                                 VpnConnectionState.Reconnecting(
-                                    node, "core failure", attempt,
+                                    node, VpnConnectionState.Reconnecting.Reason.CoreFailure, attempt,
                                 ),
                             )
                             if (!requestServiceTeardown()) {
@@ -758,7 +758,7 @@ class ConnectionManager @Inject constructor(
                 if (current is VpnConnectionState.Connected) {
                     publish(
                         VpnConnectionState.Reconnecting(
-                            current.node, "network unavailable", attempt = 1,
+                            current.node, VpnConnectionState.Reconnecting.Reason.NetworkUnavailable, attempt = 1,
                         ),
                     )
                 }
@@ -766,14 +766,20 @@ class ConnectionManager @Inject constructor(
         }
     }
 
-    /** A usable underlying network is back → resume Connected. */
+    /** A usable underlying network is back → resume Connected — but only
+     *  when the Reconnecting was caused by the network loss itself. A
+     *  rebuild or core-failure reconnect isn't resolved by the underlay
+     *  coming back. */
     fun onUnderlyingNetworkAvailable() {
         scope.launch {
             mutex.withLock {
                 val current = _state.value
                 // teardownRequested marks a failure-reconnect — the engine is
                 // dead and teardown is in flight, so Connected would be fake.
-                if (current is VpnConnectionState.Reconnecting && !teardownRequested) {
+                if (current is VpnConnectionState.Reconnecting &&
+                    current.reason == VpnConnectionState.Reconnecting.Reason.NetworkUnavailable &&
+                    !teardownRequested
+                ) {
                     publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
                 }
             }
@@ -793,7 +799,7 @@ class ConnectionManager @Inject constructor(
                 if (current is VpnConnectionState.Connected) {
                     publish(
                         VpnConnectionState.Reconnecting(
-                            current.node, "applying changes", attempt = 1,
+                            current.node, VpnConnectionState.Reconnecting.Reason.ApplyingChanges, attempt = 1,
                         ),
                     )
                 }

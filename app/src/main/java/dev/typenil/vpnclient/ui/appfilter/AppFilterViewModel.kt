@@ -96,7 +96,8 @@ class AppFilterViewModel @Inject constructor(
     }
 
     /** Apps with a launcher entry, sorted by label. Our own package is
-     *  omitted — it always bypasses the tunnel, so a checkbox would lie. */
+     *  omitted — it always rides the tunnel regardless of mode, so a
+     *  checkbox would lie. */
     private suspend fun loadLauncherApps(): List<AppEntry> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)

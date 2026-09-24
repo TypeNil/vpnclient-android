@@ -7,7 +7,7 @@ package dev.typenil.vpnclient.core.vpn
  * renaming entries can't silently reinterpret a stored preference.
  */
 enum class PerAppMode(val key: String) {
-    /** Every app's traffic goes through the tunnel (self excluded). */
+    /** Every app's traffic goes through the tunnel (self included). */
     ALL("all"),
     /** Only the selected packages use the tunnel. */
     INCLUDE("include"),
@@ -40,9 +40,13 @@ data class PerAppPlan(
  * `TunOptions`. Rules:
  * - include-mode always wins when any allowed package is present — the two
  *   lists can never be mixed on the Builder;
- * - our own package is *never* allowed (its core sockets would loop back into
- *   the TUN); in include-mode it's excluded by omission, in exclude-mode it's
- *   disallowed explicitly;
+ * - our own package always rides the tunnel: whenever an allow-list exists
+ *   it joins it, it is never disallowed, and an empty INCLUDE selection
+ *   degenerates to self alone — subscription refreshes and rule-set
+ *   downloads must work on endpoints only reachable via VPN;
+ * - engine core sockets stay off the TUN via `VpnService.protect()`
+ *   (`ClientVpnService.protectSocket` → `protect(fd)`,
+ *   `SingBoxEngine.autoDetectInterfaceControl`) — the only bypass mechanism;
  * - disallowed packages are only applied when no include list exists.
  */
 internal fun resolvePerAppPlan(
@@ -55,13 +59,18 @@ internal fun resolvePerAppPlan(
     val allowed = buildList {
         addAll(coreInclude)
         if (mode == PerAppMode.INCLUDE) addAll(selected)
-    }.distinct().filter { it != selfPackage }
-    if (allowed.isNotEmpty()) return PerAppPlan(allowed = allowed)
+    }.distinct()
+    // INCLUDE with an empty selection still means "only selected apps" —
+    // the allow-list degenerates to self alone rather than falling back to
+    // allow-all (an empty Builder allow-list routes everything).
+    if (allowed.isNotEmpty() || mode == PerAppMode.INCLUDE) {
+        return PerAppPlan(allowed = (allowed + selfPackage).distinct())
+    }
 
+    // Self is never disallowed — it rides the tunnel in every mode.
     val disallowed = buildList {
         addAll(coreExclude)
         if (mode == PerAppMode.EXCLUDE) addAll(selected)
-        add(selfPackage)
     }.distinct()
     return PerAppPlan(disallowed = disallowed)
 }

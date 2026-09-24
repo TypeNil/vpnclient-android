@@ -11,10 +11,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Direct TCP-connect latency probe.
  *
- * The app's own package is always disallowed on the TUN interface
- * (`resolvePerAppPlan` adds self to the disallowed list in every mode), so
- * these sockets ride the real underlay even while the VPN is connected —
- * the measurement is never inflated by the tunnel itself.
+ * The app's own package rides the tunnel in every per-app mode, so the
+ * probe socket is explicitly kept on the underlay via [VpnSocketProtector]
+ * (`VpnService.protect` while connected, no-op otherwise) — the measurement
+ * is never inflated by the tunnel itself.
  *
  * This measures reachability of the server's TCP port, not the full proxy
  * handshake. While connected, the engine's `urltest` gives the end-to-end
@@ -22,7 +22,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * connecting (and as a reachability signal for nodes the core can't test).
  */
 @Singleton
-class LatencyProbe @Inject constructor() {
+class LatencyProbe @Inject constructor(
+    private val socketProtector: VpnSocketProtector,
+) {
 
     /**
      * Milliseconds for a TCP connect to `host:port` (DNS resolution
@@ -42,6 +44,13 @@ class LatencyProbe @Inject constructor() {
         withTimeoutOrNull(timeoutMs.toLong()) {
             try {
                 Socket().use { socket ->
+                    // bind(null) materializes the fd — VpnService.protect
+                    // reads it and fails outright on an unbound socket.
+                    socket.bind(null)
+                    // Keep the probe on the underlay. A failed protect means
+                    // the socket would ride the tunnel — the number would be
+                    // tunnel latency mislabeled as direct, so report nothing.
+                    if (!socketProtector.protect(socket)) return@withTimeoutOrNull null
                     val start = System.nanoTime()
                     socket.connect(InetSocketAddress(host, port), timeoutMs)
                     ((System.nanoTime() - start) / 1_000_000L).toInt()

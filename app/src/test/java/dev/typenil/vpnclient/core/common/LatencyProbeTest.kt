@@ -9,7 +9,7 @@ import org.junit.Test
 
 class LatencyProbeTest {
 
-    private val probe = LatencyProbe()
+    private val probe = LatencyProbe(VpnSocketProtector())
 
     @Test
     fun `a listening socket measures a non-negative delay`() = runTest {
@@ -27,6 +27,18 @@ class LatencyProbeTest {
         // acceptable — the port was free a moment ago.
         val port = ServerSocket(0).use { it.localPort }
         assertNull(probe.measure("127.0.0.1", port, timeoutMs = 500))
+    }
+
+    @Test
+    fun `a failed protect reports no measurement`() = runTest {
+        // protect()=false means the socket would ride the tunnel — the
+        // result would be tunnel latency mislabeled as direct.
+        val protector = VpnSocketProtector()
+        protector.install { false }
+        val failing = LatencyProbe(protector)
+        ServerSocket(0).use { server ->
+            assertNull(failing.measure("127.0.0.1", server.localPort))
+        }
     }
 
 }

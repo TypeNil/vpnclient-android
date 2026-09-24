@@ -33,9 +33,20 @@ sealed interface VpnConnectionState {
     /** Tunnel dropped or a recoverable change happened — reconnecting. */
     data class Reconnecting(
         val node: NodeSummary,
-        val reason: String,
+        val reason: Reason,
         val attempt: Int,
-    ) : VpnConnectionState
+    ) : VpnConnectionState {
+        /** Why the session is reconnecting — consumers key on this, so it's
+         *  typed rather than a free-form string. */
+        enum class Reason {
+            /** Underlying network lost — the tunnel is still nominally up. */
+            NetworkUnavailable,
+            /** Engine died — teardown/restart in flight, state is stale. */
+            CoreFailure,
+            /** In-session rebuild (e.g. per-app policy change). */
+            ApplyingChanges,
+        }
+    }
 
     /** Graceful teardown in progress. */
     data object Stopping : VpnConnectionState

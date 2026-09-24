@@ -19,6 +19,7 @@ import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.common.VpnSocketProtector
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineNotification
@@ -130,6 +131,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
     @Inject
     lateinit var settings: SettingsRepository
 
+    /** Lets plain-Socket clients (latency probes) stay on the underlay —
+     *  the app's own package rides the tunnel in every per-app mode. */
+    @Inject
+    lateinit var socketProtector: VpnSocketProtector
+
     /** Process-wide scope for fire-and-forget teardown in onDestroy —
      *  the service's own scope is cancelled on destroy. */
     @Inject
@@ -208,6 +214,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     override fun onCreate() {
         super.onCreate()
+        // Probe sockets must bypass the TUN for the service's lifetime —
+        // self is routed through the tunnel in every per-app mode.
+        socketProtector.install { socket -> protect(socket) }
         // Cache settings the callback paths need synchronously; also push the
         // doze state when the user flips the toggle while an engine is alive.
         scope.launch {
@@ -361,8 +370,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
             ACTION_DISCONNECT -> {
                 autoStartJob?.cancel()
-                scope.launch { persistSetting { settings.setDesiredVpnRunning(false) } }
-                stopTunnel()
+                scope.launch {
+                    // Flag write serialized before the stop: a crash between
+                    // them must not leave desiredVpnRunning=true pointing at
+                    // a dead tunnel (boot restore would resurrect it).
+                    persistSetting { settings.setDesiredVpnRunning(false) }
+                    stopTunnel()
+                }
                 return START_NOT_STICKY
             }
             else -> {
@@ -853,6 +867,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     override fun onDestroy() {
         destroyed = true
+        socketProtector.uninstall()
         stopRequested = true
         val current = engine
         engine = null
@@ -895,22 +910,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
         val generation = activeGeneration
         activeGeneration = -1L
         if (current != null) pendingTeardown.add(current)
-        scope.launch {
+        // Publish the revoked state synchronously — a scope.launch could be
+        // cancelled by onDestroy before it ever runs, silently dropping the
+        // state transition. The flag write and engine drain survive on the
+        // application scope for the same reason.
+        connectionManager.onServiceRevoked(generation)
+        applicationScope.launch {
+            runCatching { settings.setDesiredVpnRunning(false) }
             try {
-                persistSetting { settings.setDesiredVpnRunning(false) }
+                runCatching { current?.stop() }
             } finally {
-                // The manager callback, engine drain, and service stop are
-                // mandatory — a failed flag write must not skip them.
-                try {
-                    runCatching { current?.stop() }
-                } finally {
-                    pendingTeardown.remove(current)
-                }
-                connectionManager.onServiceRevoked(generation)
-                cleanup()
-                stopSelf()
+                pendingTeardown.remove(current)
             }
         }
+        cleanup()
+        stopSelf()
     }
 
     // region EnginePlatform
@@ -975,8 +989,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
 
             // Builder rejects mixing allowed+disallowed calls; the resolver
-            // guarantees exactly one side is populated. Our own package is
-            // never allowed — its core sockets would loop back into the TUN.
+            // guarantees exactly one side is populated. Our own package
+            // always rides the tunnel — core sockets stay off the TUN via
+            // protect() (protectSocket below / autoDetectInterfaceControl).
             // Blocking read is fine: openTun already runs on an engine thread
             // doing binder calls.
             val (mode, packages) = runBlocking { settings.perAppPolicySnapshot() }
@@ -1082,9 +1097,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // temporarily be unavailable during teardown. Only choose a network
         // with known INTERNET + NOT_VPN evidence; otherwise fall back to any
         // positively identified physical network, and publish null if none.
+        // allNetworks order is arbitrary — prefer a VALIDATED network so a
+        // dead-but-present Wi-Fi isn't picked over working cellular.
+        val usable = connectivity.allNetworks.filter(::isUsablePhysicalNetwork)
         val active = connectivity.activeNetwork
             ?.takeIf(::isUsablePhysicalNetwork)
-            ?: connectivity.allNetworks.firstOrNull(::isUsablePhysicalNetwork)
+            ?: usable.firstOrNull { network ->
+                connectivity.getNetworkCapabilities(network)
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            } ?: usable.firstOrNull()
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

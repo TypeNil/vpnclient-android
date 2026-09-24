@@ -88,10 +88,10 @@ fun AppFilterScreen(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             if (ui.mode == PerAppMode.INCLUDE && ui.selected.isEmpty()) {
-                // An empty include-list can't be expressed to VpnService —
-                // the resolver falls back to routing everything.
+                // An empty include-list degenerates to self-only — nothing
+                // else rides the tunnel.
                 Text(
-                    "No apps selected — all apps use the tunnel",
+                    "No apps selected — only this app uses the tunnel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
