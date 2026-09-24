@@ -26,7 +26,7 @@ Swapping cores means writing another `VpnEngine` + `EnginePlatform` consumer.
 SubscriptionRepository.refresh(id)
   → SubscriptionFetcher      OkHttp; UA header; x-hwid; 8 MiB cap; metadata headers
   → SubscriptionClassifier   UriList | Base64UriList | SingBoxJson | ClashYaml | XrayJson(unsupported)
-  → SubscriptionParser*      → List<ProxyNode>  (each carries sing-box outboundJson)
+  → SubscriptionParser*      → ParseResult(nodes, skipped)  (each node carries sing-box outboundJson)
   → Room: delete+insert nodes, markSuccess — only after full parse succeeds
 ```
 
@@ -95,8 +95,12 @@ the tunnel instead of dead-ending in `direct`.
   `QUERY_ALL_PACKAGES`).
 - Applied at `openTun` time through `resolvePerAppPlan`: `VpnService.Builder`
   rejects mixing `addAllowed`/`addDisallowed` calls, so the plan fills exactly
-  one side — include-mode wins when any allowed package exists, and our own
-  package is never allowed (its core sockets would loop back into the TUN).
+  one side — include-mode wins when any allowed package exists. Our own
+  package always rides the tunnel (it joins any allow-list, is never
+  disallowed); engine core sockets stay off the TUN via `VpnService.protect()`,
+  which only fires because the compiler emits `route.auto_detect_interface` —
+  without it the core never calls `autoDetectInterfaceControl` and its own
+  outbound sockets loop back into the TUN, killing the tunnel.
 - `excludeRoute()` exists only on API 33+: below it the Builder can't honor
   route exclusions. The compiler emits no `route_exclude_address` today, so
   the lists are empty; if a future config produces them, `openTun` logs a
@@ -132,9 +136,11 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   when the engine can't honor it (control channel down, tag missing) the
   manager reconnects so the pick compiles in as the selector default.
 - Latency: `urlTest` runs through each node's own outbound over the real
-  underlay — the app's package is always disallowed on the TUN, so neither
-  the engine's probes nor the disconnected-mode `LatencyProbe` (direct TCP
-  connect to `server:port`) ever measure through the tunnel itself.
+  underlay — engine sockets bypass the TUN via `VpnService.protect()`. The
+  app's own package rides the tunnel in every per-app mode, so the
+  disconnected-mode `LatencyProbe` (direct TCP connect to `server:port`)
+  protects its sockets explicitly through `VpnSocketProtector` and never
+  measures through the tunnel itself.
   Settings baked into the config at compile time (`routeMode`,
   `ipv6Enabled`) prompt a reconnect when changed on a live tunnel; per-app
   policy rebuilds the TUN in-session instead.

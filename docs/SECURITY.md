@@ -6,8 +6,9 @@
   `SecureLog` routes through `Redactor` which strips UUIDs, userinfo credentials,
   sensitive query params, bearer tokens and long opaque tokens.
 - **Storage:** subscription URLs and `rawUri`/outbound JSON live in Room —
-  local-only, not exported; `android:allowBackup="false"` keeps them out of
-  cloud/device-transfer backups. Selected node id and HWID live in DataStore.
+  local-only, not exported; `android:allowBackup="false"` plus wired
+  `dataExtractionRules` exclude all app data from cloud backup and
+  device-to-device transfer. Selected node id and HWID live in DataStore.
 - **HWID:** install-scoped random value, not a hardware identifier.
 
 ## Network surface
@@ -30,6 +31,14 @@
   private addresses are out of scope.
   `usesCleartextTraffic="true"` stays in the manifest because the opt-in needs
   the OS to permit cleartext — the fetcher enforces the policy itself.
+- **Self rides the tunnel:** the app's own OkHttp traffic (subscription
+  refresh, rule-set downloads) is routed through the VPN while connected
+  (`PerAppPolicy` includes the app). A malicious exit node can therefore
+  observe this fetch path; downloads are still integrity-gated (rule sets
+  carry `SSR\x01` magic + size cap, subscription bodies are full-validated
+  before commit), so worst case is a failed fetch keeping last-known-good —
+  never silent corruption. `LatencyProbe` is the deliberate exception: it
+  measures the underlay, so it binds off-tunnel via `VpnSocketProtector`.
 
 ## Untrusted input
 

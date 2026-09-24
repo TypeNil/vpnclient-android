@@ -32,7 +32,9 @@ before making structural changes.
 
 Verification expectations per change:
 
-- Code must compile and `./gradlew test` + `./gradlew lint` must stay green.
+- Start with the smallest relevant build/test for the changed code.
+- Run `./gradlew test` and `./gradlew lint` for broad changes or before a commit/PR.
+- VPN-path changes additionally require emulator/device verification.
 - Parser/protocol changes need fixture tests under `app/src/test/`.
 - Anything touching the VPN path should be verified on the emulator
   (`Medium_Phone_API_36.1` AVD exists locally) — see `docs/TESTING.md`.

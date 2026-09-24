@@ -55,7 +55,9 @@ class HomeViewModel @Inject constructor(
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = HomeUiState(),
+        // Seed with the live state — Idle would flash "Disconnected" for a
+        // frame on a connected session before combine's first emission.
+        initialValue = HomeUiState(connection = connectionManager.state.value),
     )
 
     fun connect() = connectionManager.connect()

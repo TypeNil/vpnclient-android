@@ -24,5 +24,5 @@ app without replacing the core (the `VpnEngine` boundary exists partly for that)
 
 ## Alternatives noted
 
-Xray-core is GPL-3.0 as well; Mihomo is GPL-3.0. Changing cores does not change
-the licensing posture.
+Xray-core is MPL-2.0; Mihomo is GPL-3.0. Changing cores does change the
+licensing posture — MPL-2.0 is file-level copyleft, weaker than GPL-3.0.

@@ -26,3 +26,6 @@ Thumbs.db
 # NDK / native artifacts fetched at build time
 app/libs/
 core-native/
+
+# Local test fixtures containing real subscription URLs — never commit
+vpnclient-test-subscriptions.txt

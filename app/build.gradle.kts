@@ -66,7 +66,7 @@ val vpnCoreVersion = libs.versions.vpnCore.get()
 val libboxSha256 = "93b2596c4e90df32463a9ade5c89d85f83a16aacd94928ba26fc4bce41eaf2a9"
 val libboxFile = rootProject.file("core-native/libbox-$vpnCoreVersion.aar")
 
-val fetchLibbox by tasks.registering {
+val downloadLibbox by tasks.registering {
     // Locals — doLast closures must not capture the build script (config cache).
     val version = vpnCoreVersion
     val sha256 = libboxSha256
@@ -102,7 +102,36 @@ val fetchLibbox by tasks.registering {
     }
 }
 
-tasks.named("preBuild") { dependsOn(fetchLibbox) }
+// The download-time checksum only guards fresh fetches — a corrupted cached
+// AAR would ship silently. Re-verify on every build; on mismatch delete the
+// file so the next build re-downloads (self-healing).
+val verifyLibbox by tasks.registering {
+    val sha256 = libboxSha256
+    val aar = libboxFile
+    group = "vpn core"
+    dependsOn(downloadLibbox)
+    inputs.file(aar)
+    doLast {
+        val digest = MessageDigest.getInstance("SHA-256")
+        aar.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 20)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (actual != sha256) {
+            aar.delete()
+            throw GradleException(
+                "libbox.aar checksum mismatch: expected $sha256, got $actual — deleted, re-run to re-download",
+            )
+        }
+    }
+}
+
+tasks.named("preBuild") { dependsOn(verifyLibbox) }
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))

@@ -47,10 +47,13 @@ private data class EngineSurface(
     val delays: Map<String, Int>,
 )
 
-/** Direct-probe surface: per-node results + the tags a run has covered. */
+/** Direct-probe surface: per-node results + the tags a run has covered.
+ *  [urlTested] tracks engine-covered tags separately so a connected-mode
+ *  badge never borrows a disconnected-mode "tested" mark. */
 private data class ProbeSurface(
     val delays: Map<String, Int>,
     val tested: Set<String>,
+    val urlTested: Set<String> = emptySet(),
 )
 
 @HiltViewModel
@@ -102,10 +105,11 @@ class ServersViewModel @Inject constructor(
         ServersUiState(
             groups = serverGroups,
             selectedNodeId = selectedId,
-            // Engine urltest numbers win while connected — they measure the
-            // full proxy chain; probe results fill in the rest.
-            delays = probe.delays + engine.delays,
-            testedNodeIds = probe.tested,
+            // Connected: only engine urltest numbers — a stale direct-probe
+            // value must not be presented as a "via proxy" measurement.
+            // Disconnected: direct TCP probes are the only source.
+            delays = if (engine.connected) engine.delays else probe.delays,
+            testedNodeIds = if (engine.connected) probe.urlTested else probe.tested,
             connected = engine.connected,
         )
     }.stateIn(
@@ -141,12 +145,11 @@ class ServersViewModel @Inject constructor(
                     // Mark covered tags now — a node that stays without a
                     // delay after the run shows "timeout" instead of "—".
                     // Drop their stale direct-probe delays too: the badge
-                    // prefers any number over "timeout", so a node that just
-                    // timed out must not keep showing an old TCP latency.
                     probeSurface.update {
                         it.copy(
                             delays = it.delays - covered,
                             tested = it.tested + covered,
+                            urlTested = it.urlTested + covered,
                         )
                     }
                 } else {
@@ -155,6 +158,12 @@ class ServersViewModel @Inject constructor(
                         nodes.forEach { node ->
                             launch {
                                 val delay = latencyProbe.measure(node.server, node.port)
+                                // A connect that landed mid-probe must not
+                                // publish a direct result into the
+                                // connected-mode surface.
+                                if (connectionManager.state.value is VpnConnectionState.Connected) {
+                                    return@launch
+                                }
                                 probeSurface.update { surface ->
                                     surface.copy(
                                         delays = if (delay != null) {
