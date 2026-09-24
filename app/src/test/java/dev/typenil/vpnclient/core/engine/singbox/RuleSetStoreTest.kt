@@ -31,6 +31,8 @@ class RuleSetStoreTest {
     private lateinit var dir: File
     private lateinit var ruleDir: File
     private lateinit var store: RuleSetStore
+    /** tag → bundled bytes; absent key = not shipped. */
+    private val bundledBytes = mutableMapOf<String, ByteArray>()
 
     @Before
     fun setUp() {
@@ -39,12 +41,16 @@ class RuleSetStoreTest {
         val context = object : ContextWrapper(null) {
             override fun getFilesDir(): File = dir
         }
+        val bundled = object : BundledRuleSets(context) {
+            override fun open(tag: String) =
+                bundledBytes[tag]?.inputStream()
+        }
         val client = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 chain.proceed(chain.request().newBuilder().url(server.url("/")).build())
             }
             .build()
-        store = RuleSetStore(context, client)
+        store = RuleSetStore(context, client, bundled)
     }
 
     @After
@@ -59,8 +65,10 @@ class RuleSetStoreTest {
         // the per-tag lock must still serialize them into one fetch each.
         repeat(2 * RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(
-                MockResponse().setBody("srs-bytes")
-                    .setBodyDelay(300, TimeUnit.MILLISECONDS),
+                MockResponse().setBody(
+                    okio.Buffer().write(byteArrayOf(0x53, 0x53, 0x52, 0x01))
+                        .writeUtf8("srs-bytes"),
+                ).setBodyDelay(300, TimeUnit.MILLISECONDS),
             )
         }
         val first = async { store.ensureReady(RouteMode.BYPASS_RU) }
@@ -111,6 +119,70 @@ class RuleSetStoreTest {
             fail("expected StartFailed")
         } catch (e: EngineError.StartFailed) {
             // expected
+        }
+    }
+
+    @Test
+    fun `bundled seed is used without a download attempt`() = runTest {
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            bundledBytes[it] = byteArrayOf(7, 7, 7)
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(3L, File(it).length())
+        }
+        // The seed is marked fresh — no network call on the connect path.
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `non-srs 2xx body keeps the stale copy`() = runTest {
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(byteArrayOf(1))
+                setLastModified(0L)
+            }
+        }
+        // A captive-portal HTML page is a 200 — it must not replace the
+        // working copy.
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody("<html>portal</html>"))
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(1L, File(it).length())
+        }
+    }
+
+    @Test
+    fun `empty 2xx body is rejected`() = runTest {
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(""))
+        }
+        try {
+            store.ensureReady(RouteMode.BYPASS_RU)
+            fail("expected StartFailed")
+        } catch (e: EngineError.StartFailed) {
+            // expected — empty body must not seed a zero-byte file
+        }
+    }
+
+    @Test
+    fun `oversized body is rejected`() = runTest {
+        val huge = ByteArray(33 * 1024 * 1024)
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(
+                MockResponse().setResponseCode(200)
+                    .setBody(okio.Buffer().write(huge)),
+            )
+        }
+        try {
+            store.ensureReady(RouteMode.BYPASS_RU)
+            fail("expected StartFailed")
+        } catch (e: EngineError.StartFailed) {
+            // expected — over the 32 MB cap
         }
     }
 }

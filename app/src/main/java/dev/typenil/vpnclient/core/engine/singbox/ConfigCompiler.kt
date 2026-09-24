@@ -193,6 +193,13 @@ class ConfigCompiler @Inject constructor() {
                 }
             }
             putJsonObject("route") {
+                // Required for socket protection: without it the core never
+                // calls autoDetectInterfaceControl, so outbound sockets stay
+                // unprotected — fine only while our own package is disallowed
+                // on the TUN. With self routed through the tunnel, an
+                // unprotected engine socket loops back into the TUN and the
+                // tunnel is dead.
+                put("auto_detect_interface", true)
                 putJsonArray("rules") {
                     addJsonObject { put("action", "sniff") }
                     addJsonObject {

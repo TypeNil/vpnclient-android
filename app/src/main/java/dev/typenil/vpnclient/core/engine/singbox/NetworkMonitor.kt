@@ -55,7 +55,9 @@ class NetworkMonitor(
                 return candidate
             }
         }
-        return connectivity.allNetworks.firstOrNull { network ->
+        // allNetworks order is arbitrary — prefer a VALIDATED network so a
+        // dead-but-present Wi-Fi isn't picked over working cellular.
+        val usable = connectivity.allNetworks.filter { network ->
             val caps = connectivity.getNetworkCapabilities(network)
             isUsableUnderlyingNetwork(
                 capabilitiesKnown = caps != null,
@@ -63,6 +65,10 @@ class NetworkMonitor(
                 isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true,
             )
         }
+        return usable.firstOrNull { network ->
+            connectivity.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        } ?: usable.firstOrNull()
     }
 
 

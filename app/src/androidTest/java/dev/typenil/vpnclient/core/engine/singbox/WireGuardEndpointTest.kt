@@ -37,7 +37,7 @@ class WireGuardEndpointTest {
         val peerKey = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
         val uri = "wireguard://$privateKey@wg.example.com:51820" +
             "?publickey=$peerKey&address=10.0.0.2/32#WG"
-        val node = UriListParser().parse(uri, 1).single()
+        val node = UriListParser().parse(uri, 1).nodes.single()
         assertTrue(node.protocol == ProtocolType.WIREGUARD)
 
         val config = ConfigCompiler().build(
