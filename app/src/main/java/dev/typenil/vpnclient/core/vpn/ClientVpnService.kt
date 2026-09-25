@@ -564,31 +564,26 @@ class ClientVpnService : VpnService(), EnginePlatform {
             // wholesale: its config is the fresher compile and its generation
             // is what the state machine is waiting on.
             var effective = session ?: connectionManager.pendingSession
-            val config = effective?.config
-                ?: try {
-                    configProvider.compileSelected()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    SecureLog.w(TAG, "config rebuild failed: ${e.message}")
-                    null
-                }
-            if (config == null) {
-                try {
-                    if (effective != null) {
-                        connectionManager.onServiceFailed(
-                            VpnError.NoNodeSelected, effective.generation,
-                        )
-                    } else {
-                        // Rebuild with nothing usable — don't loop on it.
-                        persistSetting { settings.setDesiredVpnRunning(false) }
+            // A handed-off session always carries its config; the compile below
+            // only runs for a service-driven restore, where there is no session
+            // to fail — so the error is published directly instead of the
+            // silent stop this used to be.
+            val config =
+                effective?.config
+                    ?: when (val outcome = configProvider.compileOutcome()) {
+                        is CompileOutcome.Ready -> outcome.config
+                        CompileOutcome.NoNodes -> {
+                            // Genuinely nothing enabled — the user must pick a
+                            // server; that is a state, not a defect.
+                            failStart(VpnError.NoNodeSelected)
+                            return@launch
+                        }
+                        is CompileOutcome.Failed -> {
+                            // A config the engine refused is not "no servers".
+                            failStart(engineFailure(outcome.cause, "config rebuild failed"))
+                            return@launch
+                        }
                     }
-                } finally {
-                    cleanup()
-                    stopSelf()
-                }
-                return@launch
-            }
             if (stopRequested || destroyed) {
                 connectionManager.onServiceStopped(-1L)
                 cleanup()
@@ -806,25 +801,24 @@ class ClientVpnService : VpnService(), EnginePlatform {
         if (destroyed || generation < 0) return
         val config: EngineConfig
         if (recompile) {
-            val fresh =
-                try {
-                    configProvider.compileSelected()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
+            when (val outcome = configProvider.compileOutcome()) {
+                is CompileOutcome.Ready -> {
+                    activeConfig = outcome.config
+                    config = outcome.config
+                }
+                CompileOutcome.NoNodes -> {
+                    endSessionWithoutNodes(generation)
+                    return
+                }
+                is CompileOutcome.Failed -> {
                     // The engine's config no longer matches the store, so the
                     // session can't simply continue — but the user must see
                     // the real cause, not a claim that no servers exist.
-                    SecureLog.w(TAG, "rebuild compile failed: ${e.javaClass.simpleName}")
-                    endSessionWithFailure(e, generation)
+                    SecureLog.w(TAG, "rebuild compile failed: ${outcome.cause.javaClass.simpleName}")
+                    endSessionWithFailure(outcome.cause, generation)
                     return
                 }
-            if (fresh == null) {
-                endSessionWithoutNodes(generation)
-                return
             }
-            activeConfig = fresh
-            config = fresh
         } else {
             config = activeConfig ?: return
         }
@@ -902,6 +896,23 @@ class ClientVpnService : VpnService(), EnginePlatform {
     /** Typed error for a failed compile/start — the user sees the real cause. */
     private fun engineFailure(cause: Exception, fallback: String): VpnError =
         dev.typenil.vpnclient.core.vpn.engineFailure(cause, fallback)
+
+    /**
+     * A service-driven start (process-death restore, always-on, boot) produced
+     * no usable config. No session owns the engine yet, so the terminal error
+     * is published directly — a silent stop would leave the user wondering why
+     * the VPN they expect to be running isn't.
+     */
+    private suspend fun failStart(error: VpnError) {
+        SecureLog.w(TAG, "service start failed: ${error.javaClass.simpleName}")
+        // Not a transient failure: don't let a boot / always-on restore loop.
+        persistSetting { settings.setDesiredVpnRunning(false) }
+        // Generation -1 matches "no engine attached" — the state machine takes
+        // the error without pretending a session existed.
+        connectionManager.onServiceFailed(error, -1L)
+        cleanup()
+        stopSelf()
+    }
 
     private fun stopTunnel() {
         stopRequested = true
