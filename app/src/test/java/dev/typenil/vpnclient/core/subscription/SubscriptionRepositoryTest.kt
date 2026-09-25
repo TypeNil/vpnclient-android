@@ -129,6 +129,14 @@ class SubscriptionRepositoryTest {
             nodes.values.filter { it.subscriptionId == subscriptionId }
         override fun observeEnabled(): Flow<List<NodeEntity>> = flowOf(nodes.values.toList())
         override suspend fun getEnabled() = nodes.values.toList()
+        /** Mirrors the SQL: enabled-sub nodes minus pref-disabled ones.
+         *  [usableIds] is the test's view of node_preferences.isEnabled —
+         *  null means "no pref rows", i.e. everything usable. */
+        override fun observeUsable(): Flow<List<NodeEntity>> =
+            flowOf(nodes.values.filter { usableIds?.contains(it.id) ?: true }.toList())
+        override suspend fun getUsable() =
+            nodes.values.filter { usableIds?.contains(it.id) ?: true }.toList()
+        var usableIds: Set<String>? = null
         override suspend fun get(id: String) = nodes[id]
         override fun observeForSubscriptionUrl(url: String): Flow<List<NodeEntity>> =
             flowOf(nodes.values.toList())

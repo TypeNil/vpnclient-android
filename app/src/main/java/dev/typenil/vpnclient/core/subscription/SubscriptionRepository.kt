@@ -403,8 +403,10 @@ class SubscriptionRepository
                     // user made concurrently. The Auto sentinel has no node row —
                     // it must never be treated as a vanished selection.
                     val selected = settings.selectedNodeId.first()
+                    // Usable = enabled-sub AND not pref-disabled — a selection
+                    // pointing at a user-disabled node must fall back too.
                     if (selected != null && selected != NodeSelection.AUTO_ID &&
-                        nodeDao.getEnabled().none { it.id == selected }
+                        nodeDao.getUsable().none { it.id == selected }
                     ) {
                         settings.clearSelectedNodeIdIf(selected)
                         SecureLog.i(TAG, "cleared selection — selected node vanished in refresh")
@@ -628,8 +630,10 @@ class SubscriptionRepository
                     runCatching {
                         val selected = settings.selectedNodeId.first()
                         // AUTO_ID has no node row — never a vanished selection.
+                        // Same usable-set rule as refresh: a pref-disabled
+                        // selected node must fall back, not compile-fail.
                         if (selected != null && selected != NodeSelection.AUTO_ID &&
-                            nodeDao.getEnabled().none { it.id == selected }
+                            nodeDao.getUsable().none { it.id == selected }
                         ) {
                             settings.clearSelectedNodeIdIf(selected)
                         }
@@ -709,6 +713,60 @@ class SubscriptionRepository
                     subscriptionDao.delete(id)
                 }
                 scheduler.cancel(id)
+            }
+        }
+
+        // ---- per-node user preferences (slice: favorites → node control) ----
+
+        /**
+         * Toggle a node's favorite flag. Serialized with refresh so a commit
+         *  can't observe a half-applied prefs write; prefs are stored by node
+         *  id and survive node-table replacement.
+         */
+        suspend fun setNodeFavorite(
+            nodeId: String,
+            favorite: Boolean,
+        ) = refreshMutex.withLock {
+            if (nodeDao.get(nodeId) == null) return@withLock
+            nodePreferenceDao.setFavorite(nodeId, favorite)
+        }
+
+        /** Local display name override — blank clears back to provider name. */
+        suspend fun setNodeCustomName(
+            nodeId: String,
+            customName: String?,
+        ) = refreshMutex.withLock {
+            if (nodeDao.get(nodeId) == null) return@withLock
+            nodePreferenceDao.setCustomName(nodeId, customName?.takeIf { it.isNotBlank() })
+        }
+
+        /** Hidden nodes disappear from user lists but stay in the effective
+         *  node set (hiding is presentation; disabling is routing). */
+        suspend fun setNodeHidden(
+            nodeId: String,
+            hidden: Boolean,
+        ) = refreshMutex.withLock {
+            if (nodeDao.get(nodeId) == null) return@withLock
+            nodePreferenceDao.setHidden(nodeId, hidden)
+        }
+
+        /**
+         * Enable/disable a node for VPN use. Disabling the currently selected
+         *  node falls back the selection (same conditional clear refresh uses
+         *  — a concurrent user pick isn't wiped). Node-set fingerprint changes
+         *  follow automatically via observeUsable, rebuilding a live session.
+         */
+        suspend fun setNodeEnabled(
+            nodeId: String,
+            enabled: Boolean,
+        ) = refreshMutex.withLock {
+            if (nodeDao.get(nodeId) == null) return@withLock
+            nodePreferenceDao.setEnabled(nodeId, enabled)
+            if (!enabled) {
+                val selected = settings.selectedNodeId.first()
+                if (selected == nodeId) {
+                    settings.clearSelectedNodeIdIf(nodeId)
+                }
             }
         }
 

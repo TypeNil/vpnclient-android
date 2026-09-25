@@ -272,6 +272,29 @@ abstract class NodeDao {
     )
     abstract suspend fun getEnabled(): List<NodeEntity>
 
+    /** Enabled-subscription nodes that are also enabled in user prefs —
+     *  the effective VPN node set. Feed for config compilation, the node-set
+     *  fingerprint, and every "does the selection still exist" check. Hidden
+     *  nodes stay usable: hiding is presentation, disabling is routing. */
+    @Query(
+        """SELECT n.* FROM nodes n
+            LEFT JOIN node_preferences p ON p.nodeId = n.id
+            WHERE n.subscriptionId IN
+                (SELECT id FROM subscriptions WHERE enabled = 1)
+              AND COALESCE(p.isEnabled, 1) = 1
+            ORDER BY n.subscriptionId, n.position""",
+    )
+    abstract fun observeUsable(): Flow<List<NodeEntity>>
+
+    @Query(
+        """SELECT n.* FROM nodes n
+            LEFT JOIN node_preferences p ON p.nodeId = n.id
+            WHERE n.subscriptionId IN
+                (SELECT id FROM subscriptions WHERE enabled = 1)
+              AND COALESCE(p.isEnabled, 1) = 1""",
+    )
+    abstract suspend fun getUsable(): List<NodeEntity>
+
     @Query("SELECT * FROM nodes WHERE id = :id")
     abstract suspend fun get(id: String): NodeEntity?
 
