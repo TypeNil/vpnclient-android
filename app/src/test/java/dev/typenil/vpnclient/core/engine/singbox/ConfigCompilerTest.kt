@@ -123,9 +123,39 @@ class ConfigCompilerTest {
         assertNotNull(config.node)
     }
 
+    @Test
+    fun `auto selection defaults the selector to the urltest group`() {
+        // The persisted Auto sentinel selects the "auto" urltest group inside
+        // "proxy"; EngineConfig.node describes Auto itself, never a member.
+        val config = compiler.build(
+            listOf(node("n1"), node("n2")), null, true, selectAuto = true,
+        )
+        val selector = json.parseToJsonElement(config.configJson)
+            .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
+        assertEquals("auto", selector["default"]!!.jsonPrimitive.content)
+        // "auto" is offered first in the selector's outbound list.
+        assertEquals(
+            "auto",
+            selector["outbounds"]!!.jsonArray[0].jsonPrimitive.content,
+        )
+        assertEquals(ConfigCompiler.AUTO_NODE_SUMMARY, config.node)
+    }
+
     @Test(expected = dev.typenil.vpnclient.core.engine.EngineError.InvalidConfig::class)
     fun `stale selection rejected instead of silent fallback`() {
         compiler.build(listOf(node("n1"), node("n2")), "gone", true)
+    }
+
+    @Test
+    fun `auto mode ignores a stale persisted node id`() {
+        // Auto bypasses the node lookup — a vanished id can never fail the
+        // compile once the pick is Auto.
+        val config = compiler.build(
+            listOf(node("n1")), "gone", true, selectAuto = true,
+        )
+        val selector = json.parseToJsonElement(config.configJson)
+            .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
+        assertEquals("auto", selector["default"]!!.jsonPrimitive.content)
     }
 
     @Test(expected = IllegalArgumentException::class)

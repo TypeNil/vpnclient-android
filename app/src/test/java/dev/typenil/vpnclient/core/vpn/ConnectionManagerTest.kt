@@ -9,6 +9,8 @@ import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.OutboundItemInfo
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.engine.VpnEngine
+import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import kotlinx.coroutines.Dispatchers
@@ -478,6 +480,41 @@ class ConnectionManagerTest {
         }
 
     @Test
+    fun `underlying transport label tracks service reports without state transitions`() =
+        testScope.runTest {
+            // Unknown before the service's underlay tracker reports.
+            assertEquals(UnderlyingTransport.UNKNOWN, manager.underlyingTransport.value)
+
+            connectToRunning()
+            // A fresh session must not inherit the previous one's label.
+            assertEquals(UnderlyingTransport.UNKNOWN, manager.underlyingTransport.value)
+
+            manager.reportUnderlyingTransport(UnderlyingTransport.WIFI)
+            assertEquals(UnderlyingTransport.WIFI, manager.underlyingTransport.value)
+
+            // A cell hand-off relabels without touching the state machine.
+            manager.reportUnderlyingTransport(UnderlyingTransport.CELLULAR)
+            assertEquals(UnderlyingTransport.CELLULAR, manager.underlyingTransport.value)
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+
+            // Underlay lost: label goes unknown alongside the Reconnecting.
+            manager.onUnderlyingNetworkLost()
+            advanceUntilIdle()
+            assertEquals(UnderlyingTransport.UNKNOWN, manager.underlyingTransport.value)
+        }
+
+    @Test
+    fun `underlying transport resets when the session ends`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.reportUnderlyingTransport(UnderlyingTransport.WIFI)
+
+        manager.disconnect()
+        advanceUntilIdle()
+        manager.onServiceStopped(generation)
+        assertEquals(UnderlyingTransport.UNKNOWN, manager.underlyingTransport.value)
+    }
+
+    @Test
     fun `network callbacks are no-ops outside the relevant states`() =
         testScope.runTest {
             manager.onUnderlyingNetworkLost()
@@ -671,6 +708,112 @@ class ConnectionManagerTest {
             OutboundItemInfo("node-2", "vless", null),
         ),
     )
+
+    /** Mirrors the compiled layout: "auto" is the urltest group and the
+     *  selector's first item. */
+    private fun autoProxyGroup(selected: String? = null) = OutboundGroupInfo(
+        tag = "proxy",
+        type = "selector",
+        selectable = true,
+        selected = selected,
+        items = listOf(
+            OutboundItemInfo("auto", "urltest", null),
+            OutboundItemInfo("node-1", "vless", null),
+            OutboundItemInfo("node-2", "vless", null),
+        ),
+    )
+
+    private fun urltestGroup(selected: String? = null) = OutboundGroupInfo(
+        tag = "auto",
+        type = "urltest",
+        selectable = false,
+        selected = selected,
+        items = listOf(
+            OutboundItemInfo("node-1", "vless", null),
+            OutboundItemInfo("node-2", "vless", null),
+        ),
+    )
+
+    private fun summariesWithAuto(vararg nodes: NodeSummary): Map<String, NodeSummary> =
+        nodes.associateBy { it.id } + (NodeSelection.AUTO_ID to ConfigCompiler.AUTO_NODE_SUMMARY)
+
+    @Test
+    fun `auto pick live-switches the selector to the urltest group`() =
+        testScope.runTest {
+            connectToRunning()
+            engine.groupsFlow.value = listOf(
+                autoProxyGroup(selected = "node-1"),
+                urltestGroup(selected = null),
+            )
+            configProvider.summaries = summariesWithAuto(node2)
+
+            configProvider.selected.value = NodeSelection.AUTO_ID
+            advanceUntilIdle()
+
+            assertEquals(listOf("proxy" to "auto"), engine.selections)
+            val state = manager.state.value as VpnConnectionState.Connected
+            assertEquals(NodeSelection.AUTO_ID, state.node.id)
+            // No winner reported yet — the label stays generic.
+            assertEquals("Auto · Fastest", state.node.name)
+            assertEquals(0, serviceControl.disconnectStarts)
+
+            // The urltest group's measured winner is surfaced once reported —
+            // named, never impersonated as the session node.
+            engine.groupsFlow.value = listOf(
+                autoProxyGroup(selected = "auto"),
+                urltestGroup(selected = "node-2"),
+            )
+            advanceUntilIdle()
+
+            val updated = manager.state.value as VpnConnectionState.Connected
+            assertEquals(NodeSelection.AUTO_ID, updated.node.id)
+            assertEquals("Auto · Fastest → Second Node", updated.node.name)
+            assertEquals(node2.server, updated.node.server)
+        }
+
+    @Test
+    fun `auto label without a reported winner stays generic`() =
+        testScope.runTest {
+            connectToRunning()
+            engine.groupsFlow.value = listOf(
+                autoProxyGroup(selected = "node-1"),
+                urltestGroup(selected = null),
+            )
+            configProvider.summaries = summariesWithAuto()
+
+            configProvider.selected.value = NodeSelection.AUTO_ID
+            advanceUntilIdle()
+
+            assertEquals(listOf("proxy" to "auto"), engine.selections)
+            val state = manager.state.value as VpnConnectionState.Connected
+            assertEquals(NodeSelection.AUTO_ID, state.node.id)
+            assertEquals("Auto · Fastest", state.node.name)
+        }
+
+    @Test
+    fun `node pick after auto restores the node label`() = testScope.runTest {
+        connectToRunning()
+        // Selector not yet on "auto" — the reconcile path issues the live
+        // switch rather than short-circuiting on the compiled default.
+        engine.groupsFlow.value = listOf(
+            autoProxyGroup(selected = "node-1"),
+            urltestGroup(selected = "node-1"),
+        )
+        configProvider.summaries = summariesWithAuto(node2)
+        configProvider.selected.value = NodeSelection.AUTO_ID
+        advanceUntilIdle()
+        assertEquals(
+            NodeSelection.AUTO_ID,
+            (manager.state.value as VpnConnectionState.Connected).node.id,
+        )
+
+        configProvider.selected.value = "node-2"
+        advanceUntilIdle()
+
+        assertEquals(listOf("proxy" to "auto", "proxy" to "node-2"), engine.selections)
+        assertEquals(node2, (manager.state.value as VpnConnectionState.Connected).node)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
 
     @Test
     fun `selection change live-switches the engine and updates the shown node`() =

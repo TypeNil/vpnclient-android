@@ -9,6 +9,7 @@ import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.resolveSelectionTarget
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import java.time.Instant
 import javax.inject.Inject
@@ -89,8 +90,9 @@ class ConnectionManager @Inject constructor(
     /** Monotonic in-process session id; incremented once per connect attempt. */
     private var sessionGeneration = 0L
     private var sessionNode: NodeSummary? = null
-    /** Node the current engine's config was compiled with — its selector
-     *  default. Diverges from [sessionNode] after a live outbound switch. */
+    /** The outbound the current engine's config was compiled with — its
+     *  selector default; the urltest group tag for an Auto compile.
+     *  Diverges from [sessionNode] after a live outbound switch. */
     private var compiledNodeId: String? = null
 
     /** Serializes selection reconciliation — every run re-reads the latest
@@ -138,6 +140,12 @@ class ConnectionManager @Inject constructor(
     /** Live connections through the tunnel; empty while detached. */
     private val _activeConnections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
     val activeConnections: StateFlow<List<ConnectionInfo>> = _activeConnections
+
+    /** Coarse transport of the physical underlay carrying the tunnel —
+     *  reported by the service's network observer; UNKNOWN until classified
+     *  or when there is no usable underlay. */
+    private val _underlyingTransport = MutableStateFlow(UnderlyingTransport.UNKNOWN)
+    val underlyingTransport: StateFlow<UnderlyingTransport> = _underlyingTransport
 
     /** User pressed Connect. */
     fun connect() {
@@ -354,7 +362,23 @@ class ConnectionManager @Inject constructor(
         connectionsJob?.cancel()
         groupsJob = scope.launch {
             engine.groups.collect { groups ->
-                if (generation == sessionGeneration) _groups.value = groups
+                if (generation != sessionGeneration) return@collect
+                _groups.value = groups
+                // While Auto is selected, the urltest group's measured
+                // winner is what Home should name — refresh the label as
+                // the group reports it.
+                val current = _state.value
+                if ((current is VpnConnectionState.Connected ||
+                        current is VpnConnectionState.Reconnecting) &&
+                    sessionNode?.id == NodeSelection.AUTO_ID
+                ) {
+                    updateSessionNode(
+                        NodeSelection.AUTO_ID,
+                        resolvedTag = groups.firstOrNull {
+                            it.tag == NodeSelection.AUTO_ID
+                        }?.selected,
+                    )
+                }
             }
         }
         connectionsJob = scope.launch {
@@ -432,11 +456,18 @@ class ConnectionManager @Inject constructor(
      */
     private suspend fun applyDesiredSelection() = selectionMutex.withLock {
         val eng = engine ?: return@withLock
-        val desired = configProvider.selectedNodeId.first() ?: return@withLock
+        val desired = configProvider.selectedNodeId.first()
+        val selection = NodeSelection.fromId(desired) ?: return@withLock
         if (_state.value !is VpnConnectionState.Connected &&
             _state.value !is VpnConnectionState.Reconnecting
         ) {
             return@withLock
+        }
+        // The outbound the pick resolves to: a node id, or the urltest
+        // group's tag when the user picked Auto.
+        val desiredTag = when (selection) {
+            NodeSelection.Auto -> NodeSelection.AUTO_ID
+            is NodeSelection.Node -> selection.id
         }
         // Groups arrive after the command client connects — a fresh engine
         // reports none yet, so wait briefly before falling back.
@@ -447,33 +478,65 @@ class ConnectionManager @Inject constructor(
         if (groups == null) {
             // Control channel never came up: a live switch is impossible.
             // Reconnect only when the compiled default isn't already the
-            // pick — otherwise the tunnel is on the right node anyway.
-            if (compiledNodeId != desired) reconnect()
+            // pick — otherwise the tunnel is on the right outbound anyway.
+            if (compiledNodeId != desiredTag) reconnect()
             return@withLock
         }
-        val target = resolveSelectionTarget(groups, desired)
+        // "auto" sits inside the "proxy" selector's items, so the first
+        // selectable group containing the tag is still the right target.
+        val target = resolveSelectionTarget(groups, desiredTag)
         if (target == null) {
             // The pick isn't in any selectable group (stale id, group
             // vanished) — a reconnect compiles with it as the default.
-            if (compiledNodeId != desired) reconnect()
+            if (compiledNodeId != desiredTag) reconnect()
             return@withLock
         }
-        if (groups.first { it.tag == target }.selected == desired) {
+        if (groups.first { it.tag == target }.selected == desiredTag) {
             // Engine already on the pick — just fix a stale label.
-            updateSessionNode(desired)
+            updateSessionLabel(selection, groups)
             return@withLock
         }
-        if (eng.selectOutbound(target, desired)) {
-            updateSessionNode(desired)
+        if (eng.selectOutbound(target, desiredTag)) {
+            updateSessionLabel(selection, groups)
         } else {
             reconnect()
         }
     }
 
-    /** Point the session's displayed node at [nodeId] — the engine's
-     *  selector is the source of truth, so the label follows the switch. */
-    private suspend fun updateSessionNode(nodeId: String) {
-        val summary = configProvider.nodeSummary(nodeId) ?: return
+    /** Display label for the applied pick: [NodeSelection.Auto] resolves
+     *  through the urltest group's measured winner; a node resolves its own
+     *  summary. */
+    private suspend fun updateSessionLabel(
+        selection: NodeSelection,
+        groups: List<OutboundGroupInfo>,
+    ) {
+        when (selection) {
+            NodeSelection.Auto -> updateSessionNode(
+                NodeSelection.AUTO_ID,
+                resolvedTag = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }?.selected,
+            )
+            is NodeSelection.Node -> updateSessionNode(selection.id)
+        }
+    }
+
+    /** Point the session's displayed node at [id] — the engine's
+     *  selector is the source of truth, so the label follows the switch.
+     *  [resolvedTag] is the node the urltest group currently prefers; when
+     *  present it is mapped back through the provider and shown as
+     *  "Auto → <name>". */
+    private suspend fun updateSessionNode(id: String, resolvedTag: String? = null) {
+        var summary = configProvider.nodeSummary(id) ?: return
+        if (summary.id == NodeSelection.AUTO_ID) {
+            // No member is impersonated: until the urltest group reports a
+            // pick the label stays the generic "Auto · Fastest".
+            val resolved = resolvedTag?.let { configProvider.nodeSummary(it) }
+            if (resolved != null) {
+                summary = summary.copy(
+                    name = "${summary.name} → ${resolved.name}",
+                    server = resolved.server,
+                )
+            }
+        }
         sessionNode = summary
         when (val current = _state.value) {
             is VpnConnectionState.Connected ->
@@ -704,6 +767,10 @@ class ConnectionManager @Inject constructor(
         pendingSession = null
         teardownRequested = false
         publish(VpnConnectionState.Connected(node, Instant.now(), null))
+        // Fresh session — the label below is re-published by the next
+        // underlay evaluation; reset so a previous session's transport
+        // doesn't linger as fake state.
+        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
         // A session that stays up past the stability window proves the
         // failure was transient — the next failure gets a fresh budget.
         failureResetJob?.cancel()
@@ -722,6 +789,7 @@ class ConnectionManager @Inject constructor(
         failureResetJob?.cancel()
         detachEngine()
         pendingSession = null
+        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
         publish(VpnConnectionState.Error(error, sessionNode))
     }
 
@@ -731,6 +799,7 @@ class ConnectionManager @Inject constructor(
         detachEngine()
         pendingSession = null
         teardownRequested = false
+        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
         val error = pendingTerminalError
         pendingTerminalError = null
         val current = _state.value
@@ -754,6 +823,7 @@ class ConnectionManager @Inject constructor(
     fun onUnderlyingNetworkLost() {
         scope.launch {
             mutex.withLock {
+                _underlyingTransport.value = UnderlyingTransport.UNKNOWN
                 val current = _state.value
                 if (current is VpnConnectionState.Connected) {
                     publish(
@@ -764,6 +834,15 @@ class ConnectionManager @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Service reports the current physical underlay's transport — updates
+     * the label without implying any state transition (a usable underlay can
+     * exist while Connecting or Reconnecting for a dead engine).
+     */
+    fun reportUnderlyingTransport(transport: UnderlyingTransport) {
+        _underlyingTransport.value = transport
     }
 
     /** A usable underlying network is back → resume Connected — but only
@@ -840,6 +919,7 @@ class ConnectionManager @Inject constructor(
         pendingSession = null
         pendingTerminalError = null
         detachEngine()
+        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
         publish(VpnConnectionState.Error(VpnError.PermissionRevoked, sessionNode))
     }
 
