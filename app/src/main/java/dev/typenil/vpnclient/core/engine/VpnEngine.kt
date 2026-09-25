@@ -19,6 +19,9 @@ data class EngineConfig(
     val excludedPackages: List<String> = emptyList(),
     /** Whether LAN-bypass route exclusions were compiled in. */
     val bypassLan: Boolean = false,
+    /** The DNS profile this config resolves with — carried for the
+     *  applied-vs-saved display (Session Details). */
+    val dnsProfile: DnsProfile? = null,
 )
 
 /** Periodic traffic + health snapshot from the running core. */

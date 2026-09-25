@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +22,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.engine.DnsMode
+import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 
 /**
@@ -117,6 +121,23 @@ fun RoutingScreen(
                                 R.string.routing_applied_off
                             },
                         ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            DnsModeRow(
+                mode = ui.dnsMode,
+                onSelect = viewModel::setDnsMode,
+            )
+            DnsUpstreamRow(
+                upstream = ui.dnsUpstream,
+                onSelect = viewModel::setDnsUpstream,
+            )
+            if (ui.sessionActive && ui.appliedDnsSummary != null) {
+                Text(
+                    text =
+                        stringResource(R.string.routing_dns_applied, ui.appliedDnsSummary ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -282,3 +303,234 @@ private fun routeModeSubtitle(mode: RouteMode): String =
             RouteMode.PROXY_BLOCKED -> R.string.route_mode_sub_proxy_blocked
         },
     )
+
+/** DNS policy: follow the RouteMode, or pin every query to the proxied
+ *  upstream. Honest about bootstrap: even in proxy-only the upstream's own
+ *  hostname and node names still resolve via the system resolver — that is
+ *  the required loop-break, not a leak. */
+@Composable
+private fun DnsModeRow(
+    mode: DnsMode,
+    onSelect: (DnsMode) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.routing_dns_mode),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                dnsModeLabel(mode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.routing_dns_mode)) },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    DnsMode.entries.forEach { option ->
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = option == mode,
+                                        onClick = {
+                                            onSelect(option)
+                                            showDialog = false
+                                        },
+                                        role = Role.RadioButton,
+                                    ).padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == mode, onClick = null)
+                            Column(Modifier.padding(start = 8.dp)) {
+                                Text(
+                                    dnsModeLabel(option),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    dnsModeSubtitle(option),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.routing_dns_bootstrap_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun dnsModeLabel(mode: DnsMode): String =
+    stringResource(
+        when (mode) {
+            DnsMode.POLICY -> R.string.dns_mode_policy
+            DnsMode.PROXY_ONLY -> R.string.dns_mode_proxy_only
+        },
+    )
+
+@Composable
+private fun dnsModeSubtitle(mode: DnsMode): String =
+    stringResource(
+        when (mode) {
+            DnsMode.POLICY -> R.string.dns_mode_policy_sub
+            DnsMode.PROXY_ONLY -> R.string.dns_mode_proxy_only_sub
+        },
+    )
+
+/** Upstream picker: presets + a validated custom spec field. The custom
+ *  value is stored only after parse; an invalid input shows an error and
+ *  never reaches the compiler. */
+@Composable
+private fun DnsUpstreamRow(
+    upstream: DnsUpstream,
+    onSelect: (DnsUpstream) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.routing_dns_upstream),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                dnsUpstreamLabel(upstream),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        var customSpec by remember {
+            mutableStateOf((upstream as? DnsUpstream.Custom)?.spec ?: "")
+        }
+        var customError by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.routing_dns_upstream)) },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    DnsUpstream.presets.forEach { option ->
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = option.key == upstream.key,
+                                        onClick = {
+                                            onSelect(option)
+                                            showDialog = false
+                                        },
+                                        role = Role.RadioButton,
+                                    ).padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option.key == upstream.key, onClick = null)
+                            Text(
+                                dnsUpstreamLabel(option),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Text(
+                        stringResource(R.string.routing_dns_custom_label),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = customSpec,
+                        onValueChange = {
+                            customSpec = it
+                            customError = false
+                        },
+                        placeholder = { Text(stringResource(R.string.routing_dns_custom_hint)) },
+                        isError = customError,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (customError) {
+                        Text(
+                            stringResource(R.string.routing_dns_custom_error),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.routing_dns_custom_formats),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (customSpec.isBlank()) {
+                            showDialog = false
+                            return@TextButton
+                        }
+                        val parsed = DnsUpstream.parseCustom(customSpec)
+                        if (parsed == null) {
+                            customError = true
+                        } else {
+                            onSelect(parsed)
+                            showDialog = false
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.routing_dns_use_custom))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun dnsUpstreamLabel(upstream: DnsUpstream): String =
+    when (upstream) {
+        is DnsUpstream.Cloudflare -> stringResource(R.string.dns_upstream_cloudflare)
+        is DnsUpstream.Google -> stringResource(R.string.dns_upstream_google)
+        is DnsUpstream.Quad9 -> stringResource(R.string.dns_upstream_quad9)
+        is DnsUpstream.AdGuard -> stringResource(R.string.dns_upstream_adguard)
+        is DnsUpstream.Custom -> upstream.spec
+    }

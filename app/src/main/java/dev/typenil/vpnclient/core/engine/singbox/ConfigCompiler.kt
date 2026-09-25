@@ -1,5 +1,8 @@
 package dev.typenil.vpnclient.core.engine.singbox
 
+import dev.typenil.vpnclient.core.engine.DnsMode
+import dev.typenil.vpnclient.core.engine.DnsProfile
+import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
@@ -47,6 +50,7 @@ class ConfigCompiler
             ruleSetPaths: Map<String, String> = emptyMap(),
             selectAuto: Boolean = false,
             bypassLan: Boolean = false,
+            dnsProfile: DnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Cloudflare),
         ): EngineConfig =
             withContext(Dispatchers.IO) {
                 val compiled =
@@ -59,6 +63,7 @@ class ConfigCompiler
                         ruleSetPaths,
                         selectAuto,
                         bypassLan,
+                        dnsProfile,
                     )
                 try {
                     Libbox.checkConfig(compiled.configJson)
@@ -80,6 +85,7 @@ class ConfigCompiler
             ruleSetPaths: Map<String, String> = emptyMap(),
             selectAuto: Boolean = false,
             bypassLan: Boolean = false,
+            dnsProfile: DnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Cloudflare),
         ): EngineConfig {
             require(nodes.isNotEmpty()) { "no nodes to compile" }
             // Local rule sets only — a missing file must fail at compile, never
@@ -159,21 +165,55 @@ class ConfigCompiler
                                 put("tag", "local")
                             }
                             addJsonObject {
-                                put("type", "https")
+                                val upstream = dnsProfile.upstream
+                                val url = upstream.serverUrl
+                                val scheme = url.substringBefore("://")
+                                put(
+                                    "type",
+                                    when (scheme) {
+                                        "https" -> "https"
+                                        "tls" -> "tls"
+                                        "quic" -> "quic"
+                                        else -> "udp"
+                                    },
+                                )
                                 put("tag", "remote")
-                                put("server", "1.1.1.1")
-                                // DoH dials like an outbound: without a detour it goes
-                                // direct, leaking DNS past the selected proxy.
+                                // sing-box takes host[:port] for tls/udp and a
+                                // full URL for https; the validated spec is
+                                // already one of those forms.
+                                put(
+                                    "server",
+                                    if (scheme == "https") url else url.substringAfter("://"),
+                                )
+                                // DNS resolution dials like an outbound: without a
+                                // detour it goes direct, leaking queries past the
+                                // proxy in policy/proxy-only mode alike.
                                 put("detour", SELECTOR_TAG)
+                                if (upstream.hostname) {
+                                    // Hostname upstreams (e.g. AdGuard) need
+                                    // bootstrap resolution — route it through the
+                                    // local resolver so remote→proxy→remote can't
+                                    // form a loop.
+                                    putJsonObject("domain_resolver") {
+                                        put("server", "local")
+                                    }
+                                }
                             }
                         }
-                        when (routeMode) {
+                        when {
+                            // Proxy-only: every user query rides the proxied
+                            // upstream — no dns.rules entry may point at `local`
+                            // for user traffic; `local` exists solely as the
+                            // bootstrap resolver (its own hostname, node names).
+                            dnsProfile.mode == DnsMode.PROXY_ONLY -> {
+                                Unit
+                            }
                             // RU domains resolve via the ISP resolver so the direct
                             // route gets CDN-local answers; everything else keeps the
-                            // proxied DoH. IPv4-only: an AAAA answer wins client-side
-                            // ordering (the tun advertises v6), and a v6 RU dial is a
-                            // dead end on IPv4-only underlays — the typical RU ISP.
-                            RouteMode.BYPASS_RU -> {
+                            // proxied upstream. IPv4-only: an AAAA answer wins
+                            // client-side ordering (the tun advertises v6), and a
+                            // v6 RU dial is a dead end on IPv4-only underlays.
+                            routeMode == RouteMode.BYPASS_RU -> {
                                 putJsonArray("rules") {
                                     addJsonObject {
                                         putJsonArray("rule_set") { add(GEOSITE_RU_TAG) }
@@ -184,9 +224,9 @@ class ConfigCompiler
                             }
 
                             // Blocked domains must not touch ISP DNS (spoofed answers)
-                            // — they resolve through the proxied DoH. Everything else
-                            // stays on the local resolver below.
-                            RouteMode.PROXY_BLOCKED -> {
+                            // — they resolve through the proxied upstream. Everything
+                            // else stays on the local resolver below.
+                            routeMode == RouteMode.PROXY_BLOCKED -> {
                                 putJsonArray("rules") {
                                     addJsonObject {
                                         putJsonArray("rule_set") {
@@ -197,11 +237,18 @@ class ConfigCompiler
                                 }
                             }
 
-                            RouteMode.ALL -> {
+                            else -> {
                                 Unit
                             }
                         }
-                        put("final", if (routeMode == RouteMode.PROXY_BLOCKED) "local" else "remote")
+                        put(
+                            "final",
+                            when {
+                                dnsProfile.mode == DnsMode.PROXY_ONLY -> "remote"
+                                routeMode == RouteMode.PROXY_BLOCKED -> "local"
+                                else -> "remote"
+                            },
+                        )
                         put("strategy", if (ipv6Enabled) "prefer_ipv4" else "ipv4_only")
                         // IP→domain map so rule sets can match connections dialed by
                         // bare IP — non-sniffable traffic (MTProto, ECH) otherwise
@@ -337,6 +384,7 @@ class ConfigCompiler
                 node = selected?.summary() ?: AUTO_NODE_SUMMARY,
                 routeMode = routeMode,
                 bypassLan = bypassLan,
+                dnsProfile = dnsProfile,
             )
         }
 

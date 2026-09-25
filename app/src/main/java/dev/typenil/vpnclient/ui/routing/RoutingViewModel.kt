@@ -3,6 +3,8 @@ package dev.typenil.vpnclient.ui.routing
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.core.engine.DnsMode
+import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -24,6 +26,11 @@ data class RoutingUiState(
     /** The routing plan the live engine actually runs — null when idle. */
     val appliedRouteMode: RouteMode? = null,
     val appliedBypassLan: Boolean? = null,
+    /** DNS policy + upstream as persisted. */
+    val dnsMode: DnsMode = DnsMode.POLICY,
+    val dnsUpstream: DnsUpstream = DnsUpstream.Cloudflare,
+    /** The DNS profile the live session resolves with — null when idle. */
+    val appliedDnsSummary: String? = null,
     /** A compiled-in setting changed while a session is alive. */
     val reconnectRecommended: Boolean = false,
     val sessionActive: Boolean = false,
@@ -42,15 +49,28 @@ class RoutingViewModel
             combine(
                 settings.routeMode,
                 settings.bypassLan,
+                settings.dnsProfile,
                 connectionManager.appliedSessionConfig,
                 connectionManager.state,
                 reconnectRecommended,
-            ) { routeMode, bypassLan, applied, state, recommended ->
+            ) { values ->
+                val routeMode = values[0] as RouteMode
+                val bypassLan = values[1] as Boolean
+                @Suppress("UNCHECKED_CAST")
+                val dns = values[2] as dev.typenil.vpnclient.core.engine.DnsProfile
+                @Suppress("UNCHECKED_CAST")
+                val applied =
+                    values[3] as dev.typenil.vpnclient.core.vpn.AppliedSessionConfig?
+                val state = values[4] as VpnConnectionState
+                val recommended = values[5] as Boolean
                 RoutingUiState(
                     routeMode = routeMode,
                     bypassLan = bypassLan,
+                    dnsMode = dns.mode,
+                    dnsUpstream = dns.upstream,
                     appliedRouteMode = applied?.routeMode,
                     appliedBypassLan = applied?.bypassLan,
+                    appliedDnsSummary = applied?.dnsProfileSummary,
                     reconnectRecommended = recommended,
                     sessionActive = state.hasLiveConfig(),
                 )
@@ -75,6 +95,24 @@ class RoutingViewModel
             viewModelScope.launch {
                 val changed = settings.routeMode.first() != mode
                 settings.setRouteMode(mode)
+                if (changed) recommendReconnectIfSessionActive()
+            }
+        }
+
+        /** Compiled into the dns block — a live tunnel keeps its profile. */
+        fun setDnsMode(mode: DnsMode) {
+            viewModelScope.launch {
+                val changed = settings.dnsMode.first() != mode
+                settings.setDnsMode(mode)
+                if (changed) recommendReconnectIfSessionActive()
+            }
+        }
+
+        /** Preset or validated custom upstream — same compiled-in contract. */
+        fun setDnsUpstream(upstream: DnsUpstream) {
+            viewModelScope.launch {
+                val changed = settings.dnsUpstream.first() != upstream
+                settings.setDnsUpstream(upstream)
                 if (changed) recommendReconnectIfSessionActive()
             }
         }

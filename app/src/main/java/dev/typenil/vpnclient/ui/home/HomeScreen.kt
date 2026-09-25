@@ -681,6 +681,10 @@ private fun SessionDetailsSheet(
                 stringResource(R.string.common_per_app_vpn),
                 details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackages.size) } ?: none,
             )
+            DetailRow(
+                stringResource(R.string.routing_dns_upstream),
+                details?.applied?.dnsProfileSummary ?: none,
+            )
             // Named, not silently ignored: these are changed-but-unapplied.
             details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {
                 val pendingLabels = it.pendingReconnect.map { res -> stringResource(res) }

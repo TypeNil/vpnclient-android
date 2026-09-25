@@ -100,6 +100,7 @@ class NodeConfigProviderImpl
                     ruleSetPaths = ruleSetStore.ensureReady(routeMode),
                     selectAuto = pick == NodeSelection.AUTO_ID,
                     bypassLan = settings.bypassLan.first(),
+                    dnsProfile = settings.dnsProfile.first(),
                 )
             // Only a successful compile becomes the baseline — a throw leaves
             // the previous fingerprint so the change stays pending.

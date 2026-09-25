@@ -12,6 +12,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
+import dev.typenil.vpnclient.core.engine.DnsMode
+import dev.typenil.vpnclient.core.engine.DnsProfile
+import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.vpn.PerAppMode
@@ -90,6 +93,12 @@ class SettingsRepository
             /** LAN bypass: private/loopback/multicast prefixes keep direct
              *  kernel routes instead of entering the TUN. */
             val BYPASS_LAN = booleanPreferencesKey("bypass_lan")
+
+            /** DnsMode.key — "policy"/"proxy_only". */
+            val DNS_MODE = stringPreferencesKey("dns_mode")
+
+            /** DnsUpstream.key — preset name or "custom:<spec>". */
+            val DNS_UPSTREAM = stringPreferencesKey("dns_upstream")
         }
 
         override val selectedNodeId: Flow<String?> =
@@ -399,6 +408,39 @@ class SettingsRepository
     suspend fun setBypassLan(enabled: Boolean) {
         context.settingsStore.edit { it[Keys.BYPASS_LAN] = enabled }
     }
+
+    /** DNS resolution mode — compiled into the engine config; applied at
+     *  connect time, a live tunnel keeps its compiled profile. */
+    val dnsMode: Flow<DnsMode> =
+        context.settingsStore.data
+            .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .map { DnsMode.fromKey(it[Keys.DNS_MODE]) }
+
+    suspend fun setDnsMode(mode: DnsMode) {
+        context.settingsStore.edit { it[Keys.DNS_MODE] = mode.key }
+    }
+
+    /** Upstream resolver — preset key or a validated custom spec. An invalid
+     *  stored value falls back to the default rather than breaking compile. */
+    val dnsUpstream: Flow<DnsUpstream> =
+        context.settingsStore.data
+            .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .map { DnsUpstream.fromKey(it[Keys.DNS_UPSTREAM]) }
+
+    suspend fun setDnsUpstream(upstream: DnsUpstream) {
+        context.settingsStore.edit { it[Keys.DNS_UPSTREAM] = upstream.key }
+    }
+
+    /** The compiled DNS profile — single snapshot so mode+upstream can't tear. */
+    val dnsProfile: Flow<DnsProfile> =
+        context.settingsStore.data
+            .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+            .map {
+                DnsProfile(
+                    mode = DnsMode.fromKey(it[Keys.DNS_MODE]),
+                    upstream = DnsUpstream.fromKey(it[Keys.DNS_UPSTREAM]),
+                )
+            }
 
         internal companion object {
             /** Automatic starts allowed inside one window before giving up. */

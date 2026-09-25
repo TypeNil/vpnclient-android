@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.engine.DnsProfile
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -133,6 +134,7 @@ class HomeViewModel
                 lastErrorMessage,
                 connectionManager.appliedSessionConfig,
                 nodePreferenceDao.observeAll(),
+                settings.dnsProfile,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -160,6 +162,7 @@ class HomeViewModel
                 val prefs =
                     values[11] as List<dev.typenil.vpnclient.data.db.NodePreferenceEntity>
                 val favoriteIds = prefs.asSequence().filter { it.isFavorite }.map { it.nodeId }.toSet()
+                val dnsProfile = values[12] as DnsProfile
 
                 val selected = nodes.firstOrNull { it.id == selectedId }
                 val auto = selectedId == NodeSelection.AUTO_ID
@@ -274,6 +277,9 @@ class HomeViewModel
                                                 appliedConfig.perAppPackages != perAppPackages
                                             ) {
                                                 add(R.string.common_per_app_vpn)
+                                            }
+                                            if (appliedConfig.dnsProfileSummary != dnsProfile.summary) {
+                                                add(R.string.routing_dns_upstream)
                                             }
                                         }
                                     },

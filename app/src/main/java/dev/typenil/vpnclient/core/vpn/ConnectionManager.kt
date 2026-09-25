@@ -45,6 +45,11 @@ data class AppliedSessionConfig(
     val perAppPackages: Set<String>,
     /** LAN bypass the engine was compiled with — saved-vs-applied tracking. */
     val bypassLan: Boolean = false,
+    /** Compiled DNS profile summary ("policy:cloudflare"-style) — displayed
+     *  in Session Details. Null when the engine didn't report one. */
+    val dnsProfileSummary: String? = null,
+    val dnsModeKey: String? = null,
+    val dnsUpstreamKey: String? = null,
 )
 
 /**

@@ -1,5 +1,8 @@
 package dev.typenil.vpnclient.core.engine.singbox
 
+import dev.typenil.vpnclient.core.engine.DnsMode
+import dev.typenil.vpnclient.core.engine.DnsProfile
+import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
@@ -393,6 +396,73 @@ class ConfigCompilerTest {
         val dnsRule = json.parseToJsonElement(config.configJson)
             .jsonObject["dns"]!!.jsonObject["rules"]!!.jsonArray.single().jsonObject
         assertEquals("ipv4_only", dnsRule["strategy"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `custom DoH upstream compiles to https server with proxy detour`() {
+        val custom = DnsUpstream.parseCustom("https://dns.example.com/dns-query")!!
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true,
+            dnsProfile = DnsProfile(DnsMode.POLICY, custom),
+        )
+        val remote = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("https", remote["type"]!!.jsonPrimitive.content)
+        assertEquals("https://dns.example.com/dns-query", remote["server"]!!.jsonPrimitive.content)
+        // DoH dials like an outbound: without the proxy detour it leaks direct.
+        assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
+        // Hostname upstream needs bootstrap — routed to local so remote→proxy
+        // can't depend on the resolution it performs.
+        assertEquals("local", remote["domain_resolver"]!!.jsonObject["server"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `preset upstream uses its own server`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true,
+            dnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Quad9),
+        )
+        val remote = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("https", remote["type"]!!.jsonPrimitive.content)
+        assertEquals("https://9.9.9.9/dns-query", remote["server"]!!.jsonPrimitive.content)
+        // Literal-IP upstream needs no bootstrap resolution.
+        assertTrue("domain_resolver" !in remote)
+    }
+
+    @Test
+    fun `proxy-only dns strips local rules and pins final to remote`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            dnsProfile = DnsProfile(DnsMode.PROXY_ONLY, DnsUpstream.Cloudflare),
+        )
+        val dns = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject
+        // No rule may point user queries at `local` — bypassed domains still
+        // get remote answers; `local` exists only as the bootstrap resolver.
+        assertTrue("dns.rules must not be emitted in proxy-only", "rules" !in dns)
+        assertEquals("remote", dns["final"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `dot upstream compiles to tls server without bootstrap`() {
+        val dot = DnsUpstream.parseCustom("tls://1.1.1.1")!!
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true,
+            dnsProfile = DnsProfile(DnsMode.POLICY, dot),
+        )
+        val remote = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("tls", remote["type"]!!.jsonPrimitive.content)
+        assertEquals("1.1.1.1", remote["server"]!!.jsonPrimitive.content)
+        assertTrue("domain_resolver" !in remote)
     }
 
     @Test

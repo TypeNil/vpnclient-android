@@ -769,6 +769,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     perAppMode = perAppMode,
                     perAppPackages = perAppPackages,
                     bypassLan = config.bypassLan,
+                    dnsProfileSummary = config.dnsProfile?.summary,
+                    dnsModeKey = config.dnsProfile?.mode?.key,
+                    dnsUpstreamKey = config.dnsProfile?.upstream?.key,
                 ),
             )
             created.start(
