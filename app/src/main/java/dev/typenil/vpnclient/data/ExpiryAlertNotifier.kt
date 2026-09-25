@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.SubscriptionExpiryNotifier
 import dev.typenil.vpnclient.core.vpn.VpnNotification
 import java.text.DateFormat
@@ -39,8 +40,10 @@ class ExpiryAlertNotifier @Inject constructor(
         val expires = DateFormat.getDateInstance().format(Date(expireEpochSeconds * 1000))
         val notification = NotificationCompat.Builder(context, VpnNotification.ALERT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("Subscription expiring")
-            .setContentText("$subscriptionName expires $expires")
+            .setContentTitle(context.getString(R.string.notif_expiry_title))
+            .setContentText(
+                context.getString(R.string.notif_expiry_text, subscriptionName, expires),
+            )
             .setContentIntent(VpnNotification.openPendingIntent(context))
             .setAutoCancel(true)
             .build()

@@ -137,6 +137,10 @@ class SubscriptionsViewModelTest {
 
         override suspend fun getEnabled() = nodes.values.toList()
 
+        override fun observeUsable(): Flow<List<NodeEntity>> = observeEnabled()
+
+        override suspend fun getUsable() = getEnabled()
+
         override suspend fun get(id: String) = nodes[id]
 
         override fun observeForSubscriptionUrl(url: String): Flow<List<NodeEntity>> = revision.map { nodes.values.toList() }
@@ -306,7 +310,7 @@ class SubscriptionsViewModelTest {
             assertEquals(
                 "bad url",
                 viewModel.uiState.value.pendingMessage
-                    ?.text,
+                    ?.body?.fallback,
             )
         }
 
@@ -339,7 +343,7 @@ class SubscriptionsViewModelTest {
 
             val second = viewModel.uiState.value.pendingMessage!!
             assertNotEquals(first.id, second.id)
-            assertEquals("insecure transport not allowed for this subscription", second.text)
+            assertEquals("insecure transport not allowed for this subscription", second.body.fallback)
         }
 
     @Test
@@ -353,7 +357,7 @@ class SubscriptionsViewModelTest {
             assertEquals(
                 "subscription no longer exists",
                 viewModel.uiState.value.pendingMessage
-                    ?.text,
+                    ?.body?.fallback,
             )
             assertTrue(
                 viewModel.uiState.value.refreshingIds
@@ -391,7 +395,7 @@ class SubscriptionsViewModelTest {
 
                 val text =
                     viewModel.uiState.value.pendingMessage
-                        ?.text
+                        ?.body?.fallback
                 assertTrue(text!!.startsWith("2 nodes skipped:"))
                 assertTrue("unsupported protocol: snell (2)" in text)
             } finally {
@@ -443,7 +447,7 @@ class SubscriptionsViewModelTest {
             assertEquals(
                 "insecure transport not allowed for this subscription",
                 viewModel.uiState.value.pendingMessage
-                    ?.text,
+                    ?.body?.fallback,
             )
             assertTrue(nodeDao.nodes.isEmpty())
         }

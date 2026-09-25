@@ -45,11 +45,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 
 
@@ -75,14 +77,17 @@ fun ServersScreen(
                     value = ui.query,
                     onValueChange = viewModel::setQuery,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search name or server") },
+                    placeholder = { Text(stringResource(R.string.servers_search_hint)) },
                     leadingIcon = {
                         Icon(Icons.Default.Search, contentDescription = null)
                     },
                     trailingIcon = {
                         if (ui.query.isNotEmpty()) {
                             IconButton(onClick = { viewModel.setQuery("") }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.common_clear_search),
+                                )
                             }
                         }
                     },
@@ -104,7 +109,7 @@ fun ServersScreen(
                     FilterChip(
                         selected = ui.favoritesOnly,
                         onClick = { viewModel.setFavoritesOnly(!ui.favoritesOnly) },
-                        label = { Text("Favorites") },
+                        label = { Text(stringResource(R.string.servers_favorites)) },
                         leadingIcon = {
                             Icon(
                                 Icons.Default.Star,
@@ -123,7 +128,13 @@ fun ServersScreen(
                             },
                             label = {
                                 Text(
-                                    text = option.name.ifBlank { "Subscription ${option.id}" },
+                                    text =
+                                        option.name.ifBlank {
+                                            stringResource(
+                                                R.string.common_subscription_numbered,
+                                                option.id,
+                                            )
+                                        },
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -158,12 +169,19 @@ fun ServersScreen(
                         onClick = viewModel::testLatency,
                         enabled = !testing,
                     ) {
-                        Text("Test latency")
+                        Text(stringResource(R.string.servers_test_latency))
                     }
                     Text(
                         // Name the measurement: connected → urltest through the
                         // proxy chain; disconnected → direct TCP connect.
-                        text = if (ui.connected) "via proxy" else "TCP connect",
+                        text =
+                            stringResource(
+                                if (ui.connected) {
+                                    R.string.servers_latency_via_proxy
+                                } else {
+                                    R.string.servers_latency_tcp
+                                },
+                            ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -187,12 +205,12 @@ fun ServersScreen(
                         // tab's add dialog (URL or share link).
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = "No servers yet",
+                                text = stringResource(R.string.common_no_servers_yet),
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "Add a subscription or paste a share link to get started.",
+                                text = stringResource(R.string.common_add_servers_hint),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
@@ -200,12 +218,12 @@ fun ServersScreen(
                             )
                             Spacer(Modifier.height(16.dp))
                             Button(onClick = onAddServer) {
-                                Text("Add subscription or share link")
+                                Text(stringResource(R.string.common_add_server_cta))
                             }
                         }
                     } else {
                         Text(
-                            text = "No servers match the current filters",
+                            text = stringResource(R.string.servers_no_match),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -233,7 +251,12 @@ fun ServersScreen(
             if (ui.showHeaders) {
                 item(key = "header-${group.subscriptionId}", span = { GridItemSpan(maxLineSpan) }) {
                     Text(
-                        text = group.subscriptionName,
+                        text =
+                            group.subscriptionName
+                                ?: stringResource(
+                                    R.string.common_subscription_numbered,
+                                    group.subscriptionId,
+                                ),
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 8.dp),
@@ -269,7 +292,7 @@ private fun SortSelector(
             onClick = { open = true },
             label = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Sort: ${sortMode.name}")
+                    Text(stringResource(R.string.servers_sort_prefix, sortModeLabel(sortMode)))
                     Icon(
                         Icons.Default.ArrowDropDown,
                         contentDescription = null,
@@ -281,7 +304,7 @@ private fun SortSelector(
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             ServerSortMode.entries.forEach { mode ->
                 DropdownMenuItem(
-                    text = { Text(mode.name) },
+                    text = { Text(sortModeLabel(mode)) },
                     onClick = {
                         open = false
                         onSelect(mode)
@@ -302,6 +325,14 @@ private fun SortSelector(
 }
 
 @Composable
+private fun sortModeLabel(mode: ServerSortMode): String =
+    when (mode) {
+        ServerSortMode.Default -> stringResource(R.string.sort_default)
+        ServerSortMode.Latency -> stringResource(R.string.sort_latency)
+        ServerSortMode.Name -> stringResource(R.string.sort_name)
+    }
+
+@Composable
 private fun AutoCard(
     selected: Boolean,
     delayMs: Int?,
@@ -316,7 +347,7 @@ private fun AutoCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Auto · Fastest",
+                text = stringResource(R.string.common_auto_fastest),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f),
@@ -326,7 +357,7 @@ private fun AutoCard(
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     imageVector = Icons.Default.Check,
-                    contentDescription = "Selected",
+                    contentDescription = stringResource(R.string.common_selected),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp),
                 )
@@ -368,7 +399,13 @@ private fun ServerCard(
                         imageVector =
                             if (node.favorite) Icons.Filled.Star else Icons.Outlined.Star,
                         contentDescription =
-                            if (node.favorite) "Remove from favorites" else "Add to favorites",
+                            stringResource(
+                                if (node.favorite) {
+                                    R.string.servers_favorite_remove
+                                } else {
+                                    R.string.servers_favorite_add
+                                },
+                            ),
                         tint =
                             if (node.favorite) {
                                 MaterialTheme.colorScheme.primary
@@ -382,7 +419,7 @@ private fun ServerCard(
                     Spacer(Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.Check,
-                        contentDescription = "Selected",
+                        contentDescription = stringResource(R.string.common_selected),
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp),
                     )
@@ -406,7 +443,7 @@ private fun LatencyBadge(
     when {
         delayMs != null -> {
             Text(
-                text = "$delayMs ms",
+                text = stringResource(R.string.servers_latency_ms, delayMs),
                 style = MaterialTheme.typography.labelSmall,
                 color =
                     if (delayMs < 800) {
@@ -419,7 +456,7 @@ private fun LatencyBadge(
 
         tested -> {
             Text(
-                text = "timeout",
+                text = stringResource(R.string.servers_latency_timeout),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -427,7 +464,7 @@ private fun LatencyBadge(
 
         else -> {
             Text(
-                text = "—",
+                text = stringResource(R.string.common_none),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

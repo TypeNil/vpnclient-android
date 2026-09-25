@@ -23,14 +23,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** Nodes of one subscription, under its display name. */
+/** Nodes of one subscription, under its display name. [subscriptionName] is
+ *  null when the profile row is gone — the screen renders the localized
+ *  "Subscription N" fallback so the string can be translated. */
 data class ServerGroup(
     val subscriptionId: Long,
-    val subscriptionName: String,
+    val subscriptionName: String?,
     val nodes: List<ServerNode>,
 )
 
-/** A selectable subscription filter — id + display name. */
+/** A selectable subscription filter — id + raw profile name (possibly
+ *  blank; the screen applies the localized fallback). */
 data class SubscriptionFilterOption(
     val id: Long,
     val name: String,
@@ -302,7 +305,10 @@ class ServersViewModel
                             .map { (subId, groupNodes) ->
                                 ServerGroup(
                                     subscriptionId = subId,
-                                    subscriptionName = names[subId] ?: "Subscription $subId",
+                                    // Raw profile name — null when the profile
+                                    // row is missing; the screen renders the
+                                    // localized fallback so it can translate.
+                                    subscriptionName = names[subId],
                                     nodes = groupNodes,
                                 )
                             }
@@ -327,7 +333,7 @@ class ServersViewModel
                             .map { subId ->
                                 SubscriptionFilterOption(
                                     id = subId,
-                                    name = names[subId] ?: "Subscription $subId",
+                                    name = names[subId].orEmpty(),
                                 )
                             },
                     protocolOptions = protocolOptions,

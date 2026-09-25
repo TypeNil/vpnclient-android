@@ -16,4 +16,220 @@
     <string name="nav_servers">Servers</string>
     <string name="nav_subscriptions">Subscriptions</string>
     <string name="nav_settings">Settings</string>
+
+    <!-- Common -->
+    <string name="common_cancel">Cancel</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_dismiss">Dismiss</string>
+    <string name="common_refresh">Refresh</string>
+    <string name="common_back">Back</string>
+    <string name="common_selected">Selected</string>
+    <string name="common_clear_search">Clear search</string>
+    <string name="common_enabled">enabled</string>
+    <string name="common_disabled">disabled</string>
+    <string name="common_none">—</string>
+    <string name="common_auto_fastest">Auto · Fastest</string>
+    <string name="common_no_servers_yet">No servers yet</string>
+    <string name="common_add_servers_hint">Add a subscription or paste a share link to get started.</string>
+    <string name="common_add_server_cta">Add subscription or share link</string>
+    <string name="common_subscription_fallback">Subscription</string>
+    <string name="common_subscription_numbered">Subscription %1$d</string>
+    <string name="common_last_error">Last error</string>
+    <string name="common_vpn_core">VPN core</string>
+    <string name="common_per_app_vpn">Per-app VPN</string>
+    <string name="common_routing_mode">Routing mode</string>
+
+
+    <!-- Dynamic enum / model labels -->
+    <string name="route_mode_all">Proxy everything</string>
+    <string name="route_mode_bypass_ru">Bypass Russian resources</string>
+    <string name="route_mode_proxy_blocked">Only blocked services</string>
+    <string name="route_mode_sub_all">All traffic goes through the selected server</string>
+    <string name="route_mode_sub_bypass_ru">Russian sites and IPs go direct, the rest is proxied</string>
+    <string name="route_mode_sub_proxy_blocked">Blocked services use the proxy, the rest goes direct</string>
+    <string name="theme_system">System default</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="language_system">System default</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="sort_default">Default</string>
+    <string name="sort_latency">Latency</string>
+    <string name="sort_name">Name</string>
+    <string name="per_app_mode_all">All apps</string>
+
+    <!-- Home -->
+    <string name="home_status_disconnected">Disconnected</string>
+    <string name="home_status_preparing">Preparing…</string>
+    <string name="home_status_permission">Awaiting VPN permission…</string>
+    <string name="home_status_connecting">Connecting…</string>
+    <string name="home_status_connected">Connected</string>
+    <string name="home_status_reconnecting">Reconnecting… (attempt %1$d)</string>
+    <string name="home_status_disconnecting">Disconnecting…</string>
+    <string name="home_status_failed">Connection failed</string>
+    <string name="home_error_permission_denied">VPN permission denied</string>
+    <string name="home_error_permission_revoked">VPN permission was revoked</string>
+    <string name="home_error_no_node">No server selected — pick one in Servers</string>
+    <string name="home_error_config">Invalid configuration: %1$s</string>
+    <string name="home_error_engine">VPN core failed: %1$s</string>
+    <string name="home_error_tunnel">Tunnel failed: %1$s</string>
+    <string name="home_no_server_selected">No server selected</string>
+    <string name="home_tap_to_change">Tap to change</string>
+    <string name="home_picker_title">Server</string>
+    <string name="home_picker_search">Search servers</string>
+    <string name="home_picker_all_servers">All servers, filters &amp; latency</string>
+    <string name="home_picker_no_match">No servers match \"%1$s\"</string>
+    <string name="home_restart_guard_text">VPN auto-restart stopped — repeated failures. Reconnect manually.</string>
+    <string name="home_stat_download">Download</string>
+    <string name="home_stat_upload">Upload</string>
+    <string name="home_stat_connections">Connections</string>
+    <string name="home_stat_connections_value">%1$d in / %2$d out</string>
+    <string name="home_stat_total_suffix">%1$s total</string>
+    <string name="home_details_title">Session details</string>
+    <string name="home_details_node">Node</string>
+    <string name="home_details_outbound">Outbound</string>
+    <string name="home_details_pending">Pending reconnect</string>
+    <string name="home_details_underlay">Underlying network</string>
+    <string name="home_details_uptime">Uptime</string>
+    <string name="home_details_data_used">Data used</string>
+    <string name="home_details_data_used_value">↓ %1$s · ↑ %2$s</string>
+    <string name="home_uptime_hms">%1$dh %2$dm %3$ds</string>
+    <string name="home_uptime_ms">%1$dm %2$ds</string>
+    <string name="home_uptime_s">%1$ds</string>
+    <string name="home_per_app_include">Include %1$d apps</string>
+    <string name="home_per_app_include_one">Include %1$d app</string>
+    <string name="home_per_app_exclude">Exclude %1$d apps</string>
+    <string name="home_per_app_exclude_one">Exclude %1$d app</string>
+    <string name="home_auto_subtitle">Latency-tested pick</string>
+    <string name="home_connect">Connect</string>
+
+    <!-- Servers -->
+    <string name="servers_search_hint">Search name or server</string>
+    <string name="servers_favorites">Favorites</string>
+    <string name="servers_test_latency">Test latency</string>
+    <string name="servers_latency_via_proxy">via proxy</string>
+    <string name="servers_latency_tcp">TCP connect</string>
+    <string name="servers_no_match">No servers match the current filters</string>
+    <string name="servers_sort_prefix">Sort: %1$s</string>
+    <string name="servers_latency_timeout">timeout</string>
+    <string name="servers_favorite_remove">Remove from favorites</string>
+    <string name="servers_favorite_add">Add to favorites</string>
+    <string name="servers_latency_ms">%1$d ms</string>
+
+    <!-- Settings -->
+    <string name="settings_snackbar_reconnect_message">Reconnect the VPN to apply the new settings</string>
+    <string name="settings_snackbar_reconnect_action">Reconnect</string>
+    <string name="settings_reconnect_on_change">Reconnect on network change</string>
+    <string name="settings_reconnect_on_change_sub">Restart the tunnel when connectivity changes</string>
+    <string name="settings_ipv6">IPv6</string>
+    <string name="settings_ipv6_sub">Route IPv6 traffic through the tunnel</string>
+    <string name="settings_doze">Doze power save</string>
+    <string name="settings_doze_sub">Pause the core when the device idles — drops open connections</string>
+    <string name="settings_connect_on_launch">Connect on launch</string>
+    <string name="settings_connect_on_launch_sub">Start the VPN when the app opens</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_dynamic_color">Dynamic color</string>
+    <string name="settings_dynamic_color_sub">Use wallpaper-based colors (Android 12+)</string>
+    <string name="settings_per_app_sub">Choose which apps use the tunnel</string>
+    <string name="settings_always_on">Always-on &amp; kill switch</string>
+    <string name="settings_always_on_unavailable">Configure in system VPN settings</string>
+    <string name="settings_always_on_status">Always-on: %1$s · Kill switch: %2$s</string>
+    <string name="settings_auto_refresh">Auto-refresh subscriptions</string>
+    <string name="settings_auto_refresh_every">Every %1$d min</string>
+    <string name="settings_auto_refresh_provider">Using each provider\u2019s update interval</string>
+    <string name="settings_auto_refresh_manual">Manual refresh only</string>
+    <string name="settings_interval_label">Interval override (minutes, min 15)</string>
+    <string name="settings_interval_placeholder">provider</string>
+    <string name="settings_route_mode_note">Applies on next connect</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_granted">Granted</string>
+    <string name="settings_notifications_denied">Not granted</string>
+    <string name="settings_notifications_allow">Allow</string>
+
+    <!-- Subscriptions -->
+    <string name="subs_empty">No subscriptions yet</string>
+    <string name="subs_add_cd">Add subscription</string>
+    <string name="subs_delete_confirm_title">Delete subscription?</string>
+    <string name="subs_delete_confirm_text">\"%1$s\" and its servers will be removed.</string>
+    <string name="subs_manual_hint">Manual — paste share links to add</string>
+    <string name="subs_manual_sheet_hint">Manual — local share links</string>
+    <string name="subs_card_meta">%1$d nodes · updated %2$s</string>
+    <string name="subs_card_updates_on_launch"> · updates on launch</string>
+    <string name="subs_card_disabled"> · disabled</string>
+    <string name="subs_usage_of">Used %1$s of %2$s</string>
+    <string name="subs_usage">Used %1$s</string>
+    <string name="subs_expires"> · expires %1$s</string>
+    <string name="subs_support">Support</string>
+    <string name="subs_add_title">Add subscription</string>
+    <string name="subs_url_label">Subscription URL or share link</string>
+    <string name="subs_scan_qr_cd">Scan QR code</string>
+    <string name="subs_paste">Paste</string>
+    <string name="subs_name_optional">Name (optional)</string>
+    <string name="subs_http_warning">Plain HTTP — enable the option below to allow it</string>
+    <string name="subs_allow_insecure">Allow insecure HTTP (not recommended)</string>
+    <string name="subs_add">Add</string>
+    <string name="subs_detail_nodes">Nodes</string>
+    <string name="subs_detail_nodes_value">%1$d · updated %2$s</string>
+    <string name="subs_update_interval">Update interval</string>
+    <string name="subs_interval_never">never — local only</string>
+    <string name="subs_interval_launch">every launch</string>
+    <string name="subs_interval_minutes">every %1$d min</string>
+    <string name="subs_interval_manual">manual</string>
+    <string name="subs_announcement">Announcement</string>
+    <string name="subs_enabled">Enabled</string>
+    <string name="subs_enabled_sub_on">Nodes included in the server list</string>
+    <string name="subs_enabled_sub_off">Nodes hidden from the server list</string>
+    <string name="subs_imported_servers">Imported servers</string>
+    <string name="subs_remove_node_cd">Remove %1$s</string>
+    <string name="subs_refresh_now">Refresh now</string>
+    <string name="subs_name_label">Name</string>
+    <string name="subs_save">Save</string>
+    <string name="subs_rename">Rename</string>
+    <string name="subs_new_url_label">New subscription URL</string>
+    <string name="subs_url_edit_hint">Fetched and validated before it replaces the current URL — nothing changes on failure.</string>
+    <string name="subs_validate_save">Validate &amp; save</string>
+    <string name="subs_edit_url">Edit URL</string>
+    <string name="subs_nodes_skipped">%1$d nodes skipped: %2$s</string>
+    <string name="subs_nodes_skipped_more">%1$d nodes skipped: %2$s, +%3$d more</string>
+    <string name="subs_add_failed">Failed to add</string>
+    <string name="subs_refresh_failed">Refresh failed</string>
+    <string name="subs_update_failed">Failed to update subscription</string>
+    <string name="subs_rename_failed">Rename failed</string>
+    <string name="subs_url_update_failed">URL update failed</string>
+    <string name="subs_remove_node_failed">Failed to remove server</string>
+    <string name="subs_redacted_url">hidden</string>
+
+    <!-- Connections -->
+    <string name="conn_title">Connections</string>
+    <string name="conn_empty_disconnected">Connect to see live connections</string>
+    <string name="conn_empty_none">No active connections</string>
+    <string name="conn_close_cd">Close connection</string>
+    <string name="conn_traffic_down">↓ %1$s</string>
+    <string name="conn_traffic_up">↑ %1$s</string>
+
+    <!-- Per-app VPN -->
+    <string name="appfilter_all_apps">All apps</string>
+    <string name="appfilter_all_apps_sub">Route everything through the tunnel</string>
+    <string name="appfilter_only_selected">Only selected apps</string>
+    <string name="appfilter_only_selected_sub">Checked apps use the tunnel, the rest bypass it</string>
+    <string name="appfilter_all_except">All except selected</string>
+    <string name="appfilter_all_except_sub">Checked apps bypass the tunnel</string>
+    <string name="appfilter_reconnect_hint">Changes reconnect the tunnel briefly</string>
+    <string name="appfilter_empty_include">No apps selected — only this app uses the tunnel</string>
+    <string name="appfilter_search">Search apps</string>
+
+    <!-- QR scan -->
+    <string name="qr_title">Scan QR code</string>
+    <string name="qr_camera_unavailable">Camera unavailable</string>
+    <string name="qr_retry">Retry</string>
+    <string name="qr_not_subscription">Not a subscription link</string>
+    <string name="qr_aim_hint">Point the camera at a QR code</string>
+    <string name="qr_permission_rationale">Camera access is needed to scan a subscription QR code</string>
+    <string name="qr_open_settings">Open settings</string>
+    <string name="qr_allow_camera">Allow camera</string>
+
+    <!-- Notifications -->
+    <string name="notif_expiry_title">Subscription expiring</string>
+    <string name="notif_expiry_text">%1$s expires %2$s</string>
 </resources>

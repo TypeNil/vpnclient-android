@@ -49,9 +49,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,8 +74,10 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
  * Host-only display of a subscription URL — the URL itself may carry
  * credentials in userinfo/path and must never be rendered.
  */
+@Composable
 private fun redactedHost(url: String): String =
-    runCatching { url.toHttpUrl().host }.getOrNull() ?: "hidden"
+    runCatching { url.toHttpUrl().host }.getOrNull()
+        ?: stringResource(R.string.subs_redacted_url)
 
 @Composable
 fun SubscriptionsScreen(
@@ -89,6 +93,7 @@ fun SubscriptionsScreen(
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     // Dialog fields are hoisted, not keyed to the prefill: a QR result must
     // fill the field in place — key()ing on it would dispose and recreate
@@ -126,7 +131,7 @@ fun SubscriptionsScreen(
     // while this destination isn't composed still surfaces on return.
     LaunchedEffect(ui.pendingMessage?.id) {
         ui.pendingMessage?.let { message ->
-            snackbarHostState.showSnackbar(message.text)
+            snackbarHostState.showSnackbar(message.body.render(context))
             viewModel.acknowledgeMessage(message.id)
         }
     }
@@ -135,7 +140,7 @@ fun SubscriptionsScreen(
         if (ui.profiles.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No subscriptions yet",
+                    text = stringResource(R.string.subs_empty),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -174,7 +179,10 @@ fun SubscriptionsScreen(
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
         ) {
-            Icon(Icons.Default.Add, contentDescription = "Add subscription")
+            Icon(
+                Icons.Default.Add,
+                contentDescription = stringResource(R.string.subs_add_cd),
+            )
         }
     }
 
@@ -225,8 +233,8 @@ fun SubscriptionsScreen(
     pendingDelete?.let { profile ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete subscription?") },
-            text = { Text("\"${profile.name}\" and its servers will be removed.") },
+            title = { Text(stringResource(R.string.subs_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.subs_delete_confirm_text, profile.name)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -234,11 +242,16 @@ fun SubscriptionsScreen(
                         viewModel.remove(profile.id)
                     },
                 ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(R.string.common_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -273,7 +286,7 @@ private fun SubscriptionCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = profile.name.ifBlank { "Subscription" },
+                        text = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -282,7 +295,12 @@ private fun SubscriptionCard(
                         // The sentinel URL isn't a fetchable address — label
                         // the row instead of running it through redactedHost
                         // (which would render "hidden").
-                        text = if (manual) "Manual — paste share links to add" else redactedHost(profile.url),
+                        text =
+                            if (manual) {
+                                stringResource(R.string.subs_manual_hint)
+                            } else {
+                                redactedHost(profile.url)
+                            },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -299,13 +317,16 @@ private fun SubscriptionCard(
                         )
                     } else {
                         IconButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.common_refresh),
+                            )
                         }
                     }
                     IconButton(onClick = onDelete) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "Delete",
+                            contentDescription = stringResource(R.string.common_delete),
                             tint = MaterialTheme.colorScheme.error,
                         )
                     }
@@ -314,9 +335,21 @@ private fun SubscriptionCard(
 
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "$nodeCount nodes · updated ${formatRelativeTime(profile.lastUpdatedAt)}" +
-                    (if (profile.updateAlways) " · updates on launch" else "") +
-                    (if (!profile.enabled) " · disabled" else ""),
+                text = stringResource(
+                    R.string.subs_card_meta,
+                    nodeCount,
+                    formatRelativeTime(profile.lastUpdatedAt),
+                ) +
+                    (if (profile.updateAlways) {
+                        stringResource(R.string.subs_card_updates_on_launch)
+                    } else {
+                        ""
+                    }) +
+                    (if (!profile.enabled) {
+                        stringResource(R.string.subs_card_disabled)
+                    } else {
+                        ""
+                    }),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (profile.enabled) {
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -328,12 +361,16 @@ private fun SubscriptionCard(
             profile.userInfo?.let { info ->
                 Spacer(Modifier.height(2.dp))
                 val usage = if (info.totalBytes > 0) {
-                    "Used ${formatBytes(info.usedBytes)} of ${formatBytes(info.totalBytes)}"
+                    stringResource(
+                        R.string.subs_usage_of,
+                        formatBytes(info.usedBytes),
+                        formatBytes(info.totalBytes),
+                    )
                 } else {
-                    "Used ${formatBytes(info.usedBytes)}"
+                    stringResource(R.string.subs_usage, formatBytes(info.usedBytes))
                 }
                 val expiry = info.expireEpochSeconds
-                    ?.let { " · expires ${formatDate(it)}" }
+                    ?.let { stringResource(R.string.subs_expires, formatDate(it)) }
                     .orEmpty()
                 Text(
                     text = usage + expiry,
@@ -354,7 +391,7 @@ private fun SubscriptionCard(
             profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "Support",
+                    text = stringResource(R.string.subs_support),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clickable { uriHandler.openUri(url) },
@@ -391,20 +428,20 @@ private fun AddSubscriptionDialog(
     val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add subscription") },
+        title = { Text(stringResource(R.string.subs_add_title)) },
         text = {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = url,
                         onValueChange = onUrlChange,
-                        label = { Text("Subscription URL or share link") },
+                        label = { Text(stringResource(R.string.subs_url_label)) },
                         singleLine = true,
                         trailingIcon = {
                             IconButton(onClick = onScanQr) {
                                 Icon(
                                     painterResource(R.drawable.ic_qr_scanner),
-                                    contentDescription = "Scan QR code",
+                                    contentDescription = stringResource(R.string.subs_scan_qr_cd),
                                 )
                             }
                         },
@@ -424,21 +461,21 @@ private fun AddSubscriptionDialog(
                             }
                         },
                     ) {
-                        Text("Paste")
+                        Text(stringResource(R.string.subs_paste))
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = onNameChange,
-                    label = { Text("Name (optional)") },
+                    label = { Text(stringResource(R.string.subs_name_optional)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (isHttp && !allowInsecure) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Plain HTTP — enable the option below to allow it",
+                        text = stringResource(R.string.subs_http_warning),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -458,7 +495,7 @@ private fun AddSubscriptionDialog(
                         onCheckedChange = null,
                     )
                     Text(
-                        text = "Allow insecure HTTP (not recommended)",
+                        text = stringResource(R.string.subs_allow_insecure),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -469,11 +506,11 @@ private fun AddSubscriptionDialog(
                 onClick = { onConfirm(url.trim(), name.trim().ifEmpty { null }, allowInsecure) },
                 enabled = url.isNotBlank() && (!isHttp || allowInsecure),
             ) {
-                Text("Add")
+                Text(stringResource(R.string.subs_add))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }
@@ -517,14 +554,19 @@ private fun SubscriptionDetailSheet(
                 .padding(bottom = 32.dp),
         ) {
             Text(
-                text = profile.name.ifBlank { "Subscription" },
+                text = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
                 style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 24.dp),
             )
             Text(
-                text = if (manual) "Manual — local share links" else redactedHost(profile.url),
+                text =
+                    if (manual) {
+                        stringResource(R.string.subs_manual_sheet_hint)
+                    } else {
+                        redactedHost(profile.url)
+                    },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -536,24 +578,31 @@ private fun SubscriptionDetailSheet(
 
             // --- facts: node count, last updated/error, update interval ---
             DetailRow(
-                label = "Nodes",
-                value = "$nodeCount · updated ${formatRelativeTime(profile.lastUpdatedAt)}",
+                label = stringResource(R.string.subs_detail_nodes),
+                value = stringResource(
+                    R.string.subs_detail_nodes_value,
+                    nodeCount,
+                    formatRelativeTime(profile.lastUpdatedAt),
+                ),
             )
             profile.lastError?.let {
-                DetailRow(label = "Last error", value = it, error = true)
+                DetailRow(label = stringResource(R.string.common_last_error), value = it, error = true)
             }
             DetailRow(
-                label = "Update interval",
+                label = stringResource(R.string.subs_update_interval),
                 value = when {
-                    manual -> "never — local only"
-                    profile.updateAlways -> "every launch"
+                    manual -> stringResource(R.string.subs_interval_never)
+                    profile.updateAlways -> stringResource(R.string.subs_interval_launch)
                     profile.updateIntervalMinutes != null ->
-                        "every ${profile.updateIntervalMinutes} min"
-                    else -> "manual"
+                        stringResource(
+                            R.string.subs_interval_minutes,
+                            profile.updateIntervalMinutes,
+                        )
+                    else -> stringResource(R.string.subs_interval_manual)
                 },
             )
             profile.announce?.let {
-                DetailRow(label = "Announcement", value = it)
+                DetailRow(label = stringResource(R.string.subs_announcement), value = it)
             }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -566,13 +615,18 @@ private fun SubscriptionDetailSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Enabled", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        text = if (profile.enabled) {
-                            "Nodes included in the server list"
-                        } else {
-                            "Nodes hidden from the server list"
-                        },
+                        stringResource(R.string.subs_enabled),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        text = stringResource(
+                            if (profile.enabled) {
+                                R.string.subs_enabled_sub_on
+                            } else {
+                                R.string.subs_enabled_sub_off
+                            },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -587,7 +641,7 @@ private fun SubscriptionDetailSheet(
             if (manual && manualNodes.isNotEmpty()) {
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 Text(
-                    text = "Imported servers",
+                    text = stringResource(R.string.subs_imported_servers),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp),
@@ -609,7 +663,8 @@ private fun SubscriptionDetailSheet(
                         IconButton(onClick = { onRemoveNode(node.id) }) {
                             Icon(
                                 Icons.Default.Delete,
-                                contentDescription = "Remove ${node.name}",
+                                contentDescription =
+                                    stringResource(R.string.subs_remove_node_cd, node.name),
                                 tint = MaterialTheme.colorScheme.error,
                             )
                         }
@@ -631,7 +686,7 @@ private fun SubscriptionDetailSheet(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text("Refresh now")
+                    Text(stringResource(R.string.subs_refresh_now))
                 }
             }
 
@@ -646,7 +701,7 @@ private fun SubscriptionDetailSheet(
                     OutlinedTextField(
                         value = nameField,
                         onValueChange = { nameField = it },
-                        label = { Text("Name") },
+                        label = { Text(stringResource(R.string.subs_name_label)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -659,7 +714,7 @@ private fun SubscriptionDetailSheet(
                         },
                         enabled = nameField.isNotBlank(),
                     ) {
-                        Text("Save")
+                        Text(stringResource(R.string.subs_save))
                     }
                 }
             } else {
@@ -676,7 +731,7 @@ private fun SubscriptionDetailSheet(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Rename")
+                    Text(stringResource(R.string.subs_rename))
                 }
             }
 
@@ -688,13 +743,12 @@ private fun SubscriptionDetailSheet(
                         OutlinedTextField(
                             value = urlField,
                             onValueChange = { urlField = it },
-                            label = { Text("New subscription URL") },
+                            label = { Text(stringResource(R.string.subs_new_url_label)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            text = "Fetched and validated before it replaces " +
-                                "the current URL — nothing changes on failure.",
+                            text = stringResource(R.string.subs_url_edit_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -706,10 +760,10 @@ private fun SubscriptionDetailSheet(
                                 },
                                 enabled = urlField.isNotBlank() && !refreshing,
                             ) {
-                                Text("Validate & save")
+                                Text(stringResource(R.string.subs_validate_save))
                             }
                             TextButton(onClick = { editingUrl = false }) {
-                                Text("Cancel")
+                                Text(stringResource(R.string.common_cancel))
                             }
                         }
                     }
@@ -723,7 +777,7 @@ private fun SubscriptionDetailSheet(
                         },
                         modifier = Modifier.padding(horizontal = 12.dp),
                     ) {
-                        Text("Edit URL")
+                        Text(stringResource(R.string.subs_edit_url))
                     }
                 }
             }
@@ -733,7 +787,10 @@ private fun SubscriptionDetailSheet(
                     onClick = onDelete,
                     modifier = Modifier.padding(horizontal = 12.dp),
                 ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(R.string.common_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
         }

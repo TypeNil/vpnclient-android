@@ -34,8 +34,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.typenil.vpnclient.R
 import kotlinx.coroutines.flow.StateFlow
+import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
+import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.connections.ConnectionsScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
@@ -83,10 +85,15 @@ private val topLevelDestinations = listOf(
 @Composable
 fun VpnApp(
     connectionManager: ConnectionManager,
+    settings: SettingsRepository,
     importUrl: StateFlow<ExtractedImport?>,
     onImportConsumed: () -> Unit,
 ) {
-    VPNClientTheme {
+    // Theme settings read live from DataStore — a change recomposes the root
+    // without an activity restart; the VPN session is untouched either way.
+    val themeMode by settings.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.System)
+    val dynamicColor by settings.dynamicColor.collectAsStateWithLifecycle(initialValue = false)
+    VPNClientTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
         val navController = rememberNavController()
         val snackbarHostState = remember { SnackbarHostState() }
 

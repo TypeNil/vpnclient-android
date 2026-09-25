@@ -41,6 +41,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
@@ -51,6 +52,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.common.AppLanguage
+import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.ui.common.CORE_VERSION
 
@@ -68,8 +72,8 @@ fun SettingsScreen(
     LaunchedEffect(ui.reconnectRecommended) {
         if (ui.reconnectRecommended) {
             val result = snackbarHostState.showSnackbar(
-                message = "Reconnect the VPN to apply the new settings",
-                actionLabel = "Reconnect",
+                message = context.getString(R.string.settings_snackbar_reconnect_message),
+                actionLabel = context.getString(R.string.settings_snackbar_reconnect_action),
             )
             if (result == SnackbarResult.ActionPerformed) viewModel.reconnect()
         }
@@ -82,26 +86,26 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState()),
     ) {
         SwitchRow(
-            title = "Reconnect on network change",
-            subtitle = "Restart the tunnel when connectivity changes",
+            title = stringResource(R.string.settings_reconnect_on_change),
+            subtitle = stringResource(R.string.settings_reconnect_on_change_sub),
             checked = ui.reconnectOnNetworkChange,
             onCheckedChange = viewModel::setReconnectOnNetworkChange,
         )
         SwitchRow(
-            title = "IPv6",
-            subtitle = "Route IPv6 traffic through the tunnel",
+            title = stringResource(R.string.settings_ipv6),
+            subtitle = stringResource(R.string.settings_ipv6_sub),
             checked = ui.ipv6Enabled,
             onCheckedChange = viewModel::setIpv6Enabled,
         )
         SwitchRow(
-            title = "Doze power save",
-            subtitle = "Pause the core when the device idles — drops open connections",
+            title = stringResource(R.string.settings_doze),
+            subtitle = stringResource(R.string.settings_doze_sub),
             checked = ui.dozePowerSave,
             onCheckedChange = viewModel::setDozePowerSave,
         )
         SwitchRow(
-            title = "Connect on launch",
-            subtitle = "Start the VPN when the app opens",
+            title = stringResource(R.string.settings_connect_on_launch),
+            subtitle = stringResource(R.string.settings_connect_on_launch_sub),
             checked = ui.autoConnectOnLaunch,
             onCheckedChange = viewModel::setAutoConnectOnLaunch,
         )
@@ -109,6 +113,22 @@ fun SettingsScreen(
             mode = ui.routeMode,
             onSelect = viewModel::setRouteMode,
         )
+        ThemeModeRow(
+            mode = ui.themeMode,
+            onSelect = viewModel::setThemeMode,
+        )
+        LanguageRow(
+            language = ui.appLanguage,
+            onSelect = viewModel::setAppLanguage,
+        )
+        if (ui.dynamicColorAvailable) {
+            SwitchRow(
+                title = stringResource(R.string.settings_dynamic_color),
+                subtitle = stringResource(R.string.settings_dynamic_color_sub),
+                checked = ui.dynamicColor,
+                onCheckedChange = viewModel::setDynamicColor,
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -117,9 +137,9 @@ fun SettingsScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Per-app VPN", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.common_per_app_vpn), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Choose which apps use the tunnel",
+                    stringResource(R.string.settings_per_app_sub),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -127,16 +147,19 @@ fun SettingsScreen(
         }
         AlwaysOnRow()
         SwitchRow(
-            title = "Auto-refresh subscriptions",
+            title = stringResource(R.string.settings_auto_refresh),
             subtitle = if (ui.autoRefreshEnabled) {
                 if (ui.autoRefreshMinutes > 0) {
                     // Periodic work can't run faster than the platform floor.
-                    "Every ${maxOf(ui.autoRefreshMinutes, 15)} min"
+                    stringResource(
+                        R.string.settings_auto_refresh_every,
+                        maxOf(ui.autoRefreshMinutes, 15),
+                    )
                 } else {
-                    "Using each provider's update interval"
+                    stringResource(R.string.settings_auto_refresh_provider)
                 }
             } else {
-                "Manual refresh only"
+                stringResource(R.string.settings_auto_refresh_manual)
             },
             checked = ui.autoRefreshEnabled,
             onCheckedChange = viewModel::setAutoRefreshEnabled,
@@ -154,7 +177,7 @@ fun SettingsScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-        InfoRow(title = "VPN core", value = CORE_VERSION)
+        InfoRow(title = stringResource(R.string.common_vpn_core), value = CORE_VERSION)
     }
 }
 
@@ -196,7 +219,7 @@ private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Routing mode", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.common_routing_mode), style = MaterialTheme.typography.bodyLarge)
             Text(
                 routeModeLabel(mode),
                 style = MaterialTheme.typography.bodySmall,
@@ -207,7 +230,7 @@ private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
     if (showDialog) {
         AlertDialog(
             onDismissRequest = { showDialog = false },
-            title = { Text("Routing mode") },
+            title = { Text(stringResource(R.string.common_routing_mode)) },
             text = {
                 Column(Modifier.selectableGroup()) {
                     RouteMode.entries.forEach { option ->
@@ -240,7 +263,7 @@ private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
                         }
                     }
                     Text(
-                        "Applies on next connect",
+                        stringResource(R.string.settings_route_mode_note),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),
@@ -248,22 +271,162 @@ private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
 }
 
+@Composable
 private fun routeModeLabel(mode: RouteMode): String = when (mode) {
-    RouteMode.ALL -> "Proxy everything"
-    RouteMode.BYPASS_RU -> "Bypass Russian resources"
-    RouteMode.PROXY_BLOCKED -> "Only blocked services"
+    RouteMode.ALL -> stringResource(R.string.route_mode_all)
+    RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_bypass_ru)
+    RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_proxy_blocked)
 }
 
+@Composable
 private fun routeModeSubtitle(mode: RouteMode): String = when (mode) {
-    RouteMode.ALL -> "All traffic goes through the selected server"
-    RouteMode.BYPASS_RU -> "Russian sites and IPs go direct, the rest is proxied"
-    RouteMode.PROXY_BLOCKED -> "Blocked services use the proxy, the rest goes direct"
+    RouteMode.ALL -> stringResource(R.string.route_mode_sub_all)
+    RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_sub_bypass_ru)
+    RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_sub_proxy_blocked)
+}
+
+/** Theme picker — applies live on selection (no reconnect, no restart). */
+@Composable
+private fun ThemeModeRow(mode: ThemeMode, onSelect: (ThemeMode) -> Unit) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.settings_theme), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                themeModeLabel(mode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.settings_theme)) },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    ThemeMode.entries.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option == mode,
+                                    onClick = {
+                                        onSelect(option)
+                                        showDialog = false
+                                    },
+                                    role = Role.RadioButton,
+                                )
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == mode, onClick = null)
+                            Text(
+                                themeModeLabel(option),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
+    ThemeMode.System -> stringResource(R.string.theme_system)
+    ThemeMode.Light -> stringResource(R.string.theme_light)
+    ThemeMode.Dark -> stringResource(R.string.theme_dark)
+}
+
+/** Language picker — persisted via DataStore; applied by the platform on
+ *  API 33+ (system per-app language) and by an activity-recreate below.
+ *  The VPN service is never restarted for this. */
+@Composable
+private fun LanguageRow(language: AppLanguage, onSelect: (AppLanguage) -> Unit) {
+    var showDialog by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.settings_language), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                languageLabel(language),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.settings_language)) },
+            text = {
+                Column(Modifier.selectableGroup()) {
+                    AppLanguage.entries.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option == language,
+                                    onClick = {
+                                        onSelect(option)
+                                        showDialog = false
+                                    },
+                                    role = Role.RadioButton,
+                                )
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == language, onClick = null)
+                            Text(
+                                languageLabel(option),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun languageLabel(language: AppLanguage): String = when (language) {
+    AppLanguage.System -> stringResource(R.string.language_system)
+    AppLanguage.English -> stringResource(R.string.language_english)
+    AppLanguage.Russian -> stringResource(R.string.language_russian)
 }
 
 /** Optional user interval override; empty field = follow the provider hint.
@@ -298,8 +461,8 @@ private fun AutoRefreshIntervalRow(
                 val digits = input.text.filter { it.isDigit() }
                 text = input.copy(text = digits)
             },
-            label = { Text("Interval override (minutes, min 15)") },
-            placeholder = { Text("provider") },
+            label = { Text(stringResource(R.string.settings_interval_label)) },
+            placeholder = { Text(stringResource(R.string.settings_interval_placeholder)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             keyboardActions = KeyboardActions(
@@ -340,15 +503,22 @@ private fun AlwaysOnRow() {
     }
 
     val subtitle = when {
-        !status.available -> "Configure in system VPN settings"
-        else -> buildString {
-            append("Always-on: ")
-            append(if (status.alwaysOn == true) "enabled" else "disabled")
-            append(" · Kill switch: ")
+        !status.available -> stringResource(R.string.settings_always_on_unavailable)
+        else -> stringResource(
+            R.string.settings_always_on_status,
+            stringResource(
+                if (status.alwaysOn == true) R.string.common_enabled else R.string.common_disabled,
+            ),
             // Lockdown is only meaningful when always-on is set — the system
             // reports its raw flag, so surface what it actually says.
-            append(if (status.lockdownEnabled == true) "enabled" else "disabled")
-        }
+            stringResource(
+                if (status.lockdownEnabled == true) {
+                    R.string.common_enabled
+                } else {
+                    R.string.common_disabled
+                },
+            ),
+        )
     }
 
     Row(
@@ -367,7 +537,7 @@ private fun AlwaysOnRow() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Always-on & kill switch", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.settings_always_on), style = MaterialTheme.typography.bodyLarge)
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -432,9 +602,15 @@ private fun NotificationPermissionRow() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Notifications", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.settings_notifications), style = MaterialTheme.typography.bodyLarge)
             Text(
-                if (granted) "Granted" else "Not granted",
+                stringResource(
+                    if (granted) {
+                        R.string.settings_notifications_granted
+                    } else {
+                        R.string.settings_notifications_denied
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -443,7 +619,7 @@ private fun NotificationPermissionRow() {
             TextButton(
                 onClick = { launcher.launch(Manifest.permission.POST_NOTIFICATIONS) },
             ) {
-                Text("Allow")
+                Text(stringResource(R.string.settings_notifications_allow))
             }
         }
     }

@@ -28,12 +28,14 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -52,27 +54,30 @@ fun AppFilterScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
-            Text("Per-app VPN", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.common_per_app_vpn), style = MaterialTheme.typography.titleLarge)
         }
 
         Column(Modifier.selectableGroup()) {
             ModeRow(
-                title = "All apps",
-                subtitle = "Route everything through the tunnel",
+                title = stringResource(R.string.appfilter_all_apps),
+                subtitle = stringResource(R.string.appfilter_all_apps_sub),
                 selected = ui.mode == PerAppMode.ALL,
                 onClick = { viewModel.setMode(PerAppMode.ALL) },
             )
             ModeRow(
-                title = "Only selected apps",
-                subtitle = "Checked apps use the tunnel, the rest bypass it",
+                title = stringResource(R.string.appfilter_only_selected),
+                subtitle = stringResource(R.string.appfilter_only_selected_sub),
                 selected = ui.mode == PerAppMode.INCLUDE,
                 onClick = { viewModel.setMode(PerAppMode.INCLUDE) },
             )
             ModeRow(
-                title = "All except selected",
-                subtitle = "Checked apps bypass the tunnel",
+                title = stringResource(R.string.appfilter_all_except),
+                subtitle = stringResource(R.string.appfilter_all_except_sub),
                 selected = ui.mode == PerAppMode.EXCLUDE,
                 onClick = { viewModel.setMode(PerAppMode.EXCLUDE) },
             )
@@ -82,7 +87,7 @@ fun AppFilterScreen(
             // The plan is baked into the TUN fd — a live tunnel rebuilds it
             // in place, which briefly interrupts traffic.
             Text(
-                "Changes reconnect the tunnel briefly",
+                stringResource(R.string.appfilter_reconnect_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -91,7 +96,7 @@ fun AppFilterScreen(
                 // An empty include-list degenerates to self-only — nothing
                 // else rides the tunnel.
                 Text(
-                    "No apps selected — only this app uses the tunnel",
+                    stringResource(R.string.appfilter_empty_include),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -100,7 +105,7 @@ fun AppFilterScreen(
             OutlinedTextField(
                 value = ui.query,
                 onValueChange = viewModel::setQuery,
-                placeholder = { Text("Search apps") },
+                placeholder = { Text(stringResource(R.string.appfilter_search)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()

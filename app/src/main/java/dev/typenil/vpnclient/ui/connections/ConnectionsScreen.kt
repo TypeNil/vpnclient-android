@@ -23,11 +23,13 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.ConnectionInfo
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRelativeTime
@@ -53,16 +55,19 @@ fun ConnectionsScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
-            Text("Connections", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.conn_title), style = MaterialTheme.typography.titleLarge)
         }
 
         when {
             // Only a live session has a tracker — anything else would be a
             // stale or invented list.
-            !ui.connected -> EmptyState("Connect to see live connections")
-            ui.connections.isEmpty() -> EmptyState("No active connections")
+            !ui.connected -> EmptyState(stringResource(R.string.conn_empty_disconnected))
+            ui.connections.isEmpty() -> EmptyState(stringResource(R.string.conn_empty_none))
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(ui.connections, key = { it.id }) { connection ->
                     ConnectionRow(
@@ -136,11 +141,19 @@ private fun ConnectionRow(
             modifier = Modifier.padding(horizontal = 4.dp),
         ) {
             Text(
-                text = "↓ ${formatBytes(connection.downlinkTotalBytes)}",
+                text =
+                    stringResource(
+                        R.string.conn_traffic_down,
+                        formatBytes(connection.downlinkTotalBytes),
+                    ),
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = "↑ ${formatBytes(connection.uplinkTotalBytes)}",
+                text =
+                    stringResource(
+                        R.string.conn_traffic_up,
+                        formatBytes(connection.uplinkTotalBytes),
+                    ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -148,7 +161,7 @@ private fun ConnectionRow(
         IconButton(onClick = onClose) {
             Icon(
                 Icons.Default.Close,
-                contentDescription = "Close connection",
+                contentDescription = stringResource(R.string.conn_close_cd),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -75,6 +76,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
@@ -157,9 +159,12 @@ fun QrScanScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
-            Text("Scan QR code", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.qr_title), style = MaterialTheme.typography.titleLarge)
         }
 
         when {
@@ -181,11 +186,13 @@ fun QrScanScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "Camera unavailable",
+                    stringResource(R.string.qr_camera_unavailable),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = { cameraFailed = false }) { Text("Retry") }
+                TextButton(onClick = { cameraFailed = false }) {
+                    Text(stringResource(R.string.qr_retry))
+                }
             }
             else -> Box(Modifier.fillMaxSize()) {
                 CameraPreview(
@@ -202,7 +209,7 @@ fun QrScanScreen(
                 ViewfinderOverlay()
                 if (showReject) {
                     Text(
-                        text = "Not a subscription link",
+                        text = stringResource(R.string.qr_not_subscription),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
@@ -264,7 +271,7 @@ private fun ViewfinderOverlay() {
             )
         }
         Text(
-            text = "Point the camera at a QR code",
+            text = stringResource(R.string.qr_aim_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = Color.White,
             modifier = Modifier
@@ -294,16 +301,16 @@ private fun PermissionRequest(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            "Camera access is needed to scan a subscription QR code",
+            stringResource(R.string.qr_permission_rationale),
             style = MaterialTheme.typography.bodyLarge,
         )
         Spacer(Modifier.height(16.dp))
         if (permanentlyDenied) {
-            Button(onClick = onOpenSettings) { Text("Open settings") }
+            Button(onClick = onOpenSettings) { Text(stringResource(R.string.qr_open_settings)) }
         } else {
-            Button(onClick = onRequest) { Text("Allow camera") }
+            Button(onClick = onRequest) { Text(stringResource(R.string.qr_allow_camera)) }
         }
-        TextButton(onClick = onBack) { Text("Back") }
+        TextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
     }
 }
 

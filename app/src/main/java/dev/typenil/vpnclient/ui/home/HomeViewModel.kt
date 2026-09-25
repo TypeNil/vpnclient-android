@@ -1,8 +1,10 @@
 package dev.typenil.vpnclient.ui.home
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -30,6 +32,9 @@ data class HomeUiState(
     val selectedNodeServer: String? = null,
     /** The persisted pick is "Auto / Fastest" — no concrete node exists. */
     val autoSelected: Boolean = false,
+    /** Resource for the persisted pick when no concrete node name exists
+     *  (the Auto sentinel) — the screen resolves it to the localized label. */
+    @param:StringRes val selectedNodeNameRes: Int? = null,
     val subscriptionName: String? = null,
     /** Restart guard disabled auto-start — persistent warning, survives a
      *  denied notification permission (the alert notification may never
@@ -56,9 +61,15 @@ data class HomeUiState(
  *  widening what the row renders. */
 data class ServerOption(
     val id: String,
-    val title: String,
+    /** Literal node name, or null when [titleRes] carries the label (Auto). */
+    val title: String? = null,
+    /** Label resource — non-null only for entries without a real node name. */
+    @param:StringRes val titleRes: Int? = null,
     val subtitle: String? = null,
-    val searchText: String = title,
+    /** Subtitle resource — non-null only for the localized Auto subtitle. */
+    @param:StringRes val subtitleRes: Int? = null,
+    /** Host + name text the search matches; falls back to the Auto tag. */
+    val searchText: String? = title,
 )
 
 /** Sheet payload — assembled per state emission so it stays in lockstep
@@ -68,11 +79,15 @@ data class SessionDetails(
      *  the group's `selected` is a raw outbound tag (node id hash or
      *  "auto"), which the UI must not render. */
     val activeOutbound: String?,
+    /** Resource for [activeOutbound] when the tag is the Auto sentinel —
+     *  resolves to the localized "Auto · Fastest" label at render. */
+    @param:StringRes val activeOutboundRes: Int? = null,
     /** The routing/per-app plan the live engine actually runs — null until
      *  the service reports one; never guessed from the current settings. */
     val applied: AppliedSessionConfig?,
-    /** Settings that changed but aren't applied to the live session yet. */
-    val pendingReconnect: List<String>,
+    /** Settings that changed but aren't applied to the live session yet —
+     *  string resources, resolved at render so the locale switch applies. */
+    val pendingReconnect: List<Int>,
     /** Physical underlay label reported by the service's network tracker. */
     val underlay: UnderlyingTransport,
     /** Message of the most recent Error state this process observed —
@@ -162,7 +177,9 @@ class HomeViewModel
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
                     // disconnected (or during a session) the label stands alone.
-                    selectedNodeName = selected?.name ?: if (auto) "Auto · Fastest" else null,
+                    selectedNodeName = selected?.name,
+                    selectedNodeNameRes =
+                        if (!auto || selected != null) null else R.string.common_auto_fastest,
                     selectedNodeProtocol = selected?.protocol,
                     selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
                     autoSelected = auto,
@@ -175,8 +192,9 @@ class HomeViewModel
                                 add(
                                     ServerOption(
                                         id = NodeSelection.AUTO_ID,
-                                        title = "Auto · Fastest",
-                                        subtitle = "Latency-tested pick",
+                                        titleRes = R.string.common_auto_fastest,
+                                        subtitleRes = R.string.home_auto_subtitle,
+                                        searchText = NodeSelection.AUTO_ID,
                                     ),
                                 )
                                 // Favorites first, right after Auto — the
@@ -225,10 +243,20 @@ class HomeViewModel
                                         ?.selected
                                         ?.let { tag ->
                                             when {
-                                                tag == NodeSelection.AUTO_ID -> "Auto · Fastest"
+                                                tag == NodeSelection.AUTO_ID -> null
                                                 else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
                                             }
                                         },
+                                activeOutboundRes =
+                                    if (
+                                        groups
+                                            .firstOrNull { it.selectable }
+                                            ?.selected == NodeSelection.AUTO_ID
+                                    ) {
+                                        R.string.common_auto_fastest
+                                    } else {
+                                        null
+                                    },
                                 // Applied plan — a route-mode change is only
                                 // real after a reconnect, and per-app after a
                                 // TUN rebuild; the settings flow is intent.
@@ -237,7 +265,7 @@ class HomeViewModel
                                     buildList {
                                         if (appliedConfig != null) {
                                             if (appliedConfig.routeMode != routeMode) {
-                                                add("Routing mode")
+                                                add(R.string.common_routing_mode)
                                             }
                                             // The set, not the size: replacing
                                             // one app with another is still
@@ -245,7 +273,7 @@ class HomeViewModel
                                             if (appliedConfig.perAppMode != perAppMode ||
                                                 appliedConfig.perAppPackages != perAppPackages
                                             ) {
-                                                add("Per-app VPN")
+                                                add(R.string.common_per_app_vpn)
                                             }
                                         }
                                     },

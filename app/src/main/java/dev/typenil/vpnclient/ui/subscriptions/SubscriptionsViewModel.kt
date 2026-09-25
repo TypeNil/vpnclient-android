@@ -1,13 +1,16 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
+import dev.typenil.vpnclient.ui.common.UserMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +25,7 @@ import javax.inject.Inject
  *  screen re-trigger its effect when one message replaces another. */
 data class PendingMessage(
     val id: Long,
-    val text: String,
+    val body: UserMessage,
 )
 
 data class SubscriptionsUiState(
@@ -73,8 +76,24 @@ class SubscriptionsViewModel
          *  predecessor's id and lose its LaunchedEffect trigger. */
         private var nextMessageId = 0L
 
-        private fun postMessage(text: String) {
-            pendingMessage.update { PendingMessage(id = ++nextMessageId, text = text) }
+        private fun postMessage(
+            @StringRes textRes: Int,
+            fallback: String,
+            args: List<Any> = emptyList(),
+        ) {
+            pendingMessage.update {
+                PendingMessage(
+                    id = ++nextMessageId,
+                    body = UserMessage.Resource(textRes, args, fallback),
+                )
+            }
+        }
+
+        /** Raw-text variant for typed error messages produced upstream. */
+        private fun postRawMessage(text: String) {
+            pendingMessage.update {
+                PendingMessage(id = ++nextMessageId, body = UserMessage.Raw(text))
+            }
         }
 
         /** The screen consumed the message — clear it only if it's still the
@@ -83,15 +102,30 @@ class SubscriptionsViewModel
             pendingMessage.update { if (it?.id == id) null else it }
         }
 
-        private fun skippedSummary(skipped: List<SkippedNode>): String {
+        /** [skipped.size] skipped nodes, followed by the top reasons as
+         *  "reason (n)" groups — reasons are provider-supplied raw text and
+         *  stay untranslated; the wrapper sentence and the "+N more" tail
+         *  come from string resources. */
+        private fun skippedSummary(skipped: List<SkippedNode>) {
             val grouped = skipped.groupingBy { it.reason.take(MAX_REASON_LEN) }.eachCount()
             val shown =
                 grouped.entries
                     .take(MAX_REASON_GROUPS)
                     .joinToString(", ") { (reason, count) -> "$reason ($count)" }
             val rest = grouped.size - MAX_REASON_GROUPS
-            return "${skipped.size} nodes skipped: $shown" +
-                if (rest > 0) ", +$rest more" else ""
+            if (rest > 0) {
+                postMessage(
+                    R.string.subs_nodes_skipped_more,
+                    "${skipped.size} nodes skipped: $shown, +$rest more",
+                    listOf(skipped.size, shown, rest),
+                )
+            } else {
+                postMessage(
+                    R.string.subs_nodes_skipped,
+                    "${skipped.size} nodes skipped: $shown",
+                    listOf(skipped.size, shown),
+                )
+            }
         }
 
         fun add(
@@ -116,9 +150,12 @@ class SubscriptionsViewModel
                 result
                     .onSuccess { outcome ->
                         if (outcome.skipped.isNotEmpty()) {
-                            postMessage(skippedSummary(outcome.skipped))
+                            skippedSummary(outcome.skipped)
                         }
-                    }.onFailure { postMessage(it.message ?: "Failed to add") }
+                    }.onFailure {
+                        it.message?.let(::postRawMessage)
+                            ?: postMessage(R.string.subs_add_failed, "Failed to add")
+                    }
             }
         }
 
@@ -144,9 +181,12 @@ class SubscriptionsViewModel
                         .refresh(id)
                         .onSuccess { outcome ->
                             if (outcome.skipped.isNotEmpty()) {
-                                postMessage(skippedSummary(outcome.skipped))
+                                skippedSummary(outcome.skipped)
                             }
-                        }.onFailure { postMessage(it.message ?: "Refresh failed") }
+                        }.onFailure {
+                            it.message?.let(::postRawMessage)
+                                ?: postMessage(R.string.subs_refresh_failed, "Refresh failed")
+                        }
                 } finally {
                     refreshing.update { it - id }
                 }
@@ -165,7 +205,9 @@ class SubscriptionsViewModel
         ) {
             viewModelScope.launch {
                 runCatching { repository.setEnabled(id, enabled) }
-                    .onFailure { postMessage("Failed to update subscription") }
+                    .onFailure {
+                        postMessage(R.string.subs_update_failed, "Failed to update subscription")
+                    }
             }
         }
 
@@ -175,7 +217,7 @@ class SubscriptionsViewModel
         ) {
             viewModelScope.launch {
                 runCatching { repository.rename(id, name) }
-                    .onFailure { postMessage("Rename failed") }
+                    .onFailure { postMessage(R.string.subs_rename_failed, "Rename failed") }
             }
         }
 
@@ -194,7 +236,10 @@ class SubscriptionsViewModel
                 try {
                     repository
                         .editUrl(id, newUrl)
-                        .onFailure { postMessage(it.message ?: "URL update failed") }
+                        .onFailure {
+                            it.message?.let(::postRawMessage)
+                                ?: postMessage(R.string.subs_url_update_failed, "URL update failed")
+                        }
                 } finally {
                     refreshing.update { it - id }
                 }
@@ -213,7 +258,9 @@ class SubscriptionsViewModel
         fun removeManualNode(nodeId: String) {
             viewModelScope.launch {
                 runCatching { repository.removeManualNode(nodeId) }
-                    .onFailure { postMessage("Failed to remove server") }
+                    .onFailure {
+                        postMessage(R.string.subs_remove_node_failed, "Failed to remove server")
+                    }
             }
         }
 

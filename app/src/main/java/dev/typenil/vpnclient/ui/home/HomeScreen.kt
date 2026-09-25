@@ -36,11 +36,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -158,26 +160,29 @@ fun HomeScreen(
     }
 }
 
+@Composable
 private fun statusText(state: VpnConnectionState): String =
     when (state) {
-        VpnConnectionState.Idle -> "Disconnected"
-        is VpnConnectionState.Preparing -> "Preparing…"
-        VpnConnectionState.PermissionRequired -> "Awaiting VPN permission…"
-        is VpnConnectionState.Connecting -> "Connecting…"
-        is VpnConnectionState.Connected -> "Connected"
-        is VpnConnectionState.Reconnecting -> "Reconnecting… (attempt ${state.attempt})"
-        VpnConnectionState.Stopping -> "Disconnecting…"
-        is VpnConnectionState.Error -> "Connection failed"
+        VpnConnectionState.Idle -> stringResource(R.string.home_status_disconnected)
+        is VpnConnectionState.Preparing -> stringResource(R.string.home_status_preparing)
+        VpnConnectionState.PermissionRequired -> stringResource(R.string.home_status_permission)
+        is VpnConnectionState.Connecting -> stringResource(R.string.home_status_connecting)
+        is VpnConnectionState.Connected -> stringResource(R.string.home_status_connected)
+        is VpnConnectionState.Reconnecting ->
+            stringResource(R.string.home_status_reconnecting, state.attempt)
+        VpnConnectionState.Stopping -> stringResource(R.string.home_status_disconnecting)
+        is VpnConnectionState.Error -> stringResource(R.string.home_status_failed)
     }
 
+@Composable
 private fun errorText(error: VpnError): String =
     when (error) {
-        VpnError.PermissionDenied -> "VPN permission denied"
-        VpnError.PermissionRevoked -> "VPN permission was revoked"
-        VpnError.NoNodeSelected -> "No server selected — pick one in Servers"
-        is VpnError.ConfigInvalid -> "Invalid configuration: ${error.detail}"
-        is VpnError.EngineFailed -> "VPN core failed: ${error.detail}"
-        is VpnError.TunnelFailed -> "Tunnel failed: ${error.detail}"
+        VpnError.PermissionDenied -> stringResource(R.string.home_error_permission_denied)
+        VpnError.PermissionRevoked -> stringResource(R.string.home_error_permission_revoked)
+        VpnError.NoNodeSelected -> stringResource(R.string.home_error_no_node)
+        is VpnError.ConfigInvalid -> stringResource(R.string.home_error_config, error.detail)
+        is VpnError.EngineFailed -> stringResource(R.string.home_error_engine, error.detail)
+        is VpnError.TunnelFailed -> stringResource(R.string.home_error_tunnel, error.detail)
         is VpnError.Unexpected -> error.detail
     }
 
@@ -241,7 +246,9 @@ private fun NodeCard(
         }
 
         is VpnConnectionState.Error -> {
-            name = state.node?.name ?: ui.selectedNodeName
+            name = state.node?.name
+                ?: ui.selectedNodeName
+                ?: ui.selectedNodeNameRes?.let { stringResource(it) }
             protocol = state.node?.protocol?.label
                 ?: ui.selectedNodeProtocol?.let(::protocolLabel)
             server = state.node?.server ?: ui.selectedNodeServer
@@ -249,6 +256,7 @@ private fun NodeCard(
 
         else -> {
             name = ui.selectedNodeName
+                ?: ui.selectedNodeNameRes?.let { stringResource(it) }
             protocol = ui.selectedNodeProtocol?.let(::protocolLabel)
             server = ui.selectedNodeServer
         }
@@ -270,22 +278,22 @@ private fun NodeCard(
             // (idle/error with nothing selected).
             if (name == null && ui.noNodesAtAll) {
                 Text(
-                    text = "No servers yet",
+                    text = stringResource(R.string.common_no_servers_yet),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Add a subscription or paste a share link to get started.",
+                    text = stringResource(R.string.common_add_servers_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onAddServer) {
-                    Text("Add subscription or share link")
+                    Text(stringResource(R.string.common_add_server_cta))
                 }
             } else {
                 Text(
-                    text = name ?: "No server selected",
+                    text = name ?: stringResource(R.string.home_no_server_selected),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 if (protocol != null || server != null) {
@@ -299,7 +307,7 @@ private fun NodeCard(
                 if (pickable) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Tap to change",
+                        text = stringResource(R.string.home_tap_to_change),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -326,19 +334,29 @@ private fun ServerPickerSheet(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val auto = options.firstOrNull { it.id == NodeSelection.AUTO_ID }
+    val autoTitle = auto?.titleRes?.let { stringResource(it) }
     val nodes = options.filter { it.id != NodeSelection.AUTO_ID }
     val trimmed = query.trim()
     val matches =
         if (trimmed.isEmpty()) {
             nodes
         } else {
-            nodes.filter { it.searchText.contains(trimmed, ignoreCase = true) }
+            // searchText carries name + host for real nodes; the Auto row's
+            // localized title is matched too so a translated label is found.
+            nodes.filter { option ->
+                option.searchText?.contains(trimmed, ignoreCase = true) == true ||
+                    option.title?.contains(trimmed, ignoreCase = true) == true
+            }
         }
+    val autoMatches =
+        trimmed.isEmpty() ||
+            autoTitle?.contains(trimmed, ignoreCase = true) == true ||
+            auto?.searchText?.contains(trimmed, ignoreCase = true) == true
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Text(
-                text = "Server",
+                text = stringResource(R.string.home_picker_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
@@ -349,12 +367,15 @@ private fun ServerPickerSheet(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp),
-                placeholder = { Text("Search servers") },
+                placeholder = { Text(stringResource(R.string.home_picker_search)) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
                         IconButton(onClick = { query = "" }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = stringResource(R.string.common_clear_search),
+                            )
                         }
                     }
                 },
@@ -367,18 +388,20 @@ private fun ServerPickerSheet(
                 onClick = onOpenServers,
                 modifier = Modifier.padding(horizontal = 12.dp),
             ) {
-                Text("All servers, filters & latency")
+                Text(stringResource(R.string.home_picker_all_servers))
             }
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                // Auto is the picker's first-class choice — a search for a
-                // node name must not hide it.
-                auto?.let { option ->
-                    item(key = option.id) {
-                        PickerRow(
-                            option = option,
-                            selected = option.id == selectedId,
-                            onClick = { onPick(option.id) },
-                        )
+                // Auto is the picker's first-class choice — shown on an
+                // empty query or when its own label/tag matches the search.
+                if (autoMatches) {
+                    auto?.let { option ->
+                        item(key = option.id) {
+                            PickerRow(
+                                option = option,
+                                selected = option.id == selectedId,
+                                onClick = { onPick(option.id) },
+                            )
+                        }
                     }
                 }
                 items(matches, key = { it.id }) { option ->
@@ -391,7 +414,7 @@ private fun ServerPickerSheet(
                 if (matches.isEmpty()) {
                     item(key = "no-match") {
                         Text(
-                            text = "No servers match \"$trimmed\"",
+                            text = stringResource(R.string.home_picker_no_match, trimmed),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
@@ -419,12 +442,16 @@ private fun PickerRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                text = option.title,
+                text =
+                    option.title
+                        ?: option.titleRes?.let { stringResource(it) }
+                        .orEmpty(),
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            option.subtitle?.let {
+            val optionSubtitle = option.subtitle ?: option.subtitleRes?.let { stringResource(it) }
+            optionSubtitle?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
@@ -437,7 +464,7 @@ private fun PickerRow(
         if (selected) {
             Icon(
                 Icons.Default.Check,
-                contentDescription = "Selected",
+                contentDescription = stringResource(R.string.common_selected),
                 tint = MaterialTheme.colorScheme.primary,
             )
         }
@@ -468,7 +495,7 @@ private fun ErrorCard(error: VpnError) {
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = { dismissed = true }) {
-                Text("Dismiss")
+                Text(stringResource(R.string.common_dismiss))
             }
         }
     }
@@ -490,13 +517,13 @@ private fun RestartGuardCard(onDismiss: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "VPN auto-restart stopped — repeated failures. Reconnect manually.",
+                text = stringResource(R.string.home_restart_guard_text),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onDismiss) {
-                Text("Dismiss")
+                Text(stringResource(R.string.common_dismiss))
             }
         }
     }
@@ -510,11 +537,29 @@ private fun StatsCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            StatRow("Download", "${formatRate(stats.downlinkBytesPerSec)}  (${formatBytes(stats.downlinkTotalBytes)} total)")
-            StatRow("Upload", "${formatRate(stats.uplinkBytesPerSec)}  (${formatBytes(stats.uplinkTotalBytes)} total)")
             StatRow(
-                label = "Connections",
-                value = "${stats.connectionsIn} in / ${stats.connectionsOut} out",
+                stringResource(R.string.home_stat_download),
+                formatRate(stats.downlinkBytesPerSec) + "  (" +
+                    stringResource(
+                        R.string.home_stat_total_suffix,
+                        formatBytes(stats.downlinkTotalBytes),
+                    ) + ")",
+            )
+            StatRow(
+                stringResource(R.string.home_stat_upload),
+                formatRate(stats.uplinkBytesPerSec) + "  (" +
+                    stringResource(
+                        R.string.home_stat_total_suffix,
+                        formatBytes(stats.uplinkTotalBytes),
+                    ) + ")",
+            )
+            StatRow(
+                label = stringResource(R.string.home_stat_connections),
+                value = stringResource(
+                    R.string.home_stat_connections_value,
+                    stats.connectionsIn,
+                    stats.connectionsOut,
+                ),
                 // clickable before padding — the padded area stays tappable.
                 modifier =
                     Modifier
@@ -529,7 +574,7 @@ private fun StatsCard(
                 },
             )
             StatRow(
-                label = "Session details",
+                label = stringResource(R.string.home_details_title),
                 value = "",
                 modifier =
                     Modifier
@@ -547,24 +592,35 @@ private fun StatsCard(
     }
 }
 
+@Composable
 private fun routeModeSummary(mode: RouteMode): String =
     when (mode) {
-        RouteMode.ALL -> "Proxy everything"
-        RouteMode.BYPASS_RU -> "Bypass Russian resources"
-        RouteMode.PROXY_BLOCKED -> "Only blocked services"
+        RouteMode.ALL -> stringResource(R.string.route_mode_all)
+        RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_bypass_ru)
+        RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_proxy_blocked)
     }
 
+@Composable
 private fun perAppSummary(
     mode: PerAppMode,
     count: Int,
 ): String =
     when (mode) {
-        PerAppMode.ALL -> "All apps"
-        PerAppMode.INCLUDE -> "Include $count app${if (count == 1) "" else "s"}"
-        PerAppMode.EXCLUDE -> "Exclude $count app${if (count == 1) "" else "s"}"
+        PerAppMode.ALL -> stringResource(R.string.per_app_mode_all)
+        PerAppMode.INCLUDE ->
+            stringResource(
+                if (count == 1) R.string.home_per_app_include_one else R.string.home_per_app_include,
+                count,
+            )
+        PerAppMode.EXCLUDE ->
+            stringResource(
+                if (count == 1) R.string.home_per_app_exclude_one else R.string.home_per_app_exclude,
+                count,
+            )
     }
 
 /** Elapsed since Connected — whole units, no fake precision. */
+@Composable
 private fun uptimeText(
     since: Instant,
     now: Instant = Instant.now(),
@@ -574,9 +630,9 @@ private fun uptimeText(
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return when {
-        h > 0 -> "${h}h ${m}m ${s}s"
-        m > 0 -> "${m}m ${s}s"
-        else -> "${s}s"
+        h > 0 -> stringResource(R.string.home_uptime_hms, h, m, s)
+        m > 0 -> stringResource(R.string.home_uptime_ms, m, s)
+        else -> stringResource(R.string.home_uptime_s, s)
     }
 }
 
@@ -600,38 +656,55 @@ private fun SessionDetailsSheet(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            val none = stringResource(R.string.common_none)
             Text(
-                "Session details",
+                stringResource(R.string.home_details_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
-            DetailRow("Node", state.node.name)
+            DetailRow(stringResource(R.string.home_details_node), state.node.name)
             // The selector group's pick is what actually egresses — can
             // diverge from the session node after a live outbound switch.
-            DetailRow("Outbound", details?.activeOutbound ?: "—")
+            DetailRow(
+                stringResource(R.string.home_details_outbound),
+                details?.activeOutbound
+                    ?: details?.activeOutboundRes?.let { stringResource(it) }
+                    ?: none,
+            )
             // Applied plan only — the settings value may not be live yet
             // (a route-mode change needs a reconnect, per-app a rebuild).
-            DetailRow("Routing mode", details?.applied?.let { routeModeSummary(it.routeMode) } ?: "—")
             DetailRow(
-                "Per-app VPN",
-                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackages.size) } ?: "—",
+                stringResource(R.string.common_routing_mode),
+                details?.applied?.let { routeModeSummary(it.routeMode) } ?: none,
+            )
+            DetailRow(
+                stringResource(R.string.common_per_app_vpn),
+                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackages.size) } ?: none,
             )
             // Named, not silently ignored: these are changed-but-unapplied.
             details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {
-                DetailRow("Pending reconnect", it.pendingReconnect.joinToString(", "))
-            }
-            DetailRow("Underlying network", details?.underlay?.label ?: "—")
-            DetailRow("Uptime", uptimeText(state.since))
-            state.stats?.let { stats ->
+                val pendingLabels = it.pendingReconnect.map { res -> stringResource(res) }
                 DetailRow(
-                    "Data used",
-                    "↓ ${formatBytes(stats.downlinkTotalBytes)} · ↑ ${formatBytes(stats.uplinkTotalBytes)}",
+                    stringResource(R.string.home_details_pending),
+                    pendingLabels.joinToString(", "),
                 )
             }
-            DetailRow("VPN core", CORE_VERSION)
+            DetailRow(stringResource(R.string.home_details_underlay), details?.underlay?.label ?: none)
+            DetailRow(stringResource(R.string.home_details_uptime), uptimeText(state.since))
+            state.stats?.let { stats ->
+                DetailRow(
+                    stringResource(R.string.home_details_data_used),
+                    stringResource(
+                        R.string.home_details_data_used_value,
+                        formatBytes(stats.downlinkTotalBytes),
+                        formatBytes(stats.uplinkTotalBytes),
+                    ),
+                )
+            }
+            DetailRow(stringResource(R.string.common_vpn_core), CORE_VERSION)
             // Most recent Error seen this process — historical context, not
             // live state, so it renders even when the session is healthy.
-            details?.lastError?.let { DetailRow("Last error", it) }
+            details?.lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
         }
     }
 }
@@ -693,13 +766,13 @@ private fun ConnectButton(
         is VpnConnectionState.Connected,
         is VpnConnectionState.Reconnecting,
         -> {
-            label = "Disconnect"
+            label = stringResource(R.string.action_disconnect)
             enabled = true
             action = onDisconnect
         }
 
         VpnConnectionState.Stopping -> {
-            label = "Disconnecting…"
+            label = stringResource(R.string.home_status_disconnecting)
             enabled = false
             action = {}
         }
@@ -708,7 +781,7 @@ private fun ConnectButton(
         VpnConnectionState.PermissionRequired,
         is VpnConnectionState.Connecting,
         -> {
-            label = "Connecting…"
+            label = stringResource(R.string.home_status_connecting)
             enabled = false
             action = {}
         }
@@ -716,7 +789,7 @@ private fun ConnectButton(
         VpnConnectionState.Idle,
         is VpnConnectionState.Error,
         -> {
-            label = "Connect"
+            label = stringResource(R.string.home_connect)
             enabled = true
             action = onConnect
         }

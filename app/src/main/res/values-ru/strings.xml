@@ -1,0 +1,235 @@
+<resources>
+    <string name="app_name">VPN Client</string>
+
+    <string name="notification_channel_vpn">Статус VPN</string>
+    <string name="notification_channel_vpn_alerts">Оповещения VPN</string>
+    <string name="notification_restart_guard_title">Автоперезапуск VPN остановлен</string>
+    <string name="notification_restart_guard_text">Повторные сбои — нажмите, чтобы переподключиться вручную</string>
+    <string name="notification_connecting">Подключение…</string>
+    <string name="notification_connected">Подключено</string>
+    <string name="notification_reconnecting">Переподключение…</string>
+    <string name="notification_disconnecting">Отключение…</string>
+    <string name="notification_error">Ошибка подключения</string>
+    <string name="action_disconnect">Отключить</string>
+
+    <string name="nav_home">Главная</string>
+    <string name="nav_servers">Серверы</string>
+    <string name="nav_subscriptions">Подписки</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Common -->
+    <string name="common_cancel">Отмена</string>
+    <string name="common_delete">Удалить</string>
+    <string name="common_dismiss">Скрыть</string>
+    <string name="common_refresh">Обновить</string>
+    <string name="common_back">Назад</string>
+    <string name="common_selected">Выбрано</string>
+    <string name="common_clear_search">Очистить поиск</string>
+    <string name="common_enabled">включено</string>
+    <string name="common_disabled">выключено</string>
+    <string name="common_none">—</string>
+    <string name="common_auto_fastest">Авто · Самый быстрый</string>
+    <string name="common_no_servers_yet">Пока нет серверов</string>
+    <string name="common_add_servers_hint">Добавьте подписку или вставьте ссылку на сервер, чтобы начать.</string>
+    <string name="common_add_server_cta">Добавить подписку или ссылку</string>
+    <string name="common_subscription_fallback">Подписка</string>
+    <string name="common_subscription_numbered">Подписка %1$d</string>
+    <string name="common_last_error">Последняя ошибка</string>
+    <string name="common_vpn_core">Ядро VPN</string>
+    <string name="common_per_app_vpn">Приложения в VPN</string>
+    <string name="common_routing_mode">Режим маршрутизации</string>
+
+
+    <!-- Dynamic enum / model labels -->
+    <string name="route_mode_all">Весь трафик через прокси</string>
+    <string name="route_mode_bypass_ru">Обход российских ресурсов</string>
+    <string name="route_mode_proxy_blocked">Только заблокированные сервисы</string>
+    <string name="route_mode_sub_all">Весь трафик идёт через выбранный сервер</string>
+    <string name="route_mode_sub_bypass_ru">Российские сайты и IP идут напрямую, остальное — через прокси</string>
+    <string name="route_mode_sub_proxy_blocked">Заблокированные сервисы идут через прокси, остальное — напрямую</string>
+    <string name="theme_system">Системная</string>
+    <string name="theme_light">Светлая</string>
+    <string name="theme_dark">Тёмная</string>
+    <string name="language_system">Системный</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="sort_default">По умолчанию</string>
+    <string name="sort_latency">По задержке</string>
+    <string name="sort_name">По имени</string>
+    <string name="per_app_mode_all">Все приложения</string>
+
+    <!-- Home -->
+    <string name="home_status_disconnected">Отключено</string>
+    <string name="home_status_preparing">Подготовка…</string>
+    <string name="home_status_permission">Ожидание разрешения VPN…</string>
+    <string name="home_status_connecting">Подключение…</string>
+    <string name="home_status_connected">Подключено</string>
+    <string name="home_status_reconnecting">Переподключение… (попытка %1$d)</string>
+    <string name="home_status_disconnecting">Отключение…</string>
+    <string name="home_status_failed">Не удалось подключиться</string>
+    <string name="home_error_permission_denied">Разрешение VPN отклонено</string>
+    <string name="home_error_permission_revoked">Разрешение VPN было отозвано</string>
+    <string name="home_error_no_node">Сервер не выбран — выберите его на вкладке «Серверы»</string>
+    <string name="home_error_config">Неверная конфигурация: %1$s</string>
+    <string name="home_error_engine">Сбой ядра VPN: %1$s</string>
+    <string name="home_error_tunnel">Сбой туннеля: %1$s</string>
+    <string name="home_no_server_selected">Сервер не выбран</string>
+    <string name="home_tap_to_change">Нажмите, чтобы изменить</string>
+    <string name="home_picker_title">Сервер</string>
+    <string name="home_picker_search">Поиск серверов</string>
+    <string name="home_picker_all_servers">Все серверы, фильтры и задержка</string>
+    <string name="home_picker_no_match">Нет серверов по запросу \"%1$s\"</string>
+    <string name="home_restart_guard_text">Автоперезапуск VPN остановлен — повторные сбои. Переподключитесь вручную.</string>
+    <string name="home_stat_download">Загрузка</string>
+    <string name="home_stat_upload">Отправка</string>
+    <string name="home_stat_connections">Соединения</string>
+    <string name="home_stat_connections_value">%1$d вх. / %2$d исх.</string>
+    <string name="home_stat_total_suffix">всего %1$s</string>
+    <string name="home_details_title">Детали сессии</string>
+    <string name="home_details_node">Сервер</string>
+    <string name="home_details_outbound">Исходящее соединение</string>
+    <string name="home_details_pending">Ждут переподключения</string>
+    <string name="home_details_underlay">Базовая сеть</string>
+    <string name="home_details_uptime">Время работы</string>
+    <string name="home_details_data_used">Трафик</string>
+    <string name="home_details_data_used_value">↓ %1$s · ↑ %2$s</string>
+    <string name="home_uptime_hms">%1$d ч %2$d мин %3$d с</string>
+    <string name="home_uptime_ms">%1$d мин %2$d с</string>
+    <string name="home_uptime_s">%1$d с</string>
+    <string name="home_per_app_include">Через VPN: %1$d приложений</string>
+    <string name="home_per_app_include_one">Через VPN: %1$d приложение</string>
+    <string name="home_per_app_exclude">Без VPN: %1$d приложений</string>
+    <string name="home_per_app_exclude_one">Без VPN: %1$d приложение</string>
+    <string name="home_auto_subtitle">Выбор по задержке</string>
+    <string name="home_connect">Подключить</string>
+
+    <!-- Servers -->
+    <string name="servers_search_hint">Поиск по имени или серверу</string>
+    <string name="servers_favorites">Избранное</string>
+    <string name="servers_test_latency">Проверить задержку</string>
+    <string name="servers_latency_via_proxy">через прокси</string>
+    <string name="servers_latency_tcp">TCP-подключение</string>
+    <string name="servers_no_match">Нет серверов по текущим фильтрам</string>
+    <string name="servers_sort_prefix">Сортировка: %1$s</string>
+    <string name="servers_latency_timeout">тайм-аут</string>
+    <string name="servers_favorite_remove">Убрать из избранного</string>
+    <string name="servers_favorite_add">В избранное</string>
+    <string name="servers_latency_ms">%1$d мс</string>
+
+    <!-- Settings -->
+    <string name="settings_snackbar_reconnect_message">Переподключите VPN, чтобы применить новые настройки</string>
+    <string name="settings_snackbar_reconnect_action">Переподключить</string>
+    <string name="settings_reconnect_on_change">Переподключать при смене сети</string>
+    <string name="settings_reconnect_on_change_sub">Перезапускать туннель при изменении соединения</string>
+    <string name="settings_ipv6">IPv6</string>
+    <string name="settings_ipv6_sub">Направлять трафик IPv6 через туннель</string>
+    <string name="settings_doze">Энергосбережение в режиме ожидания</string>
+    <string name="settings_doze_sub">Приостанавливать ядро при простое устройства — разрывает открытые соединения</string>
+    <string name="settings_connect_on_launch">Подключаться при запуске</string>
+    <string name="settings_connect_on_launch_sub">Запускать VPN при открытии приложения</string>
+    <string name="settings_theme">Тема</string>
+    <string name="settings_language">Язык</string>
+    <string name="settings_dynamic_color">Динамические цвета</string>
+    <string name="settings_dynamic_color_sub">Цвета на основе обоев (Android 12+)</string>
+    <string name="settings_per_app_sub">Выберите, какие приложения используют туннель</string>
+    <string name="settings_always_on">Постоянный VPN и блокировка</string>
+    <string name="settings_always_on_unavailable">Настраивается в системных настройках VPN</string>
+    <string name="settings_always_on_status">Постоянный VPN: %1$s · Блокировка: %2$s</string>
+    <string name="settings_auto_refresh">Автообновление подписок</string>
+    <string name="settings_auto_refresh_every">Каждые %1$d мин</string>
+    <string name="settings_auto_refresh_provider">По интервалу каждого провайдера</string>
+    <string name="settings_auto_refresh_manual">Только вручную</string>
+    <string name="settings_interval_label">Свой интервал (минуты, мин. 15)</string>
+    <string name="settings_interval_placeholder">провайдер</string>
+    <string name="settings_route_mode_note">Применяется при следующем подключении</string>
+    <string name="settings_notifications">Уведомления</string>
+    <string name="settings_notifications_granted">Разрешены</string>
+    <string name="settings_notifications_denied">Не разрешены</string>
+    <string name="settings_notifications_allow">Разрешить</string>
+
+    <!-- Subscriptions -->
+    <string name="subs_empty">Пока нет подписок</string>
+    <string name="subs_add_cd">Добавить подписку</string>
+    <string name="subs_delete_confirm_title">Удалить подписку?</string>
+    <string name="subs_delete_confirm_text">\"%1$s\" и её серверы будут удалены.</string>
+    <string name="subs_manual_hint">Вручную — вставьте ссылки, чтобы добавить</string>
+    <string name="subs_manual_sheet_hint">Вручную — локальные ссылки</string>
+    <string name="subs_card_meta">%1$d серверов · обновлено %2$s</string>
+    <string name="subs_card_updates_on_launch"> · обновляется при запуске</string>
+    <string name="subs_card_disabled"> · отключена</string>
+    <string name="subs_usage_of">Использовано %1$s из %2$s</string>
+    <string name="subs_usage">Использовано %1$s</string>
+    <string name="subs_expires"> · истекает %1$s</string>
+    <string name="subs_support">Поддержка</string>
+    <string name="subs_add_title">Добавить подписку</string>
+    <string name="subs_url_label">URL подписки или ссылка на сервер</string>
+    <string name="subs_scan_qr_cd">Сканировать QR-код</string>
+    <string name="subs_paste">Вставить</string>
+    <string name="subs_name_optional">Название (необязательно)</string>
+    <string name="subs_http_warning">Обычный HTTP — включите опцию ниже, чтобы разрешить</string>
+    <string name="subs_allow_insecure">Разрешить незащищённый HTTP (не рекомендуется)</string>
+    <string name="subs_add">Добавить</string>
+    <string name="subs_detail_nodes">Серверы</string>
+    <string name="subs_detail_nodes_value">%1$d · обновлено %2$s</string>
+    <string name="subs_update_interval">Интервал обновления</string>
+    <string name="subs_interval_never">никогда — только локально</string>
+    <string name="subs_interval_launch">при каждом запуске</string>
+    <string name="subs_interval_minutes">каждые %1$d мин</string>
+    <string name="subs_interval_manual">вручную</string>
+    <string name="subs_announcement">Объявление</string>
+    <string name="subs_enabled">Включена</string>
+    <string name="subs_enabled_sub_on">Серверы видны в списке</string>
+    <string name="subs_enabled_sub_off">Серверы скрыты из списка</string>
+    <string name="subs_imported_servers">Импортированные серверы</string>
+    <string name="subs_remove_node_cd">Удалить %1$s</string>
+    <string name="subs_refresh_now">Обновить сейчас</string>
+    <string name="subs_name_label">Название</string>
+    <string name="subs_save">Сохранить</string>
+    <string name="subs_rename">Переименовать</string>
+    <string name="subs_new_url_label">Новый URL подписки</string>
+    <string name="subs_url_edit_hint">URL будет загружен и проверен перед заменой текущего — при ошибке ничего не изменится.</string>
+    <string name="subs_validate_save">Проверить и сохранить</string>
+    <string name="subs_edit_url">Изменить URL</string>
+    <string name="subs_nodes_skipped">Пропущено серверов: %1$d: %2$s</string>
+    <string name="subs_nodes_skipped_more">Пропущено серверов: %1$d: %2$s, +ещё %3$d</string>
+    <string name="subs_add_failed">Не удалось добавить</string>
+    <string name="subs_refresh_failed">Не удалось обновить</string>
+    <string name="subs_update_failed">Не удалось обновить подписку</string>
+    <string name="subs_rename_failed">Не удалось переименовать</string>
+    <string name="subs_url_update_failed">Не удалось обновить URL</string>
+    <string name="subs_remove_node_failed">Не удалось удалить сервер</string>
+    <string name="subs_redacted_url">скрыт</string>
+
+    <!-- Connections -->
+    <string name="conn_title">Соединения</string>
+    <string name="conn_empty_disconnected">Подключитесь, чтобы увидеть активные соединения</string>
+    <string name="conn_empty_none">Нет активных соединений</string>
+    <string name="conn_close_cd">Закрыть соединение</string>
+    <string name="conn_traffic_down">↓ %1$s</string>
+    <string name="conn_traffic_up">↑ %1$s</string>
+
+    <!-- Per-app VPN -->
+    <string name="appfilter_all_apps">Все приложения</string>
+    <string name="appfilter_all_apps_sub">Весь трафик через туннель</string>
+    <string name="appfilter_only_selected">Только выбранные</string>
+    <string name="appfilter_only_selected_sub">Отмеченные приложения идут через туннель, остальные — напрямую</string>
+    <string name="appfilter_all_except">Все, кроме выбранных</string>
+    <string name="appfilter_all_except_sub">Отмеченные приложения идут напрямую</string>
+    <string name="appfilter_reconnect_hint">Изменения кратковременно переподключают туннель</string>
+    <string name="appfilter_empty_include">Ничего не выбрано — только это приложение использует туннель</string>
+    <string name="appfilter_search">Поиск приложений</string>
+
+    <!-- QR scan -->
+    <string name="qr_title">Сканировать QR-код</string>
+    <string name="qr_camera_unavailable">Камера недоступна</string>
+    <string name="qr_retry">Повторить</string>
+    <string name="qr_not_subscription">Это не ссылка на подписку</string>
+    <string name="qr_aim_hint">Наведите камеру на QR-код</string>
+    <string name="qr_permission_rationale">Для сканирования QR-кода подписки нужен доступ к камере</string>
+    <string name="qr_open_settings">Открыть настройки</string>
+    <string name="qr_allow_camera">Разрешить камеру</string>
+
+    <!-- Notifications -->
+    <string name="notif_expiry_title">Подписка истекает</string>
+    <string name="notif_expiry_text">%1$s истекает %2$s</string>
+</resources>

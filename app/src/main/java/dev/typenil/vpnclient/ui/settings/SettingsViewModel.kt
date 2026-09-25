@@ -3,6 +3,8 @@ package dev.typenil.vpnclient.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.typenil.vpnclient.core.common.AppLanguage
+import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -29,6 +31,14 @@ data class SettingsUiState(
     val reconnectRecommended: Boolean = false,
     /** Start the VPN automatically when the app opens. */
     val autoConnectOnLaunch: Boolean = false,
+    /** Persisted UI theme — applies on recomposition, no VPN impact. */
+    val themeMode: ThemeMode = ThemeMode.System,
+    /** Monet wallpaper palette — Android 12+ only; inert below. */
+    val dynamicColor: Boolean = false,
+    /** Whether the dynamic-color toggle is meaningful on this device. */
+    val dynamicColorAvailable: Boolean = false,
+    /** Persisted UI language choice — applied by MainActivity. */
+    val appLanguage: AppLanguage = AppLanguage.System,
 ) {
     val autoRefreshEnabled: Boolean get() = autoRefreshMinutes >= 0
 }
@@ -62,10 +72,25 @@ class SettingsViewModel @Inject constructor(
         },
         reconnectRecommended,
         settings.autoConnectOnLaunch,
-    ) { state, recommended, autoConnect ->
+        settings.themeMode,
+        settings.dynamicColor,
+        settings.appLanguage,
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val state = values[0] as SettingsUiState
+        val recommended = values[1] as Boolean
+        val autoConnect = values[2] as Boolean
+        val themeMode = values[3] as ThemeMode
+        val dynamicColor = values[4] as Boolean
+        val appLanguage = values[5] as AppLanguage
         state.copy(
             reconnectRecommended = recommended,
             autoConnectOnLaunch = autoConnect,
+            themeMode = themeMode,
+            dynamicColor = dynamicColor,
+            appLanguage = appLanguage,
+            dynamicColorAvailable =
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
         )
     }
         .stateIn(
@@ -104,6 +129,21 @@ class SettingsViewModel @Inject constructor(
 
     fun setAutoConnectOnLaunch(enabled: Boolean) {
         viewModelScope.launch { settings.setAutoConnectOnLaunch(enabled) }
+    }
+
+    /** UI-only preference — the running tunnel never needs a rebuild. */
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch { settings.setThemeMode(mode) }
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        viewModelScope.launch { settings.setDynamicColor(enabled) }
+    }
+
+    /** Persisted — MainActivity applies it (LocaleManager on 33+, compat wrap
+     *  below); never touches the VPN session. */
+    fun setAppLanguage(language: AppLanguage) {
+        viewModelScope.launch { settings.setAppLanguage(language) }
     }
 
     /** Routing policy — baked into the config at compile time, so a running
