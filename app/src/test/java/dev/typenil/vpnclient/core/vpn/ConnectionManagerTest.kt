@@ -601,6 +601,47 @@ class ConnectionManagerTest {
         }
 
     @Test
+    fun `a sessionless start failure is published when nothing owns the session`() =
+        testScope.runTest {
+            assertTrue(manager.state.value is VpnConnectionState.Idle)
+
+            manager.onSessionlessStartFailed(VpnError.NoNodeSelected)
+            advanceUntilIdle()
+
+            val state = manager.state.value
+            assertTrue(state is VpnConnectionState.Error)
+            assertEquals(VpnError.NoNodeSelected, (state as VpnConnectionState.Error).error)
+        }
+
+    @Test
+    fun `a sessionless start failure cannot clear a newer connect`() = testScope.runTest {
+        // The user tapped Connect while a restore was still compiling: that
+        // session owns the outcome, so the stale failure must neither clear
+        // its pending session nor publish over its state.
+        manager.connect()
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        val pending = manager.pendingSession
+        assertTrue(pending != null)
+
+        manager.onSessionlessStartFailed(VpnError.NoNodeSelected)
+        advanceUntilIdle()
+
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        assertEquals(pending, manager.pendingSession)
+    }
+
+    @Test
+    fun `a sessionless start failure cannot clobber a live session`() = testScope.runTest {
+        connectToRunning()
+
+        manager.onSessionlessStartFailed(VpnError.NoNodeSelected)
+        advanceUntilIdle()
+
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
     fun `rebuild callbacks are generation-guarded`() = testScope.runTest {
         val generation = connectToRunning()
         manager.onTunnelRebuildStarted()

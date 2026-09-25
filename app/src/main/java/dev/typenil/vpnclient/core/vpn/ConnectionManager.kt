@@ -834,6 +834,35 @@ class ConnectionManager @Inject constructor(
         publish(VpnConnectionState.Error(error, sessionNode))
     }
 
+    /**
+     * A service-driven start (process-death restore, always-on, boot) failed
+     * before it could adopt a session. [onServiceFailed] can't express this:
+     * there is no generation to match, and "no engine attached" is not proof
+     * that the service still owns the user's intent — a `connect()` that
+     * landed while the config was compiling has a pending session of its own,
+     * and a stale restore must neither clear it nor publish over its state.
+     *
+     * The ownership test and the publish share the lock `connect()` takes, so
+     * they can't interleave with a newer session starting.
+     */
+    fun onSessionlessStartFailed(error: VpnError) {
+        scope.launch {
+            mutex.withLock {
+                if (pendingSession != null) return@withLock
+                when (_state.value) {
+                    VpnConnectionState.Idle,
+                    is VpnConnectionState.Error,
+                    -> Unit
+                    // A session owns the state — this failure belongs to a
+                    // start nobody is waiting on any more.
+                    else -> return@withLock
+                }
+                clearSessionObservations()
+                publish(VpnConnectionState.Error(error, null))
+            }
+        }
+    }
+
     fun onServiceStopped(generation: Long) {
         if (!isCurrent(generation)) return
         failureResetJob?.cancel()

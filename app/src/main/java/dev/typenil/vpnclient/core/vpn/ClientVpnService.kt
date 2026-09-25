@@ -570,18 +570,35 @@ class ClientVpnService : VpnService(), EnginePlatform {
             // silent stop this used to be.
             val config =
                 effective?.config
-                    ?: when (val outcome = configProvider.compileOutcome()) {
-                        is CompileOutcome.Ready -> outcome.config
-                        CompileOutcome.NoNodes -> {
-                            // Genuinely nothing enabled — the user must pick a
-                            // server; that is a state, not a defect.
-                            failStart(VpnError.NoNodeSelected)
-                            return@launch
-                        }
-                        is CompileOutcome.Failed -> {
-                            // A config the engine refused is not "no servers".
-                            failStart(engineFailure(outcome.cause, "config rebuild failed"))
-                            return@launch
+                    ?: run {
+                        val outcome = configProvider.compileOutcome()
+                        // Compiling is slow enough for the user to act in the
+                        // meantime. A connect() that landed since owns the
+                        // service and its config supersedes this attempt —
+                        // checked before the outcome, so a stale failure can
+                        // never clear the newer session or publish over it.
+                        val superseded = connectionManager.pendingSession
+                        if (superseded != null) {
+                            SecureLog.i(TAG, "start superseded by a newer connect")
+                            effective = superseded
+                            superseded.config
+                        } else {
+                            when (outcome) {
+                                is CompileOutcome.Ready -> outcome.config
+                                CompileOutcome.NoNodes -> {
+                                    // Genuinely nothing enabled — the user must
+                                    // pick a server; that is a state, not a
+                                    // defect.
+                                    failStart(VpnError.NoNodeSelected)
+                                    return@launch
+                                }
+                                is CompileOutcome.Failed -> {
+                                    // A config the engine refused is not "no
+                                    // servers".
+                                    failStart(engineFailure(outcome.cause, "config rebuild failed"))
+                                    return@launch
+                                }
+                            }
                         }
                     }
             if (stopRequested || destroyed) {
@@ -597,14 +614,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // may have left a pendingSession still needing a start (its
                 // ACTION_CONNECT was dropped by the in-flight guard). Take it
                 // over instead of dying with it orphaned.
-                effective = connectionManager.pendingSession
-                if (effective == null) {
+                val takeover = connectionManager.pendingSession
+                if (takeover == null) {
                     // A live session owns the service — bail quietly.
                     cleanup()
                     stopSelf()
                     return@launch
                 }
-                generation = effective.generation
+                effective = takeover
+                generation = takeover.generation
             }
             val launchConfig = effective?.config ?: config
             activeGeneration = generation
@@ -899,17 +917,26 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     /**
      * A service-driven start (process-death restore, always-on, boot) produced
-     * no usable config. No session owns the engine yet, so the terminal error
-     * is published directly — a silent stop would leave the user wondering why
-     * the VPN they expect to be running isn't.
+     * no usable config. The user may have acted while the config compiled, so
+     * the intent is re-checked before anything is published: a stop wins over a
+     * stale error, and a newer connect owns the outcome through
+     * [ConnectionManager.onSessionlessStartFailed].
      */
     private suspend fun failStart(error: VpnError) {
+        // A failed read keeps the previous behaviour (report the failure) —
+        // silently swallowing it would be worse than a stale error.
+        val stillWanted =
+            runCatching { settings.desiredVpnRunning.first() }.getOrDefault(true)
+        if (stopRequested || destroyed || !stillWanted) {
+            SecureLog.i(TAG, "start failed after a stop request — converging quietly")
+            cleanup()
+            stopSelf()
+            return
+        }
         SecureLog.w(TAG, "service start failed: ${error.javaClass.simpleName}")
         // Not a transient failure: don't let a boot / always-on restore loop.
         persistSetting { settings.setDesiredVpnRunning(false) }
-        // Generation -1 matches "no engine attached" — the state machine takes
-        // the error without pretending a session existed.
-        connectionManager.onServiceFailed(error, -1L)
+        connectionManager.onSessionlessStartFailed(error)
         cleanup()
         stopSelf()
     }
