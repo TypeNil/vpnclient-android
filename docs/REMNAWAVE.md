@@ -33,7 +33,7 @@ pipeline — nothing Remnawave-specific lives in UI or engine code.
 | `profile-title`             | subscription display name (`base64:`-prefixed values decoded) |
 | `announce`                  | decoded for completeness (`base64:` prefix)    |
 | `profile-web-page-url` / `support-url` | support link                        |
-| `profile-update-interval`   | stored; future auto-refresh cadence (manual refresh only for now) |
+| `profile-update-interval`   | stored; used by WorkManager when provider-following auto-refresh is enabled |
 | `x-hwid-*`                  | device-limit diagnostics                       |
 
 ## Response formats
@@ -42,10 +42,17 @@ Remnawave emits, depending on route/UA/rules: Base64 URI lists, sing-box JSON,
 Xray JSON, Mihomo/Clash YAML. We parse all except Xray JSON (rejected with a
 typed error — the sing-box engine can't consume it; use the sing-box route/UA).
 
-## Caching
+## Refresh scheduling and caching
 
-No ETag/conditional-fetch contract was found upstream. Refresh is manual;
-`profile-update-interval` is recorded for a future scheduler.
+Refresh can be manual or scheduled through WorkManager. The effective interval
+comes from the user's explicit override, or—when following the provider—from
+`profile-update-interval`. If auto-refresh is disabled or neither source gives
+an interval, refresh remains manual. Scheduled work requires network
+connectivity; WorkManager's minimum interval is 15 minutes. Transient network
+and timeout failures receive bounded retries.
+
+The client does not use ETag/Last-Modified conditional requests, so scheduled
+refreshes fetch the subscription normally.
 
 ## Known gaps
 
