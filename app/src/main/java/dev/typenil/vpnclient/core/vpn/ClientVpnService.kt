@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -235,10 +236,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // drop(1): the initial snapshot isn't a change. distinctUntilChanged:
         // unrelated settings writes re-emit the DataStore flow with equal
         // values. debounce: a toggle burst collapses into one rebuild.
+        // A rebuild triggered while a session is starting must not apply to
+        // the half-built TUN — the filter drops emissions that arrive before
+        // Connected is published (e.g. the onStart migration read landing
+        // mid-launch); rebuildPending only parks *user* policy changes that
+        // arrive while already Connected→Reconnecting.
         scope.launch {
             settings.perAppPolicy
                 .drop(1)
                 .distinctUntilChanged()
+                // The onStart migration edit re-emits an identical snapshot
+                // on every service start — before Connected exists, it's a
+                // startup echo, not a user policy change. rebuildPending
+                // only parks a *user* change that lands while Connected →
+                // Reconnecting, so gating on Connected keeps that semantic.
+                .filter { connectionManager.state.value is VpnConnectionState.Connected }
                 .debounce(PER_APP_REBUILD_DEBOUNCE_MS)
                 .collect { requestTunnelRebuild() }
         }

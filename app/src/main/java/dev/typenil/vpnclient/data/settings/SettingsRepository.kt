@@ -154,14 +154,18 @@ class SettingsRepository @Inject constructor(
      * legacy key is always removed. After one pass this is a no-op.
      */
     private suspend fun migratePerAppModeIfNeeded() {
+        // Skip the edit entirely when nothing needs migrating — even a
+        // no-op edit emits a new Preferences instance downstream (the
+        // perAppPolicy debounce-rebuild in ClientVpnService would see it
+        // as a policy change and re-establish the live TUN on every
+        // service start).
+        if (context.settingsStore.data.first()[Keys.PER_APP_MODE] == null) return
         context.settingsStore.edit { prefs ->
             val target = migratedPerAppModeKey(
                 legacyOrdinal = prefs[Keys.PER_APP_MODE],
                 currentKey = prefs[Keys.PER_APP_MODE_V2],
             )
             if (target != null) prefs[Keys.PER_APP_MODE_V2] = target
-            // Skip the write entirely when nothing needed migrating — even
-            // a no-op edit emits a new Preferences instance downstream.
             if (prefs.contains(Keys.PER_APP_MODE)) prefs.remove(Keys.PER_APP_MODE)
         }
     }
