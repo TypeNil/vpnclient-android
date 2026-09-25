@@ -12,13 +12,13 @@ import dev.typenil.vpnclient.core.vpn.UnderlyingTransport
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
-import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class HomeUiState(
     /** The real connection state machine — rendered as-is, never invented. */
@@ -75,146 +75,158 @@ data class SessionDetails(
 )
 
 @HiltViewModel
-class HomeViewModel @Inject constructor(
-    private val connectionManager: ConnectionManager,
-    nodeDao: NodeDao,
-    private val settings: SettingsRepository,
-    subscriptions: SubscriptionRepository,
-) : ViewModel() {
+class HomeViewModel
+    @Inject
+    constructor(
+        private val connectionManager: ConnectionManager,
+        nodeDao: NodeDao,
+        private val settings: SettingsRepository,
+        subscriptions: SubscriptionRepository,
+    ) : ViewModel() {
+        /** The last terminal error the state machine published this process —
+         *  the cheapest honest source for the sheet's "last error" row. */
+        private val lastErrorMessage = MutableStateFlow<String?>(null)
 
-    /** The last terminal error the state machine published this process —
-     *  the cheapest honest source for the sheet's "last error" row. */
-    private val lastErrorMessage = MutableStateFlow<String?>(null)
-
-    init {
-        viewModelScope.launch {
-            connectionManager.state.collect { state ->
-                if (state is VpnConnectionState.Error) {
-                    lastErrorMessage.value = state.error.message
+        init {
+            viewModelScope.launch {
+                connectionManager.state.collect { state ->
+                    if (state is VpnConnectionState.Error) {
+                        lastErrorMessage.value = state.error.message
+                    }
                 }
             }
         }
-    }
 
-    val uiState: StateFlow<HomeUiState> = combine(
-        connectionManager.state,
-        settings.selectedNodeId,
-        nodeDao.observeEnabled(),
-        subscriptions.profiles,
-        settings.restartGuardTripped,
-        connectionManager.groups,
-        settings.perAppPolicy,
-        settings.routeMode,
-        connectionManager.underlyingTransport,
-        lastErrorMessage,
-    ) { values ->
-        val connection = values[0] as VpnConnectionState
-        val selectedId = values[1] as String?
-        @Suppress("UNCHECKED_CAST")
-        val nodes = values[2] as List<dev.typenil.vpnclient.data.db.NodeEntity>
-        @Suppress("UNCHECKED_CAST")
-        val profiles = values[3] as List<dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile>
-        val guardTripped = values[4] as Boolean
-        @Suppress("UNCHECKED_CAST")
-        val groups = values[5] as List<dev.typenil.vpnclient.core.engine.OutboundGroupInfo>
-        @Suppress("UNCHECKED_CAST")
-        val perAppPolicy = values[6] as Pair<PerAppMode, Set<String>>
-        val perAppMode = perAppPolicy.first
-        val perAppPackages = perAppPolicy.second
-        val routeMode = values[7] as RouteMode
-        val underlay = values[8] as UnderlyingTransport
-        val lastError = values[9] as String?
+        val uiState: StateFlow<HomeUiState> =
+            combine(
+                connectionManager.state,
+                settings.selectedNodeId,
+                nodeDao.observeEnabled(),
+                subscriptions.profiles,
+                settings.restartGuardTripped,
+                connectionManager.groups,
+                settings.perAppPolicy,
+                settings.routeMode,
+                connectionManager.underlyingTransport,
+                lastErrorMessage,
+            ) { values ->
+                val connection = values[0] as VpnConnectionState
+                val selectedId = values[1] as String?
 
-        val selected = nodes.firstOrNull { it.id == selectedId }
-        val auto = selectedId == NodeSelection.AUTO_ID
-        val subscriptionNames = profiles.associate { it.id to it.name }
-        HomeUiState(
-            connection = connection,
-            // The Auto pick resolves to a node only at the engine — while
-            // disconnected (or during a session) the label stands alone.
-            selectedNodeName = selected?.name ?: if (auto) "Auto · Fastest" else null,
-            selectedNodeProtocol = selected?.protocol,
-            selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
-            autoSelected = auto,
-            noNodesAtAll = nodes.isEmpty(),
-            serverOptions = if (nodes.isEmpty()) {
-                emptyList()
-            } else {
-                buildList {
-                    add(
-                        ServerOption(
-                            id = NodeSelection.AUTO_ID,
-                            title = "Auto · Fastest",
-                            subtitle = "Latency-tested pick",
-                        ),
-                    )
-                    nodes.forEach { node ->
-                        add(
-                            ServerOption(
-                                id = node.id,
-                                title = node.name,
-                                subtitle = listOfNotNull(
-                                    node.protocol,
-                                    subscriptionNames[node.subscriptionId],
-                                ).joinToString(" · "),
-                            ),
-                        )
-                    }
-                }
-            },
-            selectedOptionId = selectedId,
-            subscriptionName = profiles.firstOrNull { it.enabled }?.name,
-            restartGuardTripped = guardTripped,
-            // The sheet is real-state only: it exists only while Connected —
-            // outside that there is no session to describe.
-            sessionDetails = if (connection is VpnConnectionState.Connected) {
-                SessionDetails(
-                    // The engine's selector group reports what actually
-                    // egresses — the session node label can lag a live
-                    // switch, so the group's selected tag is authoritative.
-                    // The tag itself is a raw outbound id (hash) — resolve
-                    // it to the node's name; "auto" means the urltest group
-                    // is the egress (Auto · Fastest), a member tag resolves
-                    // through the node table.
-                    activeOutbound = groups.firstOrNull { it.selectable }?.selected
-                        ?.let { tag ->
-                            when {
-                                tag == NodeSelection.AUTO_ID -> "Auto · Fastest"
-                                else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
+                @Suppress("UNCHECKED_CAST")
+                val nodes = values[2] as List<dev.typenil.vpnclient.data.db.NodeEntity>
+
+                @Suppress("UNCHECKED_CAST")
+                val profiles = values[3] as List<dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile>
+                val guardTripped = values[4] as Boolean
+
+                @Suppress("UNCHECKED_CAST")
+                val groups = values[5] as List<dev.typenil.vpnclient.core.engine.OutboundGroupInfo>
+
+                @Suppress("UNCHECKED_CAST")
+                val perAppPolicy = values[6] as Pair<PerAppMode, Set<String>>
+                val perAppMode = perAppPolicy.first
+                val perAppPackages = perAppPolicy.second
+                val routeMode = values[7] as RouteMode
+                val underlay = values[8] as UnderlyingTransport
+                val lastError = values[9] as String?
+
+                val selected = nodes.firstOrNull { it.id == selectedId }
+                val auto = selectedId == NodeSelection.AUTO_ID
+                val subscriptionNames = profiles.associate { it.id to it.name }
+                HomeUiState(
+                    connection = connection,
+                    // The Auto pick resolves to a node only at the engine — while
+                    // disconnected (or during a session) the label stands alone.
+                    selectedNodeName = selected?.name ?: if (auto) "Auto · Fastest" else null,
+                    selectedNodeProtocol = selected?.protocol,
+                    selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
+                    autoSelected = auto,
+                    noNodesAtAll = nodes.isEmpty(),
+                    serverOptions =
+                        if (nodes.isEmpty()) {
+                            emptyList()
+                        } else {
+                            buildList {
+                                add(
+                                    ServerOption(
+                                        id = NodeSelection.AUTO_ID,
+                                        title = "Auto · Fastest",
+                                        subtitle = "Latency-tested pick",
+                                    ),
+                                )
+                                nodes.forEach { node ->
+                                    add(
+                                        ServerOption(
+                                            id = node.id,
+                                            title = node.name,
+                                            subtitle =
+                                                listOfNotNull(
+                                                    node.protocol,
+                                                    subscriptionNames[node.subscriptionId],
+                                                ).joinToString(" · "),
+                                        ),
+                                    )
+                                }
                             }
                         },
-                    routeMode = routeMode,
-                    perAppMode = perAppMode,
-                    perAppPackageCount = perAppPackages.size,
-                    underlay = underlay,
-                    lastError = lastError,
+                    selectedOptionId = selectedId,
+                    subscriptionName = profiles.firstOrNull { it.enabled }?.name,
+                    restartGuardTripped = guardTripped,
+                    // The sheet is real-state only: it exists only while Connected —
+                    // outside that there is no session to describe.
+                    sessionDetails =
+                        if (connection is VpnConnectionState.Connected) {
+                            SessionDetails(
+                                // The engine's selector group reports what actually
+                                // egresses — the session node label can lag a live
+                                // switch, so the group's selected tag is authoritative.
+                                // The tag itself is a raw outbound id (hash) — resolve
+                                // it to the node's name; "auto" means the urltest group
+                                // is the egress (Auto · Fastest), a member tag resolves
+                                // through the node table.
+                                activeOutbound =
+                                    groups
+                                        .firstOrNull { it.selectable }
+                                        ?.selected
+                                        ?.let { tag ->
+                                            when {
+                                                tag == NodeSelection.AUTO_ID -> "Auto · Fastest"
+                                                else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
+                                            }
+                                        },
+                                routeMode = routeMode,
+                                perAppMode = perAppMode,
+                                perAppPackageCount = perAppPackages.size,
+                                underlay = underlay,
+                                lastError = lastError,
+                            )
+                        } else {
+                            null
+                        },
                 )
-            } else {
-                null
-            },
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        // Seed with the live state — Idle would flash "Disconnected" for a
-        // frame on a connected session before combine's first emission.
-        initialValue = HomeUiState(connection = connectionManager.state.value),
-    )
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                // Seed with the live state — Idle would flash "Disconnected" for a
+                // frame on a connected session before combine's first emission.
+                initialValue = HomeUiState(connection = connectionManager.state.value),
+            )
 
-    /** Persist a pick from the sheet — the same `selected_node_id` slot
-     *  Servers writes; ConnectionManager reconciles a live engine with it. */
-    fun selectServer(id: String) {
-        viewModelScope.launch { settings.setSelectedNodeId(id) }
-    }
+        /** Persist a pick from the sheet — the same `selected_node_id` slot
+         *  Servers writes; ConnectionManager reconciles a live engine with it. */
+        fun selectServer(id: String) {
+            viewModelScope.launch { settings.setSelectedNodeId(id) }
+        }
 
-    fun connect() = connectionManager.connect()
+        fun connect() = connectionManager.connect()
 
-    fun disconnect() = connectionManager.disconnect()
+        fun disconnect() = connectionManager.disconnect()
 
-    /** Explicit dismiss — connecting again also clears it via the reset. */
-    fun dismissRestartGuardWarning() {
-        viewModelScope.launch {
-            runCatching { settings.setRestartGuardTripped(false) }
+        /** Explicit dismiss — connecting again also clears it via the reset. */
+        fun dismissRestartGuardWarning() {
+            viewModelScope.launch {
+                runCatching { settings.setRestartGuardTripped(false) }
+            }
         }
     }
-}

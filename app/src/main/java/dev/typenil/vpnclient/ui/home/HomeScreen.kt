@@ -55,9 +55,10 @@ fun HomeScreen(
     val connection = ui.connection
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+        modifier =
+            modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         ui.subscriptionName?.let {
@@ -73,11 +74,12 @@ fun HomeScreen(
         Text(
             text = statusText(connection),
             style = MaterialTheme.typography.headlineMedium,
-            color = when (connection) {
-                is VpnConnectionState.Connected -> MaterialTheme.colorScheme.primary
-                is VpnConnectionState.Error -> MaterialTheme.colorScheme.error
-                else -> MaterialTheme.colorScheme.onSurface
-            },
+            color =
+                when (connection) {
+                    is VpnConnectionState.Connected -> MaterialTheme.colorScheme.primary
+                    is VpnConnectionState.Error -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
             textAlign = TextAlign.Center,
         )
 
@@ -140,29 +142,30 @@ fun HomeScreen(
     }
 }
 
-private fun statusText(state: VpnConnectionState): String = when (state) {
-    VpnConnectionState.Idle -> "Disconnected"
-    is VpnConnectionState.Preparing -> "Preparing…"
-    VpnConnectionState.PermissionRequired -> "Awaiting VPN permission…"
-    is VpnConnectionState.Connecting -> "Connecting…"
-    is VpnConnectionState.Connected -> "Connected"
-    is VpnConnectionState.Reconnecting -> "Reconnecting… (attempt ${state.attempt})"
-    VpnConnectionState.Stopping -> "Disconnecting…"
-    is VpnConnectionState.Error -> "Connection failed"
-}
+private fun statusText(state: VpnConnectionState): String =
+    when (state) {
+        VpnConnectionState.Idle -> "Disconnected"
+        is VpnConnectionState.Preparing -> "Preparing…"
+        VpnConnectionState.PermissionRequired -> "Awaiting VPN permission…"
+        is VpnConnectionState.Connecting -> "Connecting…"
+        is VpnConnectionState.Connected -> "Connected"
+        is VpnConnectionState.Reconnecting -> "Reconnecting… (attempt ${state.attempt})"
+        VpnConnectionState.Stopping -> "Disconnecting…"
+        is VpnConnectionState.Error -> "Connection failed"
+    }
 
-private fun errorText(error: VpnError): String = when (error) {
-    VpnError.PermissionDenied -> "VPN permission denied"
-    VpnError.PermissionRevoked -> "VPN permission was revoked"
-    VpnError.NoNodeSelected -> "No server selected — pick one in Servers"
-    is VpnError.ConfigInvalid -> "Invalid configuration: ${error.detail}"
-    is VpnError.EngineFailed -> "VPN core failed: ${error.detail}"
-    is VpnError.TunnelFailed -> "Tunnel failed: ${error.detail}"
-    is VpnError.Unexpected -> error.detail
-}
+private fun errorText(error: VpnError): String =
+    when (error) {
+        VpnError.PermissionDenied -> "VPN permission denied"
+        VpnError.PermissionRevoked -> "VPN permission was revoked"
+        VpnError.NoNodeSelected -> "No server selected — pick one in Servers"
+        is VpnError.ConfigInvalid -> "Invalid configuration: ${error.detail}"
+        is VpnError.EngineFailed -> "VPN core failed: ${error.detail}"
+        is VpnError.TunnelFailed -> "Tunnel failed: ${error.detail}"
+        is VpnError.Unexpected -> error.detail
+    }
 
-private fun protocolLabel(protocol: String): String =
-    runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol
+private fun protocolLabel(protocol: String): String = runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol
 
 /** Tap opens the quick-pick sheet — but only when there is something to
  *  pick: with no nodes the card is an add prompt, not a picker. */
@@ -184,27 +187,32 @@ private fun NodeCard(
             protocol = state.node.protocol.label
             server = state.node.server
         }
+
         is VpnConnectionState.Connecting -> {
             name = state.node.name
             protocol = state.node.protocol.label
             server = state.node.server
         }
+
         is VpnConnectionState.Reconnecting -> {
             name = state.node.name
             protocol = state.node.protocol.label
             server = state.node.server
         }
+
         is VpnConnectionState.Preparing -> {
             name = state.node.name
             protocol = state.node.protocol.label
             server = state.node.server
         }
+
         is VpnConnectionState.Error -> {
             name = state.node?.name ?: ui.selectedNodeName
             protocol = state.node?.protocol?.label
                 ?: ui.selectedNodeProtocol?.let(::protocolLabel)
             server = state.node?.server ?: ui.selectedNodeServer
         }
+
         else -> {
             name = ui.selectedNodeName
             protocol = ui.selectedNodeProtocol?.let(::protocolLabel)
@@ -214,11 +222,12 @@ private fun NodeCard(
 
     val pickable = ui.serverOptions.isNotEmpty()
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (pickable) Modifier.clickable(onClick = onPick) else Modifier,
-            ),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .then(
+                    if (pickable) Modifier.clickable(onClick = onPick) else Modifier,
+                ),
     ) {
         Column(Modifier.padding(16.dp)) {
             // First-run context: no node rows at all — a "No server
@@ -285,10 +294,11 @@ private fun ServerPickerSheet(
             )
             options.forEach { option ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onPick(option.id) }
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(option.id) }
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -327,9 +337,10 @@ private fun ErrorCard(error: VpnError) {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+            ),
     ) {
         Row(
             modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
@@ -354,9 +365,10 @@ private fun RestartGuardCard(onDismiss: () -> Unit) {
     // even when notifications are denied, until dismissed or a new connect.
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+            ),
     ) {
         Row(
             modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
@@ -389,9 +401,10 @@ private fun StatsCard(
                 label = "Connections",
                 value = "${stats.connectionsIn} in / ${stats.connectionsOut} out",
                 // clickable before padding — the padded area stays tappable.
-                modifier = Modifier
-                    .clickable(onClick = onOpenConnections)
-                    .padding(vertical = 4.dp),
+                modifier =
+                    Modifier
+                        .clickable(onClick = onOpenConnections)
+                        .padding(vertical = 4.dp),
                 trailing = {
                     Icon(
                         Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -403,9 +416,10 @@ private fun StatsCard(
             StatRow(
                 label = "Session details",
                 value = "",
-                modifier = Modifier
-                    .clickable(onClick = onOpenDetails)
-                    .padding(vertical = 4.dp),
+                modifier =
+                    Modifier
+                        .clickable(onClick = onOpenDetails)
+                        .padding(vertical = 4.dp),
                 trailing = {
                     Icon(
                         Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -418,20 +432,28 @@ private fun StatsCard(
     }
 }
 
-private fun routeModeSummary(mode: RouteMode): String = when (mode) {
-    RouteMode.ALL -> "Proxy everything"
-    RouteMode.BYPASS_RU -> "Bypass Russian resources"
-    RouteMode.PROXY_BLOCKED -> "Only blocked services"
-}
+private fun routeModeSummary(mode: RouteMode): String =
+    when (mode) {
+        RouteMode.ALL -> "Proxy everything"
+        RouteMode.BYPASS_RU -> "Bypass Russian resources"
+        RouteMode.PROXY_BLOCKED -> "Only blocked services"
+    }
 
-private fun perAppSummary(mode: PerAppMode, count: Int): String = when (mode) {
-    PerAppMode.ALL -> "All apps"
-    PerAppMode.INCLUDE -> "Include $count app${if (count == 1) "" else "s"}"
-    PerAppMode.EXCLUDE -> "Exclude $count app${if (count == 1) "" else "s"}"
-}
+private fun perAppSummary(
+    mode: PerAppMode,
+    count: Int,
+): String =
+    when (mode) {
+        PerAppMode.ALL -> "All apps"
+        PerAppMode.INCLUDE -> "Include $count app${if (count == 1) "" else "s"}"
+        PerAppMode.EXCLUDE -> "Exclude $count app${if (count == 1) "" else "s"}"
+    }
 
 /** Elapsed since Connected — whole units, no fake precision. */
-private fun uptimeText(since: Instant, now: Instant = Instant.now()): String {
+private fun uptimeText(
+    since: Instant,
+    now: Instant = Instant.now(),
+): String {
     val seconds = Duration.between(since, now).seconds.coerceAtLeast(0)
     val h = seconds / 3600
     val m = (seconds % 3600) / 60
@@ -494,7 +516,10 @@ private fun SessionDetailsSheet(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(
+    label: String,
+    value: String,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = label,
@@ -551,11 +576,13 @@ private fun ConnectButton(
             enabled = true
             action = onDisconnect
         }
+
         VpnConnectionState.Stopping -> {
             label = "Disconnecting…"
             enabled = false
             action = {}
         }
+
         is VpnConnectionState.Preparing,
         VpnConnectionState.PermissionRequired,
         is VpnConnectionState.Connecting,
@@ -564,6 +591,7 @@ private fun ConnectButton(
             enabled = false
             action = {}
         }
+
         VpnConnectionState.Idle,
         is VpnConnectionState.Error,
         -> {
@@ -576,9 +604,10 @@ private fun ConnectButton(
     Button(
         onClick = action,
         enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp),
     ) {
         Text(label, style = MaterialTheme.typography.titleMedium)
     }
