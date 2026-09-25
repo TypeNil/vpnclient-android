@@ -160,7 +160,9 @@ class SettingsRepository @Inject constructor(
                 currentKey = prefs[Keys.PER_APP_MODE_V2],
             )
             if (target != null) prefs[Keys.PER_APP_MODE_V2] = target
-            prefs.remove(Keys.PER_APP_MODE)
+            // Skip the write entirely when nothing needed migrating — even
+            // a no-op edit emits a new Preferences instance downstream.
+            if (prefs.contains(Keys.PER_APP_MODE)) prefs.remove(Keys.PER_APP_MODE)
         }
     }
 

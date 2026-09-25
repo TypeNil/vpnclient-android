@@ -855,7 +855,8 @@ class ConnectionManager @Inject constructor(
         if (generation < 0) engine == null else generation == sessionGeneration
 
     private fun publish(next: VpnConnectionState) {
-        SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}")
+        val reason = (next as? VpnConnectionState.Reconnecting)?.reason?.name?.let { "($it)" } ?: ""
+        SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}$reason")
         _state.value = next
     }
 
