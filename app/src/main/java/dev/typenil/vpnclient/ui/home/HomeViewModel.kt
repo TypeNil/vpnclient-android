@@ -59,8 +59,9 @@ data class ServerOption(
 /** Sheet payload — assembled per state emission so it stays in lockstep
  *  with the connection state machine. */
 data class SessionDetails(
-    /** Selector group's current pick — what the tunnel actually egresses
-     *  through (can differ from the session node after a live switch). */
+    /** Selector group's current pick, resolved to the display label —
+     *  the group's `selected` is a raw outbound tag (node id hash or
+     *  "auto"), which the UI must not render. */
     val activeOutbound: String?,
     val routeMode: RouteMode,
     val perAppMode: PerAppMode,
@@ -171,7 +172,17 @@ class HomeViewModel @Inject constructor(
                     // The engine's selector group reports what actually
                     // egresses — the session node label can lag a live
                     // switch, so the group's selected tag is authoritative.
-                    activeOutbound = groups.firstOrNull { it.selectable }?.selected,
+                    // The tag itself is a raw outbound id (hash) — resolve
+                    // it to the node's name; "auto" means the urltest group
+                    // is the egress (Auto · Fastest), a member tag resolves
+                    // through the node table.
+                    activeOutbound = groups.firstOrNull { it.selectable }?.selected
+                        ?.let { tag ->
+                            when {
+                                tag == NodeSelection.AUTO_ID -> "Auto · Fastest"
+                                else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
+                            }
+                        },
                     routeMode = routeMode,
                     perAppMode = perAppMode,
                     perAppPackageCount = perAppPackages.size,
