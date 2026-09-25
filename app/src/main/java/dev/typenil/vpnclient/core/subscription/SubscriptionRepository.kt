@@ -14,6 +14,7 @@ import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -142,6 +143,7 @@ class SubscriptionRepository
             refreshMutex.withLock {
                 var subId: Long? = null
                 var createdRow = false
+                var committed = false
                 try {
                     subId = subscriptionDao.findIdByUrl(MANUAL_SUBSCRIPTION_URL)
                     if (subId == null) {
@@ -178,6 +180,7 @@ class SubscriptionRepository
                             node.toEntity(subId, basePosition + index)
                         }
                     transactions.run { nodeDao.upsertAll(entities) }
+                    committed = true
                     SecureLog.i(TAG, "share-link imported sub=$subId nodes=${entities.size}")
                     Result.success(
                         RefreshOutcome(nodeCount = entities.size, skipped = parsed.skipped),
@@ -186,13 +189,19 @@ class SubscriptionRepository
                     throw e
                 } catch (e: SubscriptionError) {
                     SecureLog.w(TAG, "share-link import failed: ${e.safeMessage()}")
-                    dropEmptyManualRow(subId, createdRow)
                     Result.failure(e)
                 } catch (e: Exception) {
                     // e.message can embed the pasted URI — log the type only.
                     SecureLog.w(TAG, "share-link import failed: ${e.javaClass.simpleName}", e)
-                    dropEmptyManualRow(subId, createdRow)
                     Result.failure(SubscriptionError.ParseFailed(e.javaClass.simpleName))
+                } finally {
+                    // In `finally` so the cancellation path is covered too —
+                    // an aborted first import must not leave an empty
+                    // "Manual servers" row behind. NonCancellable: the write
+                    // has to outlive the cancelled caller.
+                    if (!committed) {
+                        withContext(NonCancellable) { dropEmptyManualRow(subId, createdRow) }
+                    }
                 }
             }
 

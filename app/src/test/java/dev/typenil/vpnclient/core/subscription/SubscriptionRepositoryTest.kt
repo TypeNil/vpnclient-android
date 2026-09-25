@@ -9,9 +9,13 @@ import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -156,10 +160,16 @@ class SubscriptionRepositoryTest {
         var failure: EngineError? = null
         var calls = 0
         var replaceCallsAtValidate = -1
+
+        /** Suspends validation until completed — lets a test cancel the
+         *  import mid-flight, between the row insert and the node commit. */
+        var gate: CompletableDeferred<Unit>? = null
+
         override suspend fun validate(nodes: List<ProxyNode>) {
             calls++
             // Ordering contract: validation must happen before any DB write.
             replaceCallsAtValidate = nodeDao.replaceCalls
+            gate?.await()
             failure?.let { throw it }
         }
     }
@@ -805,6 +815,48 @@ class SubscriptionRepositoryTest {
         val result = repository.importShareLink(uri("b.example.com", "B"))
 
         assertTrue(result.isFailure)
+        assertEquals(1, subscriptionDao.subs.size)
+        assertEquals(1, nodeDao.forSubscription(manualSubId()).size)
+    }
+
+    @Test
+    fun `a cancelled first import leaves no empty manual row`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        validator.gate = gate
+
+        val job = launch { repository.importShareLink(uri("a.example.com", "A")) }
+        // The parse runs on Dispatchers.Default and the row insert precedes
+        // validation — pump until the import is parked inside validate().
+        val deadline = System.currentTimeMillis() + 5_000
+        while (validator.calls == 0 && System.currentTimeMillis() < deadline) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+        }
+        assertEquals(1, validator.calls)
+        assertEquals(1, subscriptionDao.subs.size)
+
+        job.cancelAndJoin()
+
+        // Cleanup runs on the cancellation path too (NonCancellable in
+        // `finally`) — an aborted first import must not leave the row behind.
+        assertTrue(subscriptionDao.subs.isEmpty())
+        assertTrue(nodeDao.nodes.isEmpty())
+    }
+
+    @Test
+    fun `a cancelled import keeps the existing manual row and its nodes`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val gate = CompletableDeferred<Unit>()
+        validator.gate = gate
+
+        val job = launch { repository.importShareLink(uri("b.example.com", "B")) }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (validator.calls == 0 && System.currentTimeMillis() < deadline) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+        }
+        job.cancelAndJoin()
+
         assertEquals(1, subscriptionDao.subs.size)
         assertEquals(1, nodeDao.forSubscription(manualSubId()).size)
     }
