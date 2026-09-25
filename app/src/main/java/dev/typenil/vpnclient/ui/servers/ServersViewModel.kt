@@ -42,15 +42,20 @@ data class SubscriptionFilterOption(
 enum class ServerSortMode { Default, Latency, Name }
 
 /** Resolved per-node user-facing state — the node row plus its persisted
- *  preferences (missing row = all defaults). [customName]/[isHidden] exist
- *  in storage already; this slice only consumes [favorite]. */
+ *  preferences (missing row = all defaults). [customName]/[isHidden] are
+ *  consumed for display + management; [isEnabled] gates VPN membership. */
 data class ServerNode(
     val entity: NodeEntity,
     val favorite: Boolean,
+    val enabled: Boolean = true,
+    val hidden: Boolean = false,
+    val customName: String? = null,
 )
 
 val ServerNode.id: String get() = entity.id
-val ServerNode.name: String get() = entity.name
+/** Display name — the local override wins over the provider label. */
+val ServerNode.name: String get() = customName?.takeIf { it.isNotBlank() } ?: entity.name
+val ServerNode.providerName: String get() = entity.name
 val ServerNode.protocol: String get() = entity.protocol
 val ServerNode.server: String get() = entity.server
 val ServerNode.subscriptionId: Long get() = entity.subscriptionId
@@ -130,7 +135,7 @@ class ServersViewModel
         private val nodeDao: NodeDao,
         private val nodePreferenceDao: NodePreferenceDao,
         private val latencyProbe: LatencyProbe,
-        subscriptions: SubscriptionRepository,
+        private val subscriptions: SubscriptionRepository,
     ) : ViewModel() {
         /** Direct TCP probe results — populated when testing while disconnected. */
         private val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
@@ -198,9 +203,13 @@ class ServersViewModel
                 NodeSurface(
                     nodes =
                         nodes.map { entity ->
+                            val pref = prefById[entity.id]
                             ServerNode(
                                 entity = entity,
-                                favorite = prefById[entity.id]?.isFavorite == true,
+                                favorite = pref?.isFavorite == true,
+                                enabled = pref?.isEnabled ?: true,
+                                hidden = pref?.isHidden == true,
+                                customName = pref?.customName,
                             )
                         },
                     subscriptionNames = profiles.associate { it.id to it.name },
@@ -370,12 +379,43 @@ class ServersViewModel
 
         /**
          * Star/unstar a node — writes only the prefs row; the node row itself
-         * is subscription-owned and rewritten on every refresh.
+         * is subscription-owned and rewritten on every refresh. Routed
+         * through the repository so the write is serialized against a
+         * refresh commit.
          */
         fun toggleFavorite(nodeId: String) {
             viewModelScope.launch {
                 val current = nodePreferenceDao.get(nodeId)?.isFavorite == true
-                nodePreferenceDao.setFavorite(nodeId, !current)
+                subscriptions.setNodeFavorite(nodeId, !current)
+            }
+        }
+
+        /** Enable/disable VPN membership — disabling the selected node falls
+         *  the selection back inside the repository (conditional, so a
+         *  concurrent user pick isn't wiped). */
+        fun setNodeEnabled(
+            nodeId: String,
+            enabled: Boolean,
+        ) {
+            viewModelScope.launch { subscriptions.setNodeEnabled(nodeId, enabled) }
+        }
+
+        /** Presentation-only hide — the node stays usable for routing but
+         *  leaves user lists (favorites/search). */
+        fun setNodeHidden(
+            nodeId: String,
+            hidden: Boolean,
+        ) {
+            viewModelScope.launch { subscriptions.setNodeHidden(nodeId, hidden) }
+        }
+
+        /** Local display name — blank clears back to the provider name. */
+        fun setNodeCustomName(
+            nodeId: String,
+            customName: String?,
+        ) {
+            viewModelScope.launch {
+                subscriptions.setNodeCustomName(nodeId, customName?.takeIf { it.isNotBlank() })
             }
         }
 

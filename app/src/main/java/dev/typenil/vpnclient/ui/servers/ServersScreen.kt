@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -274,6 +276,9 @@ fun ServersScreen(
                     tested = node.id in ui.testedNodeIds,
                     onClick = { viewModel.selectNode(node.id) },
                     onToggleFavorite = { viewModel.toggleFavorite(node.id) },
+                    onRename = { newName -> viewModel.setNodeCustomName(node.id, newName) },
+                    onSetEnabled = { enabled -> viewModel.setNodeEnabled(node.id, enabled) },
+                    onSetHidden = { hidden -> viewModel.setNodeHidden(node.id, hidden) },
                 )
             }
         }
@@ -374,7 +379,12 @@ private fun ServerCard(
     tested: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onRename: (String?) -> Unit,
+    onSetEnabled: (Boolean) -> Unit,
+    onSetHidden: (Boolean) -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -415,6 +425,67 @@ private fun ServerCard(
                         modifier = Modifier.size(18.dp),
                     )
                 }
+                // Per-node management — enable/hide/rename live in prefs and
+                // survive refresh; they never rewrite the subscription row.
+                Box {
+                    IconButton(
+                        onClick = { menuOpen = true },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.servers_node_menu),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.servers_rename)) },
+                            onClick = {
+                                menuOpen = false
+                                showRename = true
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(
+                                        if (node.enabled) {
+                                            R.string.servers_disable
+                                        } else {
+                                            R.string.servers_enable
+                                        },
+                                    ),
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onSetEnabled(!node.enabled)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(
+                                        if (node.hidden) {
+                                            R.string.servers_unhide
+                                        } else {
+                                            R.string.servers_hide
+                                        },
+                                    ),
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onSetHidden(!node.hidden)
+                            },
+                        )
+                    }
+                }
                 if (selected) {
                     Spacer(Modifier.width(4.dp))
                     Icon(
@@ -425,6 +496,15 @@ private fun ServerCard(
                     )
                 }
             }
+            // Disabled dimming is honest state — the card is still there
+            // (the user manages it) but the engine won't pick it.
+            if (!node.enabled) {
+                Text(
+                    stringResource(R.string.servers_disabled_label),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ProtocolBadge(node.protocol)
@@ -432,6 +512,41 @@ private fun ServerCard(
                 LatencyBadge(delayMs = delayMs, tested = tested)
             }
         }
+    }
+    if (showRename) {
+        var text by remember { mutableStateOf(node.customName ?: node.providerName) }
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text(stringResource(R.string.servers_rename_title)) },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    placeholder = { Text(node.providerName) },
+                    supportingText = {
+                        Text(stringResource(R.string.servers_rename_hint))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        // Blank input = "clear the override" → provider name.
+                        onRename(text.trim().ifBlank { null })
+                        showRename = false
+                    },
+                ) {
+                    Text(stringResource(R.string.common_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRename = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 

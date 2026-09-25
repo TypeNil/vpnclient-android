@@ -19,6 +19,7 @@
 
     <!-- Common -->
     <string name="common_cancel">Cancel</string>
+    <string name="common_save">Save</string>
     <string name="common_delete">Delete</string>
     <string name="common_dismiss">Dismiss</string>
     <string name="common_refresh">Refresh</string>
@@ -89,6 +90,15 @@
     <string name="routing_rule_action_proxy">Proxy</string>
     <string name="routing_rule_action_direct">Direct</string>
     <string name="routing_rule_action_block">Block</string>
+    <string name="servers_node_menu">Node options</string>
+    <string name="servers_rename">Rename</string>
+    <string name="servers_rename_title">Node name</string>
+    <string name="servers_rename_hint">Empty resets to the provider name</string>
+    <string name="servers_enable">Enable</string>
+    <string name="servers_disable">Disable</string>
+    <string name="servers_hide">Hide from lists</string>
+    <string name="servers_unhide">Unhide</string>
+    <string name="servers_disabled_label">Disabled — not used for VPN</string>
     <string name="theme_system">System default</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
