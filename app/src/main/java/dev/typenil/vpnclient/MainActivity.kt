@@ -81,29 +81,24 @@ class MainActivity : ComponentActivity() {
                 onImportConsumed = { _importUrl.value = null },
             )
         }
-        // On 33+ LocaleManager is the source of truth — a system-level
-        // change (Android Settings → App info → Language) wins over any
-        // DataStore leftover. We only read DataStore to *propagate* an
-        // in-app pick into LocaleManager; the UI reads the effective value
-        // from the system store, not the pref. Below 33 the SharedPreferences
-        // tag is the only store, so it stays authoritative.
-        lifecycleScope.launch {
-            var first = true
-            settings.appLanguage.collect { language ->
-                if (first) {
-                    first = false
-                    // Skip re-applying when the platform already reflects the
-                    // stored pick — a process start would otherwise recreate
-                    // the just-created activity.
-                    val appliedTag =
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            LocaleSupport.currentSystemTag(this@MainActivity)
-                        } else {
-                            LocaleSupport.storedTag(this@MainActivity)
+        // Below 33 our SharedPreferences tag is the only locale store, so
+        // the DataStore → shared-pref sync keeps the wrap tag current.
+        // On 33+ we don't run this at all: LocaleManager is authoritative
+        // and is written directly by the in-app picker (SettingsViewModel),
+        // while a system-level pick (Android Settings → Language) must not
+        // be clobbered by a stale DataStore value on activity recreation.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            lifecycleScope.launch {
+                var first = true
+                settings.appLanguage.collect { language ->
+                    if (first) {
+                        first = false
+                        if (LocaleSupport.storedTag(this@MainActivity) == language.tag) {
+                            return@collect
                         }
-                    if (appliedTag == language.tag) return@collect
+                    }
+                    syncLanguage(language)
                 }
-                syncLanguage(language)
             }
         }
         // Only on a fresh launch — the launch intent survives recreation, so

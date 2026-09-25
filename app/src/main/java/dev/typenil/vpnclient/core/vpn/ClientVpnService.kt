@@ -28,13 +28,11 @@ import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.TunRequest
-import dev.typenil.vpnclient.data.isGlobalIpv6
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import dev.typenil.vpnclient.core.engine.singbox.isUsableUnderlyingNetwork
+import dev.typenil.vpnclient.data.isGlobalIpv6
 import dev.typenil.vpnclient.data.settings.SettingsRepository
-import java.util.concurrent.ConcurrentHashMap
-import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +49,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
 
 /**
  * The app's [VpnService]. Owns the TUN fd lifecycle and the foreground
@@ -67,26 +67,32 @@ import kotlinx.coroutines.withTimeoutOrNull
  * silently come back.
  */
 @AndroidEntryPoint
-class ClientVpnService : VpnService(), EnginePlatform {
-
+class ClientVpnService :
+    VpnService(),
+    EnginePlatform {
     companion object {
         private const val TAG = "ClientVpnService"
         private const val ACTION_CONNECT = "dev.typenil.vpnclient.action.CONNECT"
         private const val ACTION_DISCONNECT = "dev.typenil.vpnclient.action.DISCONNECT"
+
         /** Boot/update restore — an *automatic* start, counted by the
          *  restart guard (unlike the user's explicit CONNECT). */
         private const val ACTION_RESTORE = "dev.typenil.vpnclient.action.RESTORE"
+
         /** Quiet window before a per-app change triggers a TUN rebuild —
          *  rapid toggle bursts collapse into a single rebuild. */
         private const val PER_APP_REBUILD_DEBOUNCE_MS = 800L
+
         /** Bounded re-runs for changes landing mid-rebuild (dirty flag). */
         private const val MAX_TUNNEL_REBUILDS = 4
+
         /** A Connected session older than this proves the start wasn't a
          *  crash — resets the sticky-restart crash guard. Known hole: a
          *  core that reliably crashes *after* this uptime loops forever
          *  (each cycle self-resets the counter); acceptable because that
          *  scenario degrades to a flaky-but-working tunnel, not a dead loop. */
         private const val RESTART_GUARD_STABLE_MS = 60_000L
+
         /** Bound on a graceful engine stop during teardown — a hung core
          *  must not wedge the state machine; on expiry the service forces
          *  cleanup and reports stopped itself. */
@@ -113,14 +119,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
             activeGeneration >= 0 || startActive || rebuildActive ||
                 stopRequested || autoStartActive
 
-        fun connectIntent(context: Context): Intent =
-            Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
+        fun connectIntent(context: Context): Intent = Intent(context, ClientVpnService::class.java).setAction(ACTION_CONNECT)
 
-        fun disconnectIntent(context: Context): Intent =
-            Intent(context, ClientVpnService::class.java).setAction(ACTION_DISCONNECT)
+        fun disconnectIntent(context: Context): Intent = Intent(context, ClientVpnService::class.java).setAction(ACTION_DISCONNECT)
 
-        fun restoreIntent(context: Context): Intent =
-            Intent(context, ClientVpnService::class.java).setAction(ACTION_RESTORE)
+        fun restoreIntent(context: Context): Intent = Intent(context, ClientVpnService::class.java).setAction(ACTION_RESTORE)
     }
 
     @Inject
@@ -160,23 +163,29 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var underlyingCallback: ConnectivityManager.NetworkCallback? = null
     private var lastUnderlyingNetwork: Network? = null
     private var dozeReceiverRegistered = false
+
     /** Cached settings flags — network callbacks can't suspend to read them. */
     private var reconnectOnChange = true
     private var dozePowerSave = false
+
     /** Engines captured by in-flight teardown coroutines — drained in onDestroy
      *  so a cancelled service scope can't leak a CommandServer. */
     private val pendingTeardown = ConcurrentHashMap.newKeySet<VpnEngine>()
 
     /** Forwards Doze transitions to the engine (opt-in — pause drops TCP). */
-    private val dozeReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (!dozePowerSave) return
-            val pm = context.getSystemService(PowerManager::class.java)
-            val idle = pm.isDeviceIdleMode
-            val activeEngine = engine ?: return
-            scope.launch { activeEngine.onDeviceIdle(idle) }
+    private val dozeReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                if (!dozePowerSave) return
+                val pm = context.getSystemService(PowerManager::class.java)
+                val idle = pm.isDeviceIdleMode
+                val activeEngine = engine ?: return
+                scope.launch { activeEngine.onDeviceIdle(idle) }
+            }
         }
-    }
 
     /**
      * Screen-off suppression (SFA pattern): while the screen is off the
@@ -184,40 +193,54 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * nobody can see. Forwarded unconditionally; the engine no-ops when it
      * has no client yet.
      */
-    private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val on = intent.action == Intent.ACTION_SCREEN_ON
-            val activeEngine = engine ?: return
-            scope.launch { activeEngine.setStatusUpdatesEnabled(on) }
+    private val screenReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                val on = intent.action == Intent.ACTION_SCREEN_ON
+                val activeEngine = engine ?: return
+                scope.launch { activeEngine.setStatusUpdatesEnabled(on) }
+            }
         }
-    }
     private var screenReceiverRegistered = false
+
     /** Session generation this service instance is serving; -1 = none yet. */
     private var activeGeneration: Long = -1L
+
     /** Config the live session was started with — reused by in-session
      *  rebuilds (per-app policy changes re-establish the TUN, they don't
      *  recompile the profile). */
     private var activeConfig: EngineConfig? = null
+
     /** A teardown was requested while a start was still in flight. */
     private var stopRequested = false
+
     /** onDestroy ran — reject new starts on this doomed instance. */
     private var destroyed = false
+
     /** Single-flight guard: only one start coroutine may be in flight. */
     private var startJob: Job? = null
+
     /** Single-flight guard for the automatic (system/boot/restore) start
      *  coroutine — tracked so a newer command can cancel it and a duplicate
      *  automatic start coalesces instead of burning a restart-guard slot. */
     private var autoStartJob: Job? = null
+
     /** Coalesced network-change notification to the engine. Main-thread only —
      *  the ConnectivityManager callback is registered on the main Handler. */
     private var networkNotifyJob: Job? = null
     private var networkDirty = false
+
     /** In-session tunnel rebuild (per-app policy change). Same coalescing
      *  protocol as the network-change path — main-thread confined. */
     private var rebuildJob: Job? = null
     private var rebuildDirty = false
+
     /** Decides whether a node-set change needs a recompile + rebuild. */
     private val nodeSetReconciler = NodeSetReconciler()
+
     /** Ownership bookkeeping for a start attempt — a stale restore must not
      *  clear the desire flag, publish an error, or stop the service under a
      *  connect() the user just made. */
@@ -244,10 +267,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
             },
         )
     }
+
     /** A queued rebuild must recompile the config, not just re-establish the
      *  TUN — set when the change that requested it altered the node set.
      *  Sticky until the rebuild that consumes it. */
     private var rebuildRecompile = false
+
     /** A policy change landed while the session wasn't Connected (e.g.
      *  network-loss Reconnecting — the live TUN would keep the stale plan).
      *  Drained when the session returns to Connected. */
@@ -343,19 +368,20 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 .distinctUntilChanged()
                 .collect { connected ->
                     stabilityJob?.cancel()
-                    stabilityJob = if (connected) {
-                        scope.launch {
-                            delay(RESTART_GUARD_STABLE_MS)
-                            try {
-                                settings.resetVpnRestartAttempts()
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (_: Exception) {
+                    stabilityJob =
+                        if (connected) {
+                            scope.launch {
+                                delay(RESTART_GUARD_STABLE_MS)
+                                try {
+                                    settings.resetVpnRestartAttempts()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                }
                             }
+                        } else {
+                            null
                         }
-                    } else {
-                        null
-                    }
                 }
         }
         // The foreground notification mirrors the live state machine —
@@ -368,40 +394,58 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     // session — Idle/Error teardown paths post nothing.
                     if (activeGeneration < 0) return@map null
                     when (state) {
-                        is VpnConnectionState.Connected -> NotificationSpec(
-                            title = getString(R.string.notification_connected),
-                            text = listOfNotNull(state.node.name, rateText(state.stats))
-                                .joinToString(" · "),
-                            showDisconnect = true,
-                        )
-                        is VpnConnectionState.Reconnecting -> NotificationSpec(
-                            title = getString(R.string.notification_reconnecting),
-                            text = state.node.name,
-                            showDisconnect = true,
-                        )
-                        is VpnConnectionState.Connecting -> NotificationSpec(
-                            title = getString(R.string.notification_connecting),
-                            text = state.node.name,
-                            showDisconnect = true,
-                        )
-                        VpnConnectionState.Stopping -> NotificationSpec(
-                            title = getString(R.string.notification_disconnecting),
-                            text = activeConfig?.node?.name ?: getString(R.string.app_name),
-                            showDisconnect = false,
-                        )
+                        is VpnConnectionState.Connected -> {
+                            NotificationSpec(
+                                title = getString(R.string.notification_connected),
+                                text =
+                                    listOfNotNull(state.node.name, rateText(state.stats))
+                                        .joinToString(" · "),
+                                showDisconnect = true,
+                            )
+                        }
+
+                        is VpnConnectionState.Reconnecting -> {
+                            NotificationSpec(
+                                title = getString(R.string.notification_reconnecting),
+                                text = state.node.name,
+                                showDisconnect = true,
+                            )
+                        }
+
+                        is VpnConnectionState.Connecting -> {
+                            NotificationSpec(
+                                title = getString(R.string.notification_connecting),
+                                text = state.node.name,
+                                showDisconnect = true,
+                            )
+                        }
+
+                        VpnConnectionState.Stopping -> {
+                            NotificationSpec(
+                                title = getString(R.string.notification_disconnecting),
+                                text = activeConfig?.node?.name ?: getString(R.string.app_name),
+                                showDisconnect = false,
+                            )
+                        }
+
                         // e.g. disconnect delivery failed after Stopping —
                         // show the error instead of a stuck "Disconnecting…".
-                        is VpnConnectionState.Error -> NotificationSpec(
-                            title = getString(R.string.notification_error),
-                            text = state.error.message ?: getString(R.string.app_name),
-                            showDisconnect = false,
-                        )
+                        is VpnConnectionState.Error -> {
+                            NotificationSpec(
+                                title = getString(R.string.notification_error),
+                                text = state.error.message ?: getString(R.string.app_name),
+                                showDisconnect = false,
+                            )
+                        }
+
                         VpnConnectionState.Idle,
                         is VpnConnectionState.Preparing,
-                        VpnConnectionState.PermissionRequired -> null
+                        VpnConnectionState.PermissionRequired,
+                        -> {
+                            null
+                        }
                     }
-                }
-                .distinctUntilChanged()
+                }.distinctUntilChanged()
                 .collect { spec ->
                     spec?.let { showNotification(it.title, it.text, it.showDisconnect) }
                 }
@@ -410,7 +454,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // Screen on/off drives the engine's status channel — registered for
         // the service lifetime, forwarded only while an engine is alive.
         ContextCompat.registerReceiver(
-            this, screenReceiver,
+            this,
+            screenReceiver,
             IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_SCREEN_OFF)
@@ -422,15 +467,23 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     // The core rarely raises user-facing notifications; forwarded for
     // observability, not rendered (we own the single VPN notification).
-    private val notificationSink = object : EngineNotificationSink {
-        override fun send(notification: EngineNotification) {
-            SecureLog.d(TAG, "core notification: ${notification.typeName}")
+    private val notificationSink =
+        object : EngineNotificationSink {
+            override fun send(notification: EngineNotification) {
+                SecureLog.d(TAG, "core notification: ${notification.typeName}")
+            }
+
+            override fun cancel(
+                identifier: String,
+                typeId: Int,
+            ) = Unit
         }
 
-        override fun cancel(identifier: String, typeId: Int) = Unit
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 // An explicit command supersedes any in-flight automatic
@@ -452,6 +505,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 startTunnel()
                 return START_STICKY
             }
+
             ACTION_DISCONNECT -> {
                 autoStartJob?.cancel()
                 // A restore compiling right now must not answer this stop with
@@ -467,6 +521,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 }
                 return START_NOT_STICKY
             }
+
             else -> {
                 // A stray system start (always-on re-start, duplicate
                 // package-replaced restore) must not clobber the Connected
@@ -512,40 +567,43 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // startTunnel()/stopSelf() — a CONNECT/DISCONNECT arriving
                 // mid-flight must never see this stale work stop or
                 // resurrect its session.
-                autoStartJob = scope.launch {
-                    val wanted = runCatching { settings.desiredVpnRunning.first() }
-                        .getOrDefault(false)
-                    if (!wanted) {
-                        if (!autoStartLostOwnership()) stopSelf()
-                        return@launch
-                    }
-                    // Fail-open on a DataStore read error: the guard is a
-                    // safety net, a broken read must not block reconnects.
-                    val allowed = runCatching { settings.registerVpnRestartAttempt() }
-                        .getOrDefault(true)
-                    if (autoStartLostOwnership()) return@launch
-                    if (allowed) {
-                        SecureLog.i(TAG, "rebuilding tunnel after service restart")
-                        startTunnel()
-                    } else {
-                        SecureLog.w(
-                            TAG,
-                            "restart guard tripped — clearing desiredVpnRunning",
-                        )
-                        runCatching { settings.setDesiredVpnRunning(false) }
-                        // Never leave a silently-unprotected device: the
-                        // persisted flag shows a Home warning even when
-                        // notifications are denied; the alert is the fast path.
-                        runCatching { settings.setRestartGuardTripped(true) }
-                        runCatching {
-                            notification.postAlert(
-                                title = getString(R.string.notification_restart_guard_title),
-                                text = getString(R.string.notification_restart_guard_text),
-                            )
+                autoStartJob =
+                    scope.launch {
+                        val wanted =
+                            runCatching { settings.desiredVpnRunning.first() }
+                                .getOrDefault(false)
+                        if (!wanted) {
+                            if (!autoStartLostOwnership()) stopSelf()
+                            return@launch
                         }
-                        if (!autoStartLostOwnership()) stopSelf()
+                        // Fail-open on a DataStore read error: the guard is a
+                        // safety net, a broken read must not block reconnects.
+                        val allowed =
+                            runCatching { settings.registerVpnRestartAttempt() }
+                                .getOrDefault(true)
+                        if (autoStartLostOwnership()) return@launch
+                        if (allowed) {
+                            SecureLog.i(TAG, "rebuilding tunnel after service restart")
+                            startTunnel()
+                        } else {
+                            SecureLog.w(
+                                TAG,
+                                "restart guard tripped — clearing desiredVpnRunning",
+                            )
+                            runCatching { settings.setDesiredVpnRunning(false) }
+                            // Never leave a silently-unprotected device: the
+                            // persisted flag shows a Home warning even when
+                            // notifications are denied; the alert is the fast path.
+                            runCatching { settings.setRestartGuardTripped(true) }
+                            runCatching {
+                                notification.postAlert(
+                                    title = getString(R.string.notification_restart_guard_title),
+                                    text = getString(R.string.notification_restart_guard_text),
+                                )
+                            }
+                            if (!autoStartLostOwnership()) stopSelf()
+                        }
                     }
-                }
                 return START_STICKY
             }
         }
@@ -606,20 +664,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
         )
         runCatching { registerUnderlyingNetworkCallback() }
             .onFailure { SecureLog.w(TAG, "network callback registration failed") }
-        startJob = scope.launch {
-            val attempt = startGuard.begin()
-            try {
-                runStartAttempt(attempt, session)
-            } finally {
-                startJob = null
-                // A start whose ACTION_CONNECT the single-flight guard rejected
-                // must not be lost: its session still needs an engine.
-                if (startGuard.consumeQueuedStart() && !destroyed && !stopRequested) {
-                    SecureLog.i(TAG, "starting the session queued behind the last attempt")
-                    startTunnel()
+        startJob =
+            scope.launch {
+                val attempt = startGuard.begin()
+                try {
+                    runStartAttempt(attempt, session)
+                } finally {
+                    startJob = null
+                    // A start whose ACTION_CONNECT the single-flight guard rejected
+                    // must not be lost: its session still needs an engine.
+                    if (startGuard.consumeQueuedStart() && !destroyed && !stopRequested) {
+                        SecureLog.i(TAG, "starting the session queued behind the last attempt")
+                        startTunnel()
+                    }
                 }
             }
-        }
     }
 
     /**
@@ -658,7 +717,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
                         superseded.config
                     } else {
                         when (outcome) {
-                            is CompileOutcome.Ready -> outcome.config
+                            is CompileOutcome.Ready -> {
+                                outcome.config
+                            }
+
                             CompileOutcome.NoNodes -> {
                                 // Genuinely nothing enabled — the user must
                                 // pick a server; that is a state, not a
@@ -666,6 +728,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                                 failStart(VpnError.NoNodeSelected, attempt)
                                 return
                             }
+
                             is CompileOutcome.Failed -> {
                                 // A config the engine refused is not "no
                                 // servers".
@@ -690,8 +753,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
             SecureLog.i(TAG, "start superseded before the engine launch — not starting it")
             return
         }
-        var generation = effective?.generation
-            ?: connectionManager.adoptSession(config.node)
+        var generation =
+            effective?.generation
+                ?: connectionManager.adoptSession(config.node)
         if (generation < 0) {
             // The state machine is owned — but a connect() that raced us
             // may have left a pendingSession still needing a start (its
@@ -745,15 +809,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * false when a teardown raced us or the start failed — both already
      * converged to stopped/error here, so the caller just aborts.
      */
-    private suspend fun launchEngine(config: EngineConfig, generation: Long): Boolean {
+    private suspend fun launchEngine(
+        config: EngineConfig,
+        generation: Long,
+    ): Boolean {
         var created: VpnEngine? = null
         try {
-            created = engineFactory.create(
-                context = this@ClientVpnService,
-                platform = this@ClientVpnService,
-                scope = scope,
-                notifications = notificationSink,
-            )
+            created =
+                engineFactory.create(
+                    context = this@ClientVpnService,
+                    platform = this@ClientVpnService,
+                    scope = scope,
+                    notifications = notificationSink,
+                )
             if (activeGeneration != generation) {
                 // A disconnect→reconnect swapped the session while the
                 // factory ran — a stale engine must stop only itself and
@@ -879,24 +947,25 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
             return
         }
-        rebuildJob = scope.launch {
-            var runs = 0
-            do {
-                rebuildDirty = false
-                val recompile = rebuildRecompile
-                rebuildRecompile = false
-                rebuildTunnel(recompile)
-            } while (
-                rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS &&
+        rebuildJob =
+            scope.launch {
+                var runs = 0
+                do {
+                    rebuildDirty = false
+                    val recompile = rebuildRecompile
+                    rebuildRecompile = false
+                    rebuildTunnel(recompile)
+                } while (
+                    rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS &&
                     connectionManager.state.value is VpnConnectionState.Connected
-            )
-            // Bound hit or state flipped with a change still queued — hand
-            // off to a fresh request so the newest policy isn't stranded.
-            if (rebuildDirty) {
-                rebuildJob = null
-                requestTunnelRebuild()
+                )
+                // Bound hit or state flipped with a change still queued — hand
+                // off to a fresh request so the newest policy isn't stranded.
+                if (rebuildDirty) {
+                    rebuildJob = null
+                    requestTunnelRebuild()
+                }
             }
-        }
     }
 
     /**
@@ -915,10 +984,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     activeConfig = outcome.config
                     config = outcome.config
                 }
+
                 CompileOutcome.NoNodes -> {
                     endSessionWithoutNodes(generation)
                     return
                 }
+
                 is CompileOutcome.Failed -> {
                     // The engine's config no longer matches the store, so the
                     // session can't simply continue — but the user must see
@@ -992,7 +1063,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * servers the user just removed, so the session ends — reporting the real
      * error instead of "no servers selected".
      */
-    private suspend fun endSessionWithFailure(cause: Exception, generation: Long) {
+    private suspend fun endSessionWithFailure(
+        cause: Exception,
+        generation: Long,
+    ) {
         SecureLog.w(TAG, "session ended — node set change failed to compile")
         persistSetting { settings.setDesiredVpnRunning(false) }
         connectionManager.onServiceFailed(
@@ -1003,8 +1077,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     /** Typed error for a failed compile/start — the user sees the real cause. */
-    private fun engineFailure(cause: Exception, fallback: String): VpnError =
-        dev.typenil.vpnclient.core.vpn.engineFailure(cause, fallback)
+    private fun engineFailure(
+        cause: Exception,
+        fallback: String,
+    ): VpnError =
+        dev.typenil.vpnclient.core.vpn
+            .engineFailure(cause, fallback)
 
     /**
      * A service-driven start (process-death restore, always-on, boot) produced
@@ -1013,7 +1091,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * stale error, and a newer connect owns the outcome through
      * [ConnectionManager.onSessionlessStartFailed].
      */
-    private suspend fun failStart(error: VpnError, attempt: Long) {
+    private suspend fun failStart(
+        error: VpnError,
+        attempt: Long,
+    ) {
         // The sequencing (re-check ownership between the settings read and the
         // settings write) lives in StartFailureHandler so the windows it closes
         // are unit-tested instead of only reasoned about.
@@ -1026,7 +1107,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * so a pending session that is merely its own doesn't read as a newer
      * owner.
      */
-    private fun stillOwns(attempt: Long, ownGeneration: Long? = null): Boolean {
+    private fun stillOwns(
+        attempt: Long,
+        ownGeneration: Long? = null,
+    ): Boolean {
         val pending = connectionManager.pendingSession
         val foreignSession = pending != null && pending.generation != ownGeneration
         return startGuard.owner(attempt, sessionPending = foreignSession) == StartOwner.ThisAttempt
@@ -1064,21 +1148,23 @@ class ClientVpnService : VpnService(), EnginePlatform {
             // The engine leaves pendingTeardown only when stop() actually
             // returns — even past the timeout below — so onDestroy's drain
             // can't miss an engine whose stop is still in flight.
-            val stopping = current?.let { eng ->
-                scope.launch {
-                    try {
-                        runCatching { eng.stop() }
-                    } finally {
-                        pendingTeardown.remove(eng)
+            val stopping =
+                current?.let { eng ->
+                    scope.launch {
+                        try {
+                            runCatching { eng.stop() }
+                        } finally {
+                            pendingTeardown.remove(eng)
+                        }
                     }
                 }
-            }
             // Bounded: a hung engine stop must not wedge the state machine —
             // on timeout we force cleanup and report stopped ourselves.
-            val settled = withTimeoutOrNull(ENGINE_STOP_TIMEOUT_MS) {
-                stopping?.join()
-                true
-            }
+            val settled =
+                withTimeoutOrNull(ENGINE_STOP_TIMEOUT_MS) {
+                    stopping?.join()
+                    true
+                }
             if (settled == null) {
                 SecureLog.w(TAG, "engine stop timed out — forcing teardown")
             }
@@ -1100,7 +1186,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private fun registerDozeReceiver() {
         if (dozeReceiverRegistered) return
         ContextCompat.registerReceiver(
-            this, dozeReceiver,
+            this,
+            dozeReceiver,
             IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
@@ -1180,9 +1267,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
     override fun openTun(request: TunRequest): Int {
         if (tunProvider.prepare(this) != null) error("android: missing vpn permission")
 
-        val builder = Builder()
-            .setSession(getString(R.string.app_name))
-            .setMtu(request.mtu)
+        val builder =
+            Builder()
+                .setSession(getString(R.string.app_name))
+                .setMtu(request.mtu)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
@@ -1199,13 +1287,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
             request.dnsServers.forEach { builder.addDnsServer(it) }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val v4 = request.inet4Routes.ifEmpty {
-                    request.inet4Addresses.map { dev.typenil.vpnclient.core.engine.CidrAddress("0.0.0.0", 0) }
-                }
+                val v4 =
+                    request.inet4Routes.ifEmpty {
+                        request.inet4Addresses.map {
+                            dev.typenil.vpnclient.core.engine
+                                .CidrAddress("0.0.0.0", 0)
+                        }
+                    }
                 v4.forEach { builder.addRoute(it.toIpPrefix()) }
-                val v6 = request.inet6Routes.ifEmpty {
-                    request.inet6Addresses.map { dev.typenil.vpnclient.core.engine.CidrAddress("::", 0) }
-                }
+                val v6 =
+                    request.inet6Routes.ifEmpty {
+                        request.inet6Addresses.map {
+                            dev.typenil.vpnclient.core.engine
+                                .CidrAddress("::", 0)
+                        }
+                    }
                 v6.forEach { builder.addRoute(it.toIpPrefix()) }
                 request.inet4ExcludedRoutes.forEach { builder.excludeRoute(it.toIpPrefix()) }
                 request.inet6ExcludedRoutes.forEach { builder.excludeRoute(it.toIpPrefix()) }
@@ -1229,14 +1325,18 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // longest-prefix match handle the TUN-space keep-alives below.
                 val v4Base =
                     request.inet4Routes.ifEmpty {
-                        listOf(dev.typenil.vpnclient.core.engine.CidrAddress("0.0.0.0", 0))
+                        listOf(
+                            dev.typenil.vpnclient.core.engine
+                                .CidrAddress("0.0.0.0", 0),
+                        )
                     }
                 if (request.inet4ExcludedRoutes.isEmpty()) {
                     v4Base.forEach { builder.addRoute(it.address, it.prefix) }
                 } else {
-                    v4Base.flatMap { base ->
-                        LanBypassRoutes.subtract(base, request.inet4ExcludedRoutes)
-                    }.forEach { builder.addRoute(it.address, it.prefix) }
+                    v4Base
+                        .flatMap { base ->
+                            LanBypassRoutes.subtract(base, request.inet4ExcludedRoutes)
+                        }.forEach { builder.addRoute(it.address, it.prefix) }
                     // TUN self-space sits inside the excluded ranges — without
                     // these more-specific routes the virtual DNS and tun
                     // address would bypass the tunnel and hijack never fires.
@@ -1249,14 +1349,18 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 if (request.inet6Addresses.isNotEmpty()) {
                     val v6Base =
                         request.inet6Routes.ifEmpty {
-                            listOf(dev.typenil.vpnclient.core.engine.CidrAddress("::", 0))
+                            listOf(
+                                dev.typenil.vpnclient.core.engine
+                                    .CidrAddress("::", 0),
+                            )
                         }
                     if (request.inet6ExcludedRoutes.isEmpty()) {
                         v6Base.forEach { builder.addRoute(it.address, it.prefix) }
                     } else {
-                        v6Base.flatMap { base ->
-                            LanBypassRoutes.subtract(base, request.inet6ExcludedRoutes)
-                        }.forEach { builder.addRoute(it.address, it.prefix) }
+                        v6Base
+                            .flatMap { base ->
+                                LanBypassRoutes.subtract(base, request.inet6ExcludedRoutes)
+                            }.forEach { builder.addRoute(it.address, it.prefix) }
                         request.inet6Addresses.forEach {
                             builder.addRoute(it.address, it.prefix)
                         }
@@ -1271,13 +1375,14 @@ class ClientVpnService : VpnService(), EnginePlatform {
             // Blocking read is fine: openTun already runs on an engine thread
             // doing binder calls.
             val (mode, packages) = runBlocking { settings.perAppPolicySnapshot() }
-            val plan = resolvePerAppPlan(
-                mode = mode,
-                selected = packages,
-                selfPackage = packageName,
-                coreInclude = request.includedPackages,
-                coreExclude = request.excludedPackages,
-            )
+            val plan =
+                resolvePerAppPlan(
+                    mode = mode,
+                    selected = packages,
+                    selfPackage = packageName,
+                    coreInclude = request.includedPackages,
+                    coreExclude = request.excludedPackages,
+                )
             var allowedAdded = 0
             plan.allowed.forEach { pkg ->
                 try {
@@ -1303,8 +1408,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
         }
 
-        val pfd = tunProvider.establish(builder)
-            ?: error("android: vpn interface not established (not prepared or revoked)")
+        val pfd =
+            tunProvider.establish(builder)
+                ?: error("android: vpn interface not established (not prepared or revoked)")
         tunFd = pfd
         return pfd.fd
     }
@@ -1320,26 +1426,31 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     private fun registerUnderlyingNetworkCallback() {
         if (underlyingCallback != null) return
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                updateUnderlyingNetworks()
-            }
+        val cb =
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    updateUnderlyingNetworks()
+                }
 
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                updateUnderlyingNetworks()
-            }
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    caps: NetworkCapabilities,
+                ) {
+                    updateUnderlyingNetworks()
+                }
 
-            override fun onLost(network: Network) {
-                updateUnderlyingNetworks()
+                override fun onLost(network: Network) {
+                    updateUnderlyingNetworks()
+                }
             }
-        }
         underlyingCallback = cb
         // Deliver callbacks on the main thread: the coalescing state
         // (networkDirty/networkNotifyJob/lastUnderlyingNetwork) is touched by
         // both the callback and the main-immediate scope — confining both to
         // one thread makes the dirty-flag protocol race-free.
         connectivity.registerNetworkCallback(
-            NetworkRequest.Builder()
+            NetworkRequest
+                .Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 // The tunnel's own network must never fire this callback —
                 // it's the underlay tracker, not a default-network probe.
@@ -1376,12 +1487,14 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // allNetworks order is arbitrary — prefer a VALIDATED network so a
         // dead-but-present Wi-Fi isn't picked over working cellular.
         val usable = connectivity.allNetworks.filter(::isUsablePhysicalNetwork)
-        val active = connectivity.activeNetwork
-            ?.takeIf(::isUsablePhysicalNetwork)
-            ?: usable.firstOrNull { network ->
-                connectivity.getNetworkCapabilities(network)
-                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
-            } ?: usable.firstOrNull()
+        val active =
+            connectivity.activeNetwork
+                ?.takeIf(::isUsablePhysicalNetwork)
+                ?: usable.firstOrNull { network ->
+                    connectivity
+                        .getNetworkCapabilities(network)
+                        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                } ?: usable.firstOrNull()
         // Report the transport on every evaluation — caps changes (wifi
         // hand-off without a Network change) keep the label honest.
         connectionManager.reportUnderlyingTransport(
@@ -1393,7 +1506,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // interface once a session is live and flip the ip_version:6 rule.
         // UNKNOWN/no network → true: v6-via-proxy still works, and preferring
         // it costs nothing when the underlay is gone.
-        configProvider.underlayHasIpv6 = active?.let { networkHasGlobalIpv6(it) } ?: true
+        // Feed the compile path the *physical* underlay's IPv6 posture — a
+        // direct ConnectivityManager read there would resolve our own VPN
+        // interface once a session is live and flip the ip_version:6 rule.
+        // reportUnderlay also marks the value authoritative so the first
+        // compile falls back to a physical probe only until this lands.
+        configProvider.reportUnderlay(active?.let { networkHasGlobalIpv6(it) } ?: true)
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1427,12 +1545,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     /** Coarse display label for the underlay — wifi/cell/other, never the
      *  VPN transport itself (vpn caps are rejected before this runs). */
-    private fun transportLabel(caps: NetworkCapabilities?): UnderlyingTransport = when {
-        caps == null -> UnderlyingTransport.UNKNOWN
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> UnderlyingTransport.WIFI
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> UnderlyingTransport.CELLULAR
-        else -> UnderlyingTransport.OTHER
-    }
+    private fun transportLabel(caps: NetworkCapabilities?): UnderlyingTransport =
+        when {
+            caps == null -> UnderlyingTransport.UNKNOWN
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> UnderlyingTransport.WIFI
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> UnderlyingTransport.CELLULAR
+            else -> UnderlyingTransport.OTHER
+        }
 
     /**
      * resetNetwork() re-reads platform state at call time, so coalescing to a
@@ -1444,13 +1563,14 @@ class ClientVpnService : VpnService(), EnginePlatform {
             networkDirty = true
             return
         }
-        networkNotifyJob = scope.launch {
-            var runs = 0
-            do {
-                networkDirty = false
-                engine?.onUnderlyingNetworkChanged()
-            } while (networkDirty && ++runs < 4)
-        }
+        networkNotifyJob =
+            scope.launch {
+                var runs = 0
+                do {
+                    networkDirty = false
+                    engine?.onUnderlyingNetworkChanged()
+                } while (networkDirty && ++runs < 4)
+            }
     }
 
     private fun showNotification(

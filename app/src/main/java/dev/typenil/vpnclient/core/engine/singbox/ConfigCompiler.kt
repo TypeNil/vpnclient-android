@@ -187,14 +187,13 @@ class ConfigCompiler
                                 // host in `server` — not a URL, not host:port.
                                 // https gets `path` + `server_port`; tls/quic
                                 // get `server_port`; udp is bare host.
-                                val host = rest.substringBefore('/').substringBefore(':')
+                                val authority = rest.substringBefore('/')
+                                val (host, port) = dev.typenil.vpnclient.core.engine.splitHostPort(authority)
                                 put("server", host)
-                                val port = rest.substringBefore('/').substringAfter(':', "")
-                                if (port.isNotEmpty()) {
-                                    port.toIntOrNull()?.let { put("server_port", it) }
-                                }
+                                port?.toIntOrNull()?.let { put("server_port", it) }
                                 if (scheme == "https") {
-                                    rest.substringAfter('/', "")
+                                    rest
+                                        .substringAfter('/', "")
                                         .takeIf { it.isNotEmpty() }
                                         ?.let { put("path", "/$it") }
                                 }
@@ -221,6 +220,7 @@ class ConfigCompiler
                             dnsProfile.mode == DnsMode.PROXY_ONLY -> {
                                 Unit
                             }
+
                             // RU domains resolve via the ISP resolver so the direct
                             // route gets CDN-local answers; everything else keeps the
                             // proxied upstream. IPv4-only: an AAAA answer wins

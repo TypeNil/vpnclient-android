@@ -52,15 +52,26 @@ class NodeConfigProviderImpl
         /** Global-IPv6 reachability of the *physical* underlay — pushed by
          *  ClientVpnService's NOT_VPN-tracked observer. Reading it here
          *  (not `activeNetwork`) keeps a live-session recompile from
-         *  resolving the VPN's own default network as the underlay. */
+         *  resolving the VPN's own default network as the underlay.
+         *
+         *  Default is optimistic because a first compile may race the
+         *  tracker's first callback; the conservative read happens in
+         *  [resolveUnderlayIpv6] which probes the physical network directly
+         *  when no tracker value has landed yet. */
         @Volatile
         override var underlayHasIpv6: Boolean = true
+
+        /** True once the service has pushed a value — distinguishes
+         *  "tracker hasn't run yet" from "tracker reported no v6". */
+        @Volatile
+        private var underlayReported: Boolean = false
 
         override val enabledNodeSetFingerprint: Flow<String> =
             // The fingerprint tracks the effective set — a pref-disabled node
             // changes the compiled config, so it must change the fingerprint
             // (else a live session would never rebuild for a node toggle).
-            nodeDao.observeUsable()
+            nodeDao
+                .observeUsable()
                 .map { entities -> nodeSetFingerprint(entities) }
                 // Hashing a few hundred outbound JSONs — off the collector's
                 // thread (the service collects on the main dispatcher).
@@ -84,7 +95,7 @@ class NodeConfigProviderImpl
                 // Null (not the empty-set digest): no config was built.
                 _compiledNodeSetFingerprint.value = null
                 return null
-            }            // A refresh can commit a node set that no longer contains the
+            } // A refresh can commit a node set that no longer contains the
             // persisted selection before its post-commit cleanup runs — clear it
             // here so a connect in that window falls back instead of failing.
             // The conditional clear can't wipe a selection the user just made.
@@ -104,7 +115,7 @@ class NodeConfigProviderImpl
                     selectedNodeId = pick,
                     ipv6Enabled = settings.ipv6Enabled.first(),
                     routeMode = routeMode,
-                    underlayIpv6 = underlayHasIpv6,
+                    underlayIpv6 = resolveUnderlayIpv6(),
                     ruleSetPaths = ruleSetStore.ensureReady(routeMode),
                     selectAuto = pick == NodeSelection.AUTO_ID,
                     bypassLan = settings.bypassLan.first(),
@@ -121,14 +132,17 @@ class NodeConfigProviderImpl
          *  dropped rather than failing the whole connect (the editor's
          *  validation is the gate; the read path stays defensive). */
         private suspend fun userRoutingRules() =
-            routingRuleDao.getAll()
+            routingRuleDao
+                .getAll()
                 .filter { it.isEnabled }
                 .mapNotNull { entity ->
                     val kind =
-                        dev.typenil.vpnclient.core.engine.RoutingRule.Kind.fromKey(entity.kind)
+                        dev.typenil.vpnclient.core.engine.RoutingRule.Kind
+                            .fromKey(entity.kind)
                             ?: return@mapNotNull null
                     val action =
-                        dev.typenil.vpnclient.core.engine.RoutingRule.Action.fromKey(entity.action)
+                        dev.typenil.vpnclient.core.engine.RoutingRule.Action
+                            .fromKey(entity.action)
                             ?: return@mapNotNull null
                     dev.typenil.vpnclient.core.engine.RoutingRule(
                         kind = kind,
@@ -137,19 +151,41 @@ class NodeConfigProviderImpl
                     )
                 }
 
-        /**
-         * Whether the network our `direct` dial will bind — the default/active
-         * one — currently offers real IPv6 reachability: a global v6 address
-         * *and* a v6 default route (an address without `::/0` — rogue RA, stale
-         * lease — is still a dead dial). A *secondary* network (standby LTE with
-         * v6 while Wi-Fi is active) must not count: the direct outbound never
-         * uses it. On ambiguous reads assume false — v6 via the proxy works.
-         */
-        /** The compile path no longer reads ConnectivityManager directly:
-         *  `activeNetwork` resolves to the VPN's own interface while a
-         *  session is live (self is tunneled), which would flip the
-         *  ip_version:6 rule mid-session. The service's NOT_VPN tracker is
-         *  the authoritative underlay signal. */
+        /** The service pushes [underlayHasIpv6] and marks it reported;
+         *  until then the compile path can't trust the optimistic default —
+         *  the first connect() runs before the NOT_VPN tracker fires. */
+        override fun reportUnderlay(hasIpv6: Boolean) {
+            underlayHasIpv6 = hasIpv6
+            underlayReported = true
+        }
+
+        /** The underlay signal the compile actually uses: the service's
+         *  NOT_VPN-tracked value once reported; before that, a one-shot
+         *  physical-network probe (never `activeNetwork` — self is tunneled
+         *  once a session is live). An unknown/no-network read stays true:
+         *  v6-via-proxy still works, and a wrong "no v6" would force proxy
+         *  for every v6 host on a network that could carry it direct. */
+        private fun resolveUnderlayIpv6(): Boolean {
+            if (underlayReported) return underlayHasIpv6
+            val cm = context.getSystemService(ConnectivityManager::class.java) ?: return true
+            // Find a physical candidate: INTERNET + NOT_VPN, prefer the
+            // app's active network when it isn't the tunnel itself.
+            val candidates =
+                cm.allNetworks.filter { n ->
+                    val caps = cm.getNetworkCapabilities(n) ?: return@filter false
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                }
+            val active = cm.activeNetwork?.takeIf { candidates.contains(it) } ?: candidates.firstOrNull()
+                ?: return true
+            val link = cm.getLinkProperties(active) ?: return true
+            val hasDefaultV6Route =
+                link.routes.any { route ->
+                    route.destination.address is Inet6Address && route.destination.prefixLength == 0
+                }
+            return hasDefaultV6Route &&
+                link.linkAddresses.any { (it.address as? Inet6Address)?.let(::isGlobalIpv6) == true }
+        }
     }
 
 /** Global-unicast IPv6: not link-local, site-local, ULA, loopback,

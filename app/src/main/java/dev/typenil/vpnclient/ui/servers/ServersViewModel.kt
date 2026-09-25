@@ -53,6 +53,7 @@ data class ServerNode(
 )
 
 val ServerNode.id: String get() = entity.id
+
 /** Display name — the local override wins over the provider label. */
 val ServerNode.name: String get() = customName?.takeIf { it.isNotBlank() } ?: entity.name
 val ServerNode.providerName: String get() = entity.name
@@ -182,9 +183,15 @@ class ServersViewModel
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = ListControls(
-                    "", ServerSortMode.Default, null, null, false, false,
-                ),
+                initialValue =
+                    ListControls(
+                        "",
+                        ServerSortMode.Default,
+                        null,
+                        null,
+                        false,
+                        false,
+                    ),
             )
 
         private val engineSurface: StateFlow<EngineSurface> =

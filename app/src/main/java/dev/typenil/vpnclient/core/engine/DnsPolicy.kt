@@ -3,7 +3,6 @@ package dev.typenil.vpnclient.core.engine
 import dev.typenil.vpnclient.core.common.log.Redactor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
-
 /**
  * DNS resolution mode — persisted in DataStore as [key].
  *
@@ -82,15 +81,16 @@ sealed class DnsUpstream {
     ) : DnsUpstream() {
         override val key = "custom:$spec"
         override val serverUrl = spec
+
         // Syntax check only — never resolve the host: this property runs on
         // the UI/main path during settings read and would otherwise fire a
-        // real DNS lookup per custom upstream.
+        // real DNS lookup per custom upstream. Authority parsing is
+        // bracket-aware so a literal IPv6 isn't truncated at the first ':'.
         override val hostname =
             spec
                 .substringAfter("://")
                 .substringBefore('/')
-                .substringBefore(':')
-                .let { host -> !isIpLiteral(host) }
+                .let { authority -> !isIpLiteral(splitHostPort(authority).first.removePrefix("[").removeSuffix("]")) }
         override val labelResName = "dns_upstream_custom"
     }
 
@@ -131,25 +131,35 @@ sealed class DnsUpstream {
                 }
 
                 s.startsWith("tls://") || s.startsWith("quic://") -> {
-                    val host = s.substringAfter("://").substringBefore(':').substringBefore('/')
+                    // host | host:port | [v6] | [v6]:port — no path allowed.
+                    val rest = s.substringAfter("://")
+                    if ('/' in rest || rest.isBlank()) return null
+                    val (host, port) = splitHostPort(rest)
                     if (host.isBlank() || host.any { it.isWhitespace() }) return null
-                    Custom(s)
+                    if (port != null && port.toIntOrNull() !in 1..65535) return null
+                    // A bare multi-colon IPv6 must be bracketed in the
+                    // canonical spec so the compiler's split stays exact.
+                    Custom(if ('[' !in host && host.count { it == ':' } >= 2) "${s.substringBefore("://")}://[$host]" else s)
                 }
 
                 s.startsWith("udp://") -> {
-                    // host[:port] — keep the user's port verbatim; only
-                    // validate that the host is a literal (a hostname here
-                    // would need bootstrap we don't emit for udp).
+                    // host[:port] / [v6][:port] — keep the user's port
+                    // verbatim; only validate that the host is a literal (a
+                    // hostname here would need bootstrap we don't emit for
+                    // udp).
                     val rest = s.removePrefix("udp://")
-                    val host = rest.substringBefore(':')
-                    val port = rest.substringAfter(':', "")
-                    if (!isIpLiteral(host)) return null
-                    if (port.isNotEmpty() && port.toIntOrNull() !in 1..65535) return null
+                    val (host, port) = splitHostPort(rest)
+                    val bare = host.removePrefix("[").removeSuffix("]")
+                    if (!isIpLiteral(bare)) return null
+                    if (port != null && port.toIntOrNull() !in 1..65535) return null
                     Custom("udp://$rest")
                 }
 
-                isIpLiteral(s) -> {
-                    Custom("udp://$s")
+                isIpLiteral(s.removePrefix("[").removeSuffix("]")) -> {
+                    // Bare IP → plain UDP/53. Canonicalize IPv6 to the
+                    // bracketed form so a later :port parse stays exact.
+                    val bare = s.removePrefix("[").removeSuffix("]")
+                    Custom(if (':' in bare) "udp://[$bare]" else "udp://$bare")
                 }
 
                 else -> {
@@ -167,20 +177,63 @@ sealed class DnsUpstream {
                 // IPv4
                 '.' in s && ':' !in s -> {
                     val parts = s.split('.')
-                    parts.size == 4 && parts.all { p ->
-                        p.isNotEmpty() && p.length <= 3 &&
-                            p.all { it.isDigit() } && p.toIntOrNull()?.let { it in 0..255 } == true
-                    }
+                    parts.size == 4 &&
+                        parts.all { p ->
+                            p.isNotEmpty() && p.length <= 3 &&
+                                p.all { it.isDigit() } && p.toIntOrNull()?.let { it in 0..255 } == true
+                        }
                 }
-                // IPv6 — has at least one ':', only hex digits + colons,
-                // groups within bounds (single '::' compression allowed).
-                ':' in s -> {
-                    s.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' } &&
-                        !s.contains(":::")
+
+                // IPv6 — strict: ≤8 hex groups of 1–4 chars, at most one
+                // '::' compression, no leading/trailing single ':', no ':::'.
+                ':' in s -> isIpv6Literal(s)
+
+                else -> {
+                    false
                 }
-                else -> false
             }
         }
+
+        /** Strict IPv6 literal — hex groups + optional single '::'. No DNS,
+         *  no InetAddress. Zone ids and IPv4 tails are not accepted. */
+        private fun isIpv6Literal(s: String): Boolean {
+            if (!s.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == ':' }) return false
+            if (":::" in s) return false
+            if (s.indexOf("::") != s.lastIndexOf("::")) return false // '::' at most once
+            val compressed = "::" in s
+            // A lone leading/trailing ':' that isn't part of '::' is invalid.
+            if (s.startsWith(":") && !s.startsWith("::")) return false
+            if (s.endsWith(":") && !s.endsWith("::")) return false
+            val groups = s.split(':').filter { it.isNotEmpty() }
+            if (groups.any { it.length > 4 || !it.all { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' } }) {
+                return false
+            }
+            return if (compressed) groups.size < 8 else groups.size == 8
+        }
+    }
+}
+
+/** Split a URI authority into (host, port) — bracket-aware so `[v6]:port`
+ *  keeps its brackets and `host:port` splits. A bare multi-colon IPv6 (no
+ *  brackets) returns the whole string as host. Shared with ConfigCompiler. */
+internal fun splitHostPort(authority: String): Pair<String, String?> {
+    if (authority.startsWith('[')) {
+        val end = authority.indexOf(']')
+        if (end < 0) return authority to null
+        val host = authority.substring(0, end + 1)
+        val after = authority.substring(end + 1)
+        val port = if (after.startsWith(':')) after.substring(1) else ""
+        return host to port.ifEmpty { null }
+    }
+    val last = authority.lastIndexOf(':')
+    val first = authority.indexOf(':')
+    return when {
+        last < 0 -> authority to null
+        // more than one colon without brackets = bare IPv6
+        last != first -> authority to null
+        else ->
+            authority.substring(0, last) to
+                authority.substring(last + 1).ifEmpty { null }
     }
 }
 

@@ -80,4 +80,55 @@ class DnsPolicyTest {
         assertEquals(DnsMode.POLICY, DnsMode.fromKey("bogus"))
         assertEquals(DnsMode.PROXY_ONLY, DnsMode.fromKey("proxy_only"))
     }
+
+    @Test
+    fun `ipv6 upstreams canonicalize to bracketed and survive parse`() {
+        // Bare IPv6 → bracketed udp:// spec
+        val bare = DnsUpstream.parseCustom("2001:db8::53")
+        assertEquals("udp://[2001:db8::53]", bare?.spec)
+        // Bracketed forms parse as literal, not hostname → no bootstrap
+        assertFalse(DnsUpstream.parseCustom("https://[2001:db8::853]/dns-query")!!.hostname)
+        assertFalse(DnsUpstream.parseCustom("tls://[2001:db8::853]")!!.hostname)
+        // tls://[v6]:port round-trips with the port intact
+        assertEquals(
+            "tls://[2001:db8::853]:8853",
+            DnsUpstream.parseCustom("tls://[2001:db8::853]:8853")?.spec,
+        )
+    }
+
+    @Test
+    fun `splitHostPort handles v4 v6 bracketed and hostname authorities`() {
+        // (authority) -> (host, port)
+        data class Case(val authority: String, val host: String, val port: String?)
+        listOf(
+            Case("1.1.1.1", "1.1.1.1", null),
+            Case("1.1.1.1:853", "1.1.1.1", "853"),
+            Case("dns.example.com", "dns.example.com", null),
+            Case("dns.example.com:853", "dns.example.com", "853"),
+            Case("[2001:db8::853]", "[2001:db8::853]", null),
+            Case("[2001:db8::853]:8853", "[2001:db8::853]", "8853"),
+            // bare multi-colon IPv6 without brackets — whole is the host
+            Case("2001:db8::853", "2001:db8::853", null),
+        ).forEach { (authority, host, port) ->
+            val (h, p) = dev.typenil.vpnclient.core.engine.splitHostPort(authority)
+            assertEquals("host for $authority", host, h)
+            assertEquals("port for $authority", port, p)
+        }
+    }
+
+    @Test
+    fun `malformed ipv6 literals rejected`() {
+        listOf(
+            "2001:db8:::53",       // triple colon
+            "2001::db8::53",      // two compressions
+            ":2001:db8::53",      // leading single colon
+            "2001:db8::53:",      // trailing single colon
+            "2001:db8:gggg::1",   // non-hex group
+            "12345::1",           // group > 4 hex
+            "1:2:3:4:5:6:7:8:9",  // too many groups
+        ).forEach { s ->
+            assertNull("must reject: $s", DnsUpstream.parseCustom(s))
+            assertNull("must reject: $s", DnsUpstream.parseCustom("udp://$s"))
+        }
+    }
 }

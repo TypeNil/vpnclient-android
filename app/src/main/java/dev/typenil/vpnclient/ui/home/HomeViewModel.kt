@@ -162,7 +162,12 @@ class HomeViewModel
                 val prefs =
                     values[11] as List<dev.typenil.vpnclient.data.db.NodePreferenceEntity>
                 val prefById = prefs.associateBy { it.nodeId }
-                val favoriteIds = prefs.asSequence().filter { it.isFavorite }.map { it.nodeId }.toSet()
+                val favoriteIds =
+                    prefs
+                        .asSequence()
+                        .filter { it.isFavorite }
+                        .map { it.nodeId }
+                        .toSet()
                 val dnsProfile = values[12] as DnsProfile
 
                 // Picker source: usable + not hidden — the engine can't
@@ -230,7 +235,8 @@ class HomeViewModel
                                             // provider name — same rule as
                                             // ServersCard.
                                             title =
-                                                prefById[node.id]?.customName
+                                                prefById[node.id]
+                                                    ?.customName
                                                     ?.takeIf { it.isNotBlank() }
                                                     ?: node.name,
                                             subtitle =

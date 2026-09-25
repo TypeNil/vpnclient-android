@@ -19,11 +19,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConfigCompilerTest {
-
     private val compiler = ConfigCompiler()
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun node(id: String, name: String = id) = ProxyNode(
+    private fun node(
+        id: String,
+        name: String = id,
+    ) = ProxyNode(
         id = id,
         subscriptionId = 1,
         name = name,
@@ -35,8 +37,7 @@ class ConfigCompilerTest {
     )
 
     /** Paths the store would hand the compiler — tag → local .srs file. */
-    private fun rsPaths(mode: RouteMode): Map<String, String> =
-        mode.ruleSetTags.associateWith { "/data/rule_sets/$it.srs" }
+    private fun rsPaths(mode: RouteMode): Map<String, String> = mode.ruleSetTags.associateWith { "/data/rule_sets/$it.srs" }
 
     @Test
     fun `config embeds node outbounds plus selector and urltest`() {
@@ -86,11 +87,17 @@ class ConfigCompilerTest {
     @Test
     fun `remote DoH is detoured through the selected proxy`() {
         val config = compiler.build(listOf(node("n1")), "n1", true)
-        val servers = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-        val remote = servers.first {
-            it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
-        }.jsonObject
+        val servers =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+        val remote =
+            servers
+                .first {
+                    it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
+                }.jsonObject
         assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
     }
 
@@ -111,13 +118,23 @@ class ConfigCompilerTest {
 
     @Test
     fun `bypass lan emits route exclusions for both families`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, bypassLan = true,
-        )
-        val tun = json.parseToJsonElement(config.configJson)
-            .jsonObject["inbounds"]!!.jsonArray[0].jsonObject
-        val excluded = tun["route_exclude_address"]!!.jsonArray
-            .map { it.jsonPrimitive.content }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                bypassLan = true,
+            )
+        val tun =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["inbounds"]!!
+                .jsonArray[0]
+                .jsonObject
+        val excluded =
+            tun["route_exclude_address"]!!
+                .jsonArray
+                .map { it.jsonPrimitive.content }
         // RFC1918 + link-local + loopback + multicast for v4; ULA/link-local/
         // loopback/multicast for v6 when the tun has a v6 address.
         assertTrue(excluded.contains("10.0.0.0/8"))
@@ -136,8 +153,12 @@ class ConfigCompilerTest {
     @Test
     fun `bypass lan off emits no exclusions`() {
         val config = compiler.build(listOf(node("n1")), "n1", true)
-        val tun = json.parseToJsonElement(config.configJson)
-            .jsonObject["inbounds"]!!.jsonArray[0].jsonObject
+        val tun =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["inbounds"]!!
+                .jsonArray[0]
+                .jsonObject
         assertTrue("route_exclude_address" !in tun)
     }
 
@@ -153,8 +174,12 @@ class ConfigCompilerTest {
     @Test
     fun `null selection falls back to first node`() {
         val config = compiler.build(listOf(node("n1"), node("n2")), null, true)
-        val selector = json.parseToJsonElement(config.configJson)
-            .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
+        val selector =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["outbounds"]!!
+                .jsonArray[0]
+                .jsonObject
         assertEquals("n1", selector["default"]!!.jsonPrimitive.content)
         assertNotNull(config.node)
     }
@@ -163,11 +188,19 @@ class ConfigCompilerTest {
     fun `auto selection defaults the selector to the urltest group`() {
         // The persisted Auto sentinel selects the "auto" urltest group inside
         // "proxy"; EngineConfig.node describes Auto itself, never a member.
-        val config = compiler.build(
-            listOf(node("n1"), node("n2")), null, true, selectAuto = true,
-        )
-        val selector = json.parseToJsonElement(config.configJson)
-            .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
+        val config =
+            compiler.build(
+                listOf(node("n1"), node("n2")),
+                null,
+                true,
+                selectAuto = true,
+            )
+        val selector =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["outbounds"]!!
+                .jsonArray[0]
+                .jsonObject
         assertEquals("auto", selector["default"]!!.jsonPrimitive.content)
         // "auto" is offered first in the selector's outbound list.
         assertEquals(
@@ -186,11 +219,19 @@ class ConfigCompilerTest {
     fun `auto mode ignores a stale persisted node id`() {
         // Auto bypasses the node lookup — a vanished id can never fail the
         // compile once the pick is Auto.
-        val config = compiler.build(
-            listOf(node("n1")), "gone", true, selectAuto = true,
-        )
-        val selector = json.parseToJsonElement(config.configJson)
-            .jsonObject["outbounds"]!!.jsonArray[0].jsonObject
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "gone",
+                true,
+                selectAuto = true,
+            )
+        val selector =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["outbounds"]!!
+                .jsonArray[0]
+                .jsonObject
         assertEquals("auto", selector["default"]!!.jsonPrimitive.content)
     }
 
@@ -218,10 +259,14 @@ class ConfigCompilerTest {
 
     @Test
     fun `BYPASS_RU sends russian rule sets direct and keeps proxy final`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-        )
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            )
         val root = json.parseToJsonElement(config.configJson).jsonObject
 
         val route = root["route"]!!.jsonObject
@@ -277,10 +322,14 @@ class ConfigCompilerTest {
 
     @Test
     fun `PROXY_BLOCKED proxies only the curated list and defaults direct`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED,
-            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
-        )
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.PROXY_BLOCKED,
+                ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
+            )
         val root = json.parseToJsonElement(config.configJson).jsonObject
 
         val route = root["route"]!!.jsonObject
@@ -320,9 +369,12 @@ class ConfigCompilerTest {
         assertEquals("remote", dnsRule["server"]!!.jsonPrimitive.content)
         assertEquals("local", dns["final"]!!.jsonPrimitive.content)
 
-        val remote = dns["servers"]!!.jsonArray.first {
-            it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
-        }.jsonObject
+        val remote =
+            dns["servers"]!!
+                .jsonArray
+                .first {
+                    it.jsonObject["tag"]!!.jsonPrimitive.content == "remote"
+                }.jsonObject
         assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
 
         // Bootstrap invariant: proxy server names resolve locally.
@@ -334,12 +386,21 @@ class ConfigCompilerTest {
 
     @Test
     fun `v6-less underlay routes all v6 through proxy in BYPASS_RU`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = false,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-        )
-        val rules = json.parseToJsonElement(config.configJson)
-            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                underlayIpv6 = false,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            )
+        val rules =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["route"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
 
         // sniff → hijack-dns → private → v6→proxy → RU→direct.
         assertEquals(5, rules.size)
@@ -352,12 +413,21 @@ class ConfigCompilerTest {
 
     @Test
     fun `v6-less underlay routes all v6 through proxy in PROXY_BLOCKED`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED, underlayIpv6 = false,
-            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
-        )
-        val rules = json.parseToJsonElement(config.configJson)
-            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.PROXY_BLOCKED,
+                underlayIpv6 = false,
+                ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
+            )
+        val rules =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["route"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
 
         assertEquals(5, rules.size)
         val v6Rule = rules[3].jsonObject
@@ -367,49 +437,84 @@ class ConfigCompilerTest {
 
     @Test
     fun `v6-less underlay does not change ALL mode`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.ALL, underlayIpv6 = false,
-        )
-        val rules = json.parseToJsonElement(config.configJson)
-            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.ALL,
+                underlayIpv6 = false,
+            )
+        val rules =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["route"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
         assertEquals(3, rules.size)
         assertTrue(rules.none { "ip_version" in it.jsonObject })
     }
 
     @Test
     fun `v6-capable underlay keeps direct v6 for RU`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU, underlayIpv6 = true,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-        )
-        val rules = json.parseToJsonElement(config.configJson)
-            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                underlayIpv6 = true,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            )
+        val rules =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["route"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
         assertEquals(4, rules.size)
         assertTrue(rules.none { "ip_version" in it.jsonObject })
     }
 
     @Test
     fun `RU dns rule returns ipv4 only so direct dials reach v4`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-        )
-        val dnsRule = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["rules"]!!.jsonArray.single().jsonObject
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            )
+        val dnsRule =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
+                .single()
+                .jsonObject
         assertEquals("ipv4_only", dnsRule["strategy"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `custom DoH upstream compiles to https server with proxy detour`() {
         val custom = DnsUpstream.parseCustom("https://dns.example.com/dns-query")!!
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true,
-            dnsProfile = DnsProfile(DnsMode.POLICY, custom),
-        )
-        val remote = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-            .map { it.jsonObject }
-            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                dnsProfile = DnsProfile(DnsMode.POLICY, custom),
+            )
+        val remote =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+                .map { it.jsonObject }
+                .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("https", remote["type"]!!.jsonPrimitive.content)
         // Typed schema: bare host in server, path + port separate — not a
         // full URL.
@@ -424,14 +529,21 @@ class ConfigCompilerTest {
 
     @Test
     fun `preset upstream uses its own server`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true,
-            dnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Quad9),
-        )
-        val remote = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-            .map { it.jsonObject }
-            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                dnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Quad9),
+            )
+        val remote =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+                .map { it.jsonObject }
+                .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("https", remote["type"]!!.jsonPrimitive.content)
         assertEquals("9.9.9.9", remote["server"]!!.jsonPrimitive.content)
         assertEquals("/dns-query", remote["path"]!!.jsonPrimitive.content)
@@ -440,8 +552,8 @@ class ConfigCompilerTest {
     }
 
     @Test
-    fun `custom dot upstream with non-standard port splits host and server_port`() {
-        val custom = DnsUpstream.parseCustom("tls://dns.example.com:8853")!!
+    fun `custom DoH upstream with bracketed ipv6 keeps brackets and path`() {
+        val custom = DnsUpstream.parseCustom("https://[2001:db8::853]/dns-query")!!
         val config = compiler.build(
             listOf(node("n1")), "n1", true,
             dnsProfile = DnsProfile(DnsMode.POLICY, custom),
@@ -450,6 +562,30 @@ class ConfigCompilerTest {
             .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
             .map { it.jsonObject }
             .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("https", remote["type"]!!.jsonPrimitive.content)
+        // Brackets preserved — server is a valid literal, not "[2001".
+        assertEquals("[2001:db8::853]", remote["server"]!!.jsonPrimitive.content)
+        assertEquals("/dns-query", remote["path"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `custom dot upstream with non-standard port splits host and server_port`() {
+        val custom = DnsUpstream.parseCustom("tls://dns.example.com:8853")!!
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                dnsProfile = DnsProfile(DnsMode.POLICY, custom),
+            )
+        val remote =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+                .map { it.jsonObject }
+                .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("tls", remote["type"]!!.jsonPrimitive.content)
         assertEquals("dns.example.com", remote["server"]!!.jsonPrimitive.content)
         assertEquals(8853, remote["server_port"]!!.jsonPrimitive.int)
@@ -458,13 +594,20 @@ class ConfigCompilerTest {
 
     @Test
     fun `proxy-only dns strips local rules and pins final to remote`() {
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-            dnsProfile = DnsProfile(DnsMode.PROXY_ONLY, DnsUpstream.Cloudflare),
-        )
-        val dns = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+                dnsProfile = DnsProfile(DnsMode.PROXY_ONLY, DnsUpstream.Cloudflare),
+            )
+        val dns =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject
         // No rule may point user queries at `local` — bypassed domains still
         // get remote answers; `local` exists only as the bootstrap resolver.
         assertTrue("dns.rules must not be emitted in proxy-only", "rules" !in dns)
@@ -474,14 +617,21 @@ class ConfigCompilerTest {
     @Test
     fun `dot upstream compiles to tls server without bootstrap`() {
         val dot = DnsUpstream.parseCustom("tls://1.1.1.1")!!
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true,
-            dnsProfile = DnsProfile(DnsMode.POLICY, dot),
-        )
-        val remote = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-            .map { it.jsonObject }
-            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                dnsProfile = DnsProfile(DnsMode.POLICY, dot),
+            )
+        val remote =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+                .map { it.jsonObject }
+                .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("tls", remote["type"]!!.jsonPrimitive.content)
         assertEquals("1.1.1.1", remote["server"]!!.jsonPrimitive.content)
         assertTrue("domain_resolver" !in remote)
@@ -496,14 +646,22 @@ class ConfigCompilerTest {
                 RoutingRule(RoutingRule.Kind.PORT, "443", RoutingRule.Action.PROXY),
                 RoutingRule(RoutingRule.Kind.PORT, "8000:8080", RoutingRule.Action.DIRECT),
             )
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
-            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
-            userRules = rules,
-        )
-        val routeRules = json.parseToJsonElement(config.configJson)
-            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
-            .map { it.jsonObject }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.BYPASS_RU,
+                ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+                userRules = rules,
+            )
+        val routeRules =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["route"]!!
+                .jsonObject["rules"]!!
+                .jsonArray
+                .map { it.jsonObject }
         // sniff(0) hijack-dns(1) then the four user rules, then
         // ip_is_private fallback, then the BYPASS_RU rule-set — user entries
         // precede both so a private-CIDR block can't be swallowed by the
@@ -539,12 +697,19 @@ class ConfigCompilerTest {
     fun `dns reverse mapping lets rule sets match bare-IP connections`() {
         // Without reverse_mapping a resolved-IP dial (MTProto, ECH — nothing
         // to sniff) can't hit the geosite rules and falls through to direct.
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true, RouteMode.PROXY_BLOCKED,
-            ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
-        )
-        val dns = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                RouteMode.PROXY_BLOCKED,
+                ruleSetPaths = rsPaths(RouteMode.PROXY_BLOCKED),
+            )
+        val dns =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject
         assertEquals(true, dns["reverse_mapping"]!!.jsonPrimitive.boolean)
     }
 }

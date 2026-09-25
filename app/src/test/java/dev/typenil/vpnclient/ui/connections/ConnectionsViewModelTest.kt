@@ -39,7 +39,6 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionsViewModelTest {
-
     private val dispatcher = StandardTestDispatcher()
     private val testScope = TestScope(dispatcher)
 
@@ -47,17 +46,21 @@ class ConnectionsViewModelTest {
     private lateinit var manager: ConnectionManager
     private lateinit var viewModel: ConnectionsViewModel
 
-    private val node = NodeSummary(
-        id = "node-1",
-        name = "Test Node",
-        protocol = ProtocolType.VLESS,
-        server = "example.invalid",
-    )
+    private val node =
+        NodeSummary(
+            id = "node-1",
+            name = "Test Node",
+            protocol = ProtocolType.VLESS,
+            server = "example.invalid",
+        )
 
     private class FakeServiceControl : ServiceControl {
         override fun prepareVpn(): Intent? = null
+
         override fun startConnectService() = Unit
+
         override fun startDisconnectService() = Unit
+
         override fun stopVpnService(): Boolean = false
     }
 
@@ -65,11 +68,18 @@ class ConnectionsViewModelTest {
         private val config: EngineConfig,
     ) : NodeConfigProvider {
         override suspend fun compileSelected(): EngineConfig = config
+
         override val selectedNodeId: Flow<String?> = MutableStateFlow(null)
+
         override suspend fun nodeSummary(id: String): NodeSummary? = null
+
         override val enabledNodeSetFingerprint: Flow<String> = MutableStateFlow("fingerprint-a")
         override val compiledNodeSetFingerprint: StateFlow<String?> = MutableStateFlow(null)
         override var underlayHasIpv6: Boolean = true
+
+        override fun reportUnderlay(hasIpv6: Boolean) {
+            underlayHasIpv6 = hasIpv6
+        }
     }
 
     private class FakeEngine : VpnEngine {
@@ -80,39 +90,51 @@ class ConnectionsViewModelTest {
         override val groups: StateFlow<List<OutboundGroupInfo>> =
             MutableStateFlow(emptyList())
         override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
+
         override suspend fun validate(config: EngineConfig) = Unit
+
         override suspend fun start(config: EngineConfig) = Unit
+
         override suspend fun stop() = Unit
+
         override suspend fun onUnderlyingNetworkChanged() = Unit
-        override suspend fun selectOutbound(groupTag: String, outboundTag: String) = true
+
+        override suspend fun selectOutbound(
+            groupTag: String,
+            outboundTag: String,
+        ) = true
+
         override suspend fun urlTest(groupTag: String) = Unit
+
         override suspend fun closeConnection(id: String): Boolean {
             closedConnectionIds += id
             return true
         }
     }
 
-    private fun conn(id: String) = ConnectionInfo(
-        id = id,
-        destination = "conn.invalid:443",
-        domain = "conn.invalid",
-        protocol = "tls",
-        network = "tcp",
-        outbound = "node-1",
-        packages = listOf("dev.test.app"),
-        uplinkTotalBytes = 1_000,
-        downlinkTotalBytes = 2_000,
-        createdAtMs = 0,
-    )
+    private fun conn(id: String) =
+        ConnectionInfo(
+            id = id,
+            destination = "conn.invalid:443",
+            domain = "conn.invalid",
+            protocol = "tls",
+            network = "tcp",
+            outbound = "node-1",
+            packages = listOf("dev.test.app"),
+            uplinkTotalBytes = 1_000,
+            downlinkTotalBytes = 2_000,
+            createdAtMs = 0,
+        )
 
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         engine = FakeEngine()
-        manager = ConnectionManager(
-            FakeServiceControl(),
-            FakeNodeConfigProvider(EngineConfig(configJson = "{}", node = node)),
-        )
+        manager =
+            ConnectionManager(
+                FakeServiceControl(),
+                FakeNodeConfigProvider(EngineConfig(configJson = "{}", node = node)),
+            )
         viewModel = ConnectionsViewModel(manager)
     }
 
@@ -132,29 +154,31 @@ class ConnectionsViewModelTest {
     }
 
     @Test
-    fun `uiState gates the list on Connected`() = testScope.runTest {
-        backgroundScope.launch { viewModel.uiState.collect {} }
-        advanceUntilIdle()
+    fun `uiState gates the list on Connected`() =
+        testScope.runTest {
+            backgroundScope.launch { viewModel.uiState.collect {} }
+            advanceUntilIdle()
 
-        // Nothing connected — the screen must not show a list.
-        assertFalse(viewModel.uiState.value.connected)
+            // Nothing connected — the screen must not show a list.
+            assertFalse(viewModel.uiState.value.connected)
 
-        connectToRunning()
-        engine.connectionsFlow.value = listOf(conn("c1"))
-        advanceUntilIdle()
+            connectToRunning()
+            engine.connectionsFlow.value = listOf(conn("c1"))
+            advanceUntilIdle()
 
-        val ui = viewModel.uiState.value
-        assertTrue(ui.connected)
-        assertEquals(listOf("c1"), ui.connections.map { it.id })
-    }
+            val ui = viewModel.uiState.value
+            assertTrue(ui.connected)
+            assertEquals(listOf("c1"), ui.connections.map { it.id })
+        }
 
     @Test
-    fun `closeConnection forwards the id to the engine`() = testScope.runTest {
-        connectToRunning()
-        viewModel.closeConnection("c1")
-        advanceUntilIdle()
-        assertEquals(listOf("c1"), engine.closedConnectionIds)
-    }
+    fun `closeConnection forwards the id to the engine`() =
+        testScope.runTest {
+            connectToRunning()
+            viewModel.closeConnection("c1")
+            advanceUntilIdle()
+            assertEquals(listOf("c1"), engine.closedConnectionIds)
+        }
 
     @Test
     fun `metaLine prefers the resolved app label`() {

@@ -34,6 +34,10 @@ class CompileOutcomeTest {
         override val compiledNodeSetFingerprint: StateFlow<String?> = MutableStateFlow(null)
 
         override var underlayHasIpv6: Boolean = true
+
+        override fun reportUnderlay(hasIpv6: Boolean) {
+            underlayHasIpv6 = hasIpv6
+        }
     }
 
     private val config =

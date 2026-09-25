@@ -216,6 +216,10 @@ class FakeNodeConfigProvider(
     /** Underlay IPv6 posture — the service pushes it; tests set it directly. */
     override var underlayHasIpv6: Boolean = true
 
+    override fun reportUnderlay(hasIpv6: Boolean) {
+        underlayHasIpv6 = hasIpv6
+    }
+
     override suspend fun compileSelected(): EngineConfig? {
         failure?.let { throw it }
         val c = config
@@ -226,22 +230,23 @@ class FakeNodeConfigProvider(
     }
 
     override val selectedNodeId: Flow<String?> get() = selected
-    override suspend fun nodeSummary(id: String): NodeSummary? =
-        summaries[id] ?: defaultConfig().node.takeIf { it.id == id }
+
+    override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id] ?: defaultConfig().node.takeIf { it.id == id }
+
     override val enabledNodeSetFingerprint: Flow<String> get() = enabledFingerprint
     override val compiledNodeSetFingerprint: StateFlow<String?> get() = compiledFingerprint
 
     companion object {
         /** Synthetic node — loopback placeholder, never a real endpoint. */
-        val NODE = NodeSummary(
-            id = "harness-node-1",
-            name = "Harness Node",
-            protocol = ProtocolType.VLESS,
-            server = "127.0.0.1",
-        )
+        val NODE =
+            NodeSummary(
+                id = "harness-node-1",
+                name = "Harness Node",
+                protocol = ProtocolType.VLESS,
+                server = "127.0.0.1",
+            )
 
-        fun defaultConfig(): EngineConfig =
-            EngineConfig(configJson = "{}", node = NODE)
+        fun defaultConfig(): EngineConfig = EngineConfig(configJson = "{}", node = NODE)
     }
 }
 
@@ -312,5 +317,9 @@ class FakeTunProvider : TunProvider {
      * and the real `startForeground(systemExempted)` would require the
      * `activate_vpn` appop that only a platform-granted TUN produces.
      */
-    override fun startForeground(service: Service, id: Int, notification: Notification) = Unit
+    override fun startForeground(
+        service: Service,
+        id: Int,
+        notification: Notification,
+    ) = Unit
 }
