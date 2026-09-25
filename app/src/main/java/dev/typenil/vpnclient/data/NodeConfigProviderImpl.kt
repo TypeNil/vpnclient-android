@@ -49,7 +49,10 @@ class NodeConfigProviderImpl
             _compiledNodeSetFingerprint.asStateFlow()
 
         override val enabledNodeSetFingerprint: Flow<String> =
-            nodeDao.observeEnabled()
+            // The fingerprint tracks the effective set — a pref-disabled node
+            // changes the compiled config, so it must change the fingerprint
+            // (else a live session would never rebuild for a node toggle).
+            nodeDao.observeUsable()
                 .map { entities -> nodeSetFingerprint(entities) }
                 // Hashing a few hundred outbound JSONs — off the collector's
                 // thread (the service collects on the main dispatcher).
@@ -65,7 +68,7 @@ class NodeConfigProviderImpl
             }
 
         override suspend fun compileSelected(): EngineConfig? {
-            val entities = nodeDao.getEnabled()
+            val entities = nodeDao.getUsable()
             val nodes = entities.map { it.toDomain() }
             if (nodes.isEmpty()) {
                 // Nothing to compile — record it so a live session comparing
@@ -96,6 +99,7 @@ class NodeConfigProviderImpl
                     underlayIpv6 = underlayHasIpv6(),
                     ruleSetPaths = ruleSetStore.ensureReady(routeMode),
                     selectAuto = pick == NodeSelection.AUTO_ID,
+                    bypassLan = settings.bypassLan.first(),
                 )
             // Only a successful compile becomes the baseline — a throw leaves
             // the previous fingerprint so the change stays pending.

@@ -26,6 +26,7 @@ import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineNotification
 import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
+import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.TunRequest
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
@@ -767,6 +768,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     routeMode = config.routeMode,
                     perAppMode = perAppMode,
                     perAppPackages = perAppPackages,
+                    bypassLan = config.bypassLan,
                 ),
             )
             created.start(
@@ -1193,30 +1195,58 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 v6.forEach { builder.addRoute(it.toIpPrefix()) }
                 request.inet4ExcludedRoutes.forEach { builder.excludeRoute(it.toIpPrefix()) }
                 request.inet6ExcludedRoutes.forEach { builder.excludeRoute(it.toIpPrefix()) }
+                // The TUN subnets live inside the excluded LAN ranges —
+                // re-add them as more-specific routes so the virtual DNS
+                // and tun addresses still enter the tunnel.
+                if (request.inet4ExcludedRoutes.isNotEmpty()) {
+                    request.inet4Addresses.forEach {
+                        builder.addRoute(it.address, it.prefix)
+                    }
+                }
+                if (request.inet6ExcludedRoutes.isNotEmpty()) {
+                    request.inet6Addresses.forEach {
+                        builder.addRoute(it.address, it.prefix)
+                    }
+                }
             } else {
-                request.inet4Routes.ifEmpty { listOf(dev.typenil.vpnclient.core.engine.CidrAddress("0.0.0.0", 0)) }
-                    .forEach { builder.addRoute(it.address, it.prefix) }
+                // excludeRoute() doesn't exist below API 33 — the excluded
+                // prefixes are carved out of the include routes instead:
+                // route the complement of the exclusions and let the kernel's
+                // longest-prefix match handle the TUN-space keep-alives below.
+                val v4Base =
+                    request.inet4Routes.ifEmpty {
+                        listOf(dev.typenil.vpnclient.core.engine.CidrAddress("0.0.0.0", 0))
+                    }
+                if (request.inet4ExcludedRoutes.isEmpty()) {
+                    v4Base.forEach { builder.addRoute(it.address, it.prefix) }
+                } else {
+                    v4Base.flatMap { base ->
+                        LanBypassRoutes.subtract(base, request.inet4ExcludedRoutes)
+                    }.forEach { builder.addRoute(it.address, it.prefix) }
+                    // TUN self-space sits inside the excluded ranges — without
+                    // these more-specific routes the virtual DNS and tun
+                    // address would bypass the tunnel and hijack never fires.
+                    request.inet4Addresses.forEach {
+                        builder.addRoute(it.address, it.prefix)
+                    }
+                }
                 // Only route v6 when the tunnel actually has a v6 address,
                 // otherwise we'd blackhole IPv6 into an IPv4-only interface.
                 if (request.inet6Addresses.isNotEmpty()) {
-                    request.inet6Routes.ifEmpty {
-                        listOf(dev.typenil.vpnclient.core.engine.CidrAddress("::", 0))
-                    }.forEach { builder.addRoute(it.address, it.prefix) }
-                }
-                // excludeRoute() doesn't exist below API 33 — excluded routes
-                // can't be honored there. Warn loudly instead of silently
-                // diverging: today the core never emits exclusions (the
-                // compiler sets no route_exclude_address), so this fires
-                // only if a future config starts producing them.
-                if (request.inet4ExcludedRoutes.isNotEmpty() ||
-                    request.inet6ExcludedRoutes.isNotEmpty()
-                ) {
-                    SecureLog.w(
-                        TAG,
-                        "route exclusions ignored below API 33 " +
-                            "(v4=${request.inet4ExcludedRoutes.size} " +
-                            "v6=${request.inet6ExcludedRoutes.size})",
-                    )
+                    val v6Base =
+                        request.inet6Routes.ifEmpty {
+                            listOf(dev.typenil.vpnclient.core.engine.CidrAddress("::", 0))
+                        }
+                    if (request.inet6ExcludedRoutes.isEmpty()) {
+                        v6Base.forEach { builder.addRoute(it.address, it.prefix) }
+                    } else {
+                        v6Base.flatMap { base ->
+                            LanBypassRoutes.subtract(base, request.inet6ExcludedRoutes)
+                        }.forEach { builder.addRoute(it.address, it.prefix) }
+                        request.inet6Addresses.forEach {
+                            builder.addRoute(it.address, it.prefix)
+                        }
+                    }
                 }
             }
 

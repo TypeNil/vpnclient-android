@@ -43,6 +43,8 @@ data class AppliedSessionConfig(
      *  for another keeps the count but is still an unapplied change. The UI
      *  shows only its size. */
     val perAppPackages: Set<String>,
+    /** LAN bypass the engine was compiled with — saved-vs-applied tracking. */
+    val bypassLan: Boolean = false,
 )
 
 /**

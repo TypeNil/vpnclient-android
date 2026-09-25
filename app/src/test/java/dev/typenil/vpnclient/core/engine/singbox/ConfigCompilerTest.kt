@@ -106,6 +106,38 @@ class ConfigCompilerTest {
     }
 
     @Test
+    fun `bypass lan emits route exclusions for both families`() {
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, bypassLan = true,
+        )
+        val tun = json.parseToJsonElement(config.configJson)
+            .jsonObject["inbounds"]!!.jsonArray[0].jsonObject
+        val excluded = tun["route_exclude_address"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+        // RFC1918 + link-local + loopback + multicast for v4; ULA/link-local/
+        // loopback/multicast for v6 when the tun has a v6 address.
+        assertTrue(excluded.contains("10.0.0.0/8"))
+        assertTrue(excluded.contains("172.16.0.0/12"))
+        assertTrue(excluded.contains("192.168.0.0/16"))
+        assertTrue(excluded.contains("169.254.0.0/16"))
+        assertTrue(excluded.contains("127.0.0.0/8"))
+        assertTrue(excluded.contains("224.0.0.0/4"))
+        assertTrue(excluded.contains("fc00::/7"))
+        assertTrue(excluded.contains("fe80::/10"))
+        // The TUN's own /30 sits inside 172.16/12 — it must NOT appear in the
+        // exclusion list (the service adds a more-specific route for it).
+        assertTrue(excluded.none { it.startsWith("172.18.") })
+    }
+
+    @Test
+    fun `bypass lan off emits no exclusions`() {
+        val config = compiler.build(listOf(node("n1")), "n1", true)
+        val tun = json.parseToJsonElement(config.configJson)
+            .jsonObject["inbounds"]!!.jsonArray[0].jsonObject
+        assertTrue("route_exclude_address" !in tun)
+    }
+
+    @Test
     fun `ipv6 disabled drops v6 address and uses ipv4_only`() {
         val config = compiler.build(listOf(node("n1")), "n1", false)
         val root = json.parseToJsonElement(config.configJson).jsonObject

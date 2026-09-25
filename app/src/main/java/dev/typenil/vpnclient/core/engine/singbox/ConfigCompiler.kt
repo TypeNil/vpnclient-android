@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.core.engine.singbox
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
+import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
@@ -45,10 +46,20 @@ class ConfigCompiler
             underlayIpv6: Boolean = true,
             ruleSetPaths: Map<String, String> = emptyMap(),
             selectAuto: Boolean = false,
+            bypassLan: Boolean = false,
         ): EngineConfig =
             withContext(Dispatchers.IO) {
                 val compiled =
-                    build(nodes, selectedNodeId, ipv6Enabled, routeMode, underlayIpv6, ruleSetPaths, selectAuto)
+                    build(
+                        nodes,
+                        selectedNodeId,
+                        ipv6Enabled,
+                        routeMode,
+                        underlayIpv6,
+                        ruleSetPaths,
+                        selectAuto,
+                        bypassLan,
+                    )
                 try {
                     Libbox.checkConfig(compiled.configJson)
                 } catch (e: CancellationException) {
@@ -68,6 +79,7 @@ class ConfigCompiler
             underlayIpv6: Boolean = true,
             ruleSetPaths: Map<String, String> = emptyMap(),
             selectAuto: Boolean = false,
+            bypassLan: Boolean = false,
         ): EngineConfig {
             require(nodes.isNotEmpty()) { "no nodes to compile" }
             // Local rule sets only — a missing file must fail at compile, never
@@ -202,11 +214,31 @@ class ConfigCompiler
                             put("tag", "tun-in")
                             put("mtu", 9000)
                             putJsonArray("address") {
-                                add("172.18.0.1/30")
-                                if (ipv6Enabled) add("fdfe:dcba:9877::1/126")
+                                add(TUN_V4)
+                                if (ipv6Enabled) add(TUN_V6)
                             }
                             put("auto_route", true)
                             put("strict_route", false)
+                            if (bypassLan) {
+                                // One exclusion list per family — libbox maps
+                                // these to TunOptions.inet*RouteExcludeAddress,
+                                // surfaced to openTun as TunRequest excluded
+                                // routes (excludeRoute on API 33+, complement
+                                // prefixes below). The TUN's own subnets live
+                                // INSIDE the excluded ranges; the service adds
+                                // explicit more-specific routes for them so
+                                // virtual-DNS hijack keeps working.
+                                putJsonArray("route_exclude_address") {
+                                    LanBypassRoutes.excludedV4.forEach {
+                                        add("${it.address}/${it.prefix}")
+                                    }
+                                    if (ipv6Enabled) {
+                                        LanBypassRoutes.excludedV6.forEach {
+                                            add("${it.address}/${it.prefix}")
+                                        }
+                                    }
+                                }
+                            }
                             // gvisor is required on pinned libbox 1.14.1 (system stack
                             // fails inbound TCP there); revisit on a 1.15+ upgrade.
                             put("stack", "gvisor")
@@ -304,12 +336,18 @@ class ConfigCompiler
                 configJson = config.toString(),
                 node = selected?.summary() ?: AUTO_NODE_SUMMARY,
                 routeMode = routeMode,
+                bypassLan = bypassLan,
             )
         }
 
         companion object {
             const val SELECTOR_TAG = "proxy"
             const val AUTO_TAG = "auto"
+
+            /** TUN addresses — referenced by LanBypassRoutes keep-routes and
+             *  the service's more-specific carve-outs. */
+            const val TUN_V4 = "172.18.0.1/30"
+            const val TUN_V6 = "fdfe:dcba:9877::1/126"
 
             /** Session-label summary for the Auto pick — stands for the urltest
              *  group itself, never for one of its members. */

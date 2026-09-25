@@ -17,6 +17,8 @@ data class EngineConfig(
      *  same lists at openTun; the core needs them for `route.find_process`. */
     val includedPackages: List<String> = emptyList(),
     val excludedPackages: List<String> = emptyList(),
+    /** Whether LAN-bypass route exclusions were compiled in. */
+    val bypassLan: Boolean = false,
 )
 
 /** Periodic traffic + health snapshot from the running core. */
