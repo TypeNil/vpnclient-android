@@ -12,6 +12,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -23,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,6 +47,8 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.DnsMode
 import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.engine.RoutingRule
+import dev.typenil.vpnclient.data.db.RoutingRuleEntity
 
 /**
  * Routing policy screen: RouteMode + per-app entry + LAN bypass. Everything
@@ -143,6 +147,16 @@ fun RoutingScreen(
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            RulesSection(
+                rules = ui.rules,
+                onAdd = viewModel::addRule,
+                onToggle = viewModel::setRuleEnabled,
+                onDelete = viewModel::deleteRule,
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Row(
                 modifier =
                     Modifier
@@ -534,3 +548,217 @@ private fun dnsUpstreamLabel(upstream: DnsUpstream): String =
         is DnsUpstream.AdGuard -> stringResource(R.string.dns_upstream_adguard)
         is DnsUpstream.Custom -> upstream.spec
     }
+
+/**
+ * User routing rules — evaluated top-down before the mode's rule-sets.
+ * Each row shows the matcher + action with an enable switch and a delete;
+ * "Add" opens a kind-picker + validated input. Compiled into route.rules.
+ */
+@Composable
+private fun RulesSection(
+    rules: List<RoutingRuleEntity>,
+    onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
+    onToggle: (RoutingRuleEntity, Boolean) -> Unit,
+    onDelete: (Long) -> Unit,
+) {
+    var showAdd by remember { mutableStateOf(false) }
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.routing_rules_title),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(onClick = { showAdd = true }) {
+            Text(stringResource(R.string.routing_rules_add))
+        }
+    }
+    if (rules.isEmpty()) {
+        Text(
+            stringResource(R.string.routing_rules_empty),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+    rules.forEach { rule ->
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    rule.pattern,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                )
+                Text(
+                    "${ruleKindLabel(rule.kind)} → ${ruleActionLabel(rule.action)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = rule.isEnabled,
+                onCheckedChange = { onToggle(rule, it) },
+            )
+            IconButton(onClick = { onDelete(rule.id) }) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = stringResource(R.string.routing_rules_delete),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    if (showAdd) {
+        AddRuleDialog(
+            onAdd = onAdd,
+            onAdded = { showAdd = false },
+            onDismiss = { showAdd = false },
+        )
+    }
+}
+
+@Composable
+private fun ruleKindLabel(kindKey: String): String =
+    stringResource(
+        when (RoutingRule.Kind.fromKey(kindKey)) {
+            RoutingRule.Kind.DOMAIN -> R.string.routing_rule_kind_domain
+            RoutingRule.Kind.IP_CIDR -> R.string.routing_rule_kind_ip
+            RoutingRule.Kind.PORT -> R.string.routing_rule_kind_port
+            null -> R.string.routing_rule_kind_domain
+        },
+    )
+
+@Composable
+private fun ruleActionLabel(actionKey: String): String =
+    stringResource(
+        when (RoutingRule.Action.fromKey(actionKey)) {
+            RoutingRule.Action.PROXY -> R.string.routing_rule_action_proxy
+            RoutingRule.Action.DIRECT -> R.string.routing_rule_action_direct
+            RoutingRule.Action.BLOCK -> R.string.routing_rule_action_block
+            null -> R.string.routing_rule_action_proxy
+        },
+    )
+
+/** Kind picker → validated pattern → action. The ViewModel's validate is the
+ *  gate; an invalid input keeps the dialog open with an error. */
+@Composable
+private fun AddRuleDialog(
+    onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
+    onAdded: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var kind by remember { mutableStateOf(RoutingRule.Kind.DOMAIN) }
+    var action by remember { mutableStateOf(RoutingRule.Action.PROXY) }
+    var pattern by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.routing_rules_add)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(R.string.routing_rule_kind_label),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Row(Modifier.selectableGroup()) {
+                    RoutingRule.Kind.entries.forEach { k ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier =
+                                Modifier
+                                    .selectable(
+                                        selected = k == kind,
+                                        onClick = { kind = k },
+                                        role = Role.RadioButton,
+                                    ).padding(end = 8.dp),
+                        ) {
+                            RadioButton(selected = k == kind, onClick = null)
+                            Text(ruleKindLabel(k.key), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = pattern,
+                    onValueChange = {
+                        pattern = it
+                        error = false
+                    },
+                    placeholder = {
+                        Text(
+                            stringResource(
+                                when (kind) {
+                                    RoutingRule.Kind.DOMAIN -> R.string.routing_rule_hint_domain
+                                    RoutingRule.Kind.IP_CIDR -> R.string.routing_rule_hint_ip
+                                    RoutingRule.Kind.PORT -> R.string.routing_rule_hint_port
+                                },
+                            ),
+                        )
+                    },
+                    isError = error,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (error) {
+                    Text(
+                        stringResource(R.string.routing_rule_invalid),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    stringResource(R.string.routing_rule_action_label),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                Row(Modifier.selectableGroup()) {
+                    RoutingRule.Action.entries.forEach { a ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier =
+                                Modifier
+                                    .selectable(
+                                        selected = a == action,
+                                        onClick = { action = a },
+                                        role = Role.RadioButton,
+                                    ).padding(end = 8.dp),
+                        ) {
+                            RadioButton(selected = a == action, onClick = null)
+                            Text(ruleActionLabel(a.key), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (onAdd(kind, pattern, action)) {
+                        onAdded()
+                    } else {
+                        error = true
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.routing_rules_add))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        },
+    )
+}

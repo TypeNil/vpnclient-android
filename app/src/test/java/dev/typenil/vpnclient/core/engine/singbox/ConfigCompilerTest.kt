@@ -4,6 +4,7 @@ import dev.typenil.vpnclient.core.engine.DnsMode
 import dev.typenil.vpnclient.core.engine.DnsProfile
 import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.engine.RoutingRule
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import kotlinx.serialization.json.Json
@@ -463,6 +464,44 @@ class ConfigCompilerTest {
         assertEquals("tls", remote["type"]!!.jsonPrimitive.content)
         assertEquals("1.1.1.1", remote["server"]!!.jsonPrimitive.content)
         assertTrue("domain_resolver" !in remote)
+    }
+
+    @Test
+    fun `user rules emit before the mode rules and map to outbound or reject`() {
+        val rules =
+            listOf(
+                RoutingRule(RoutingRule.Kind.DOMAIN, "example.com", RoutingRule.Action.DIRECT),
+                RoutingRule(RoutingRule.Kind.IP_CIDR, "10.0.0.0/8", RoutingRule.Action.BLOCK),
+                RoutingRule(RoutingRule.Kind.PORT, "443", RoutingRule.Action.PROXY),
+            )
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
+            ruleSetPaths = rsPaths(RouteMode.BYPASS_RU),
+            userRules = rules,
+        )
+        val routeRules = json.parseToJsonElement(config.configJson)
+            .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
+            .map { it.jsonObject }
+        // sniff(0) hijack-dns(1) private(2) then the three user rules, then
+        // the BYPASS_RU rule-set — user entries precede the geosite so a
+        // specific pick isn't swallowed by the broad list.
+        val domain = routeRules[3]
+        assertEquals(
+            listOf("example.com"),
+            domain["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals("direct", domain["outbound"]!!.jsonPrimitive.content)
+        val ip = routeRules[4]
+        assertEquals(
+            listOf("10.0.0.0/8"),
+            ip["ip_cidr"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals("reject", ip["action"]!!.jsonPrimitive.content)
+        val port = routeRules[5]
+        assertEquals(listOf("443"), port["port"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("proxy", port["outbound"]!!.jsonPrimitive.content)
+        // The mode's own rule-set rule follows the user rules.
+        assertTrue(routeRules[6].containsKey("rule_set"))
     }
 
     @Test

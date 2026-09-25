@@ -334,9 +334,57 @@ abstract class NodeDao {
     }
 }
 
+/**
+ * A user-authored routing rule. `kind` selects the match dimension
+ * (domain / ip_cidr / port), `action` the outcome. [orderIndex] preserves
+ * user ordering — rules compile to sing-box `route.rules` entries evaluated
+ * top-down before the mode rules, so a direct LAN exception can shadow a
+ * broad proxy rule.
+ */
+@Entity(tableName = "routing_rules")
+data class RoutingRuleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** "domain" / "ip_cidr" / "port" — the sing-box match field. */
+    val kind: String,
+    /** domain suffix/keyword (e.g. "example.com") or CIDR/port text. */
+    val pattern: String,
+    /** "proxy" / "direct" / "block". */
+    val action: String,
+    /** User ordering — lower = earlier. */
+    val orderIndex: Int,
+    /** Soft switch without deleting the entry. */
+    @ColumnInfo(defaultValue = "1") val isEnabled: Boolean = true,
+)
+
+@Dao
+interface RoutingRuleDao {
+    @Query("SELECT * FROM routing_rules ORDER BY orderIndex, id")
+    fun observeAll(): Flow<List<RoutingRuleEntity>>
+
+    @Query("SELECT * FROM routing_rules ORDER BY orderIndex, id")
+    suspend fun getAll(): List<RoutingRuleEntity>
+
+    @Insert
+    suspend fun insert(rule: RoutingRuleEntity): Long
+
+    @Update
+    suspend fun update(rule: RoutingRuleEntity)
+
+    @Query("DELETE FROM routing_rules WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("SELECT COALESCE(MAX(orderIndex), -1) + 1 FROM routing_rules")
+    suspend fun nextOrderIndex(): Int
+}
+
 @Database(
-    entities = [SubscriptionEntity::class, NodeEntity::class, NodePreferenceEntity::class],
-    version = 5,
+    entities = [
+        SubscriptionEntity::class,
+        NodeEntity::class,
+        NodePreferenceEntity::class,
+        RoutingRuleEntity::class,
+    ],
+    version = 6,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -345,6 +393,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun nodeDao(): NodeDao
 
     abstract fun nodePreferenceDao(): NodePreferenceDao
+
+    abstract fun routingRuleDao(): RoutingRuleDao
 
     companion object {
         /** v2: per-subscription cleartext opt-in. */
@@ -402,6 +452,23 @@ abstract class AppDatabase : RoomDatabase() {
                             `isEnabled` INTEGER NOT NULL DEFAULT 1,
                             `customName` TEXT,
                             `isHidden` INTEGER NOT NULL DEFAULT 0)""",
+                    )
+                }
+            }
+
+        /** v6: user routing rules — domain/IP/port lists with
+         *  proxy/direct/block outcomes, ordered and individually toggleable. */
+        val MIGRATION_5_6 =
+            object : androidx.room.migration.Migration(5, 6) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """CREATE TABLE IF NOT EXISTS `routing_rules` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `kind` TEXT NOT NULL,
+                            `pattern` TEXT NOT NULL,
+                            `action` TEXT NOT NULL,
+                            `orderIndex` INTEGER NOT NULL,
+                            `isEnabled` INTEGER NOT NULL DEFAULT 1)""",
                     )
                 }
             }

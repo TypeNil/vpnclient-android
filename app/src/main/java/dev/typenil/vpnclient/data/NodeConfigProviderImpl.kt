@@ -38,6 +38,7 @@ class NodeConfigProviderImpl
         private val settings: SettingsRepository,
         private val compiler: ConfigCompiler,
         private val ruleSetStore: RuleSetStore,
+        private val routingRuleDao: dev.typenil.vpnclient.data.db.RoutingRuleDao,
     ) : NodeConfigProvider {
         override val selectedNodeId: Flow<String?> = settings.selectedNodeId
 
@@ -101,12 +102,33 @@ class NodeConfigProviderImpl
                     selectAuto = pick == NodeSelection.AUTO_ID,
                     bypassLan = settings.bypassLan.first(),
                     dnsProfile = settings.dnsProfile.first(),
+                    userRules = userRoutingRules(),
                 )
             // Only a successful compile becomes the baseline — a throw leaves
             // the previous fingerprint so the change stays pending.
             _compiledNodeSetFingerprint.value = nodeSetFingerprint(entities)
             return compiled
         }
+
+        /** Enabled user rules in table order — a malformed stored row is
+         *  dropped rather than failing the whole connect (the editor's
+         *  validation is the gate; the read path stays defensive). */
+        private suspend fun userRoutingRules() =
+            routingRuleDao.getAll()
+                .filter { it.isEnabled }
+                .mapNotNull { entity ->
+                    val kind =
+                        dev.typenil.vpnclient.core.engine.RoutingRule.Kind.fromKey(entity.kind)
+                            ?: return@mapNotNull null
+                    val action =
+                        dev.typenil.vpnclient.core.engine.RoutingRule.Action.fromKey(entity.action)
+                            ?: return@mapNotNull null
+                    dev.typenil.vpnclient.core.engine.RoutingRule(
+                        kind = kind,
+                        pattern = entity.pattern,
+                        action = action,
+                    )
+                }
 
         /**
          * Whether the network our `direct` dial will bind — the default/active

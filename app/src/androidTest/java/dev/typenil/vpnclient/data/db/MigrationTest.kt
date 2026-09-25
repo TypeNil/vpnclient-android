@@ -153,6 +153,31 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate5To6CreatesRoutingRulesTable() {
+        helper.createDatabase(TEST_DB, 5)
+        helper.runMigrationsAndValidate(
+            TEST_DB, 6, true, AppDatabase.MIGRATION_5_6,
+        ).use { db ->
+            db.execSQL(
+                """INSERT INTO routing_rules
+                    (kind, pattern, action, orderIndex)
+                   VALUES ('domain', 'example.com', 'proxy', 0)""",
+            )
+            db.query(
+                "SELECT kind, pattern, action, orderIndex, isEnabled " +
+                    "FROM routing_rules",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("domain", c.getString(0))
+                assertEquals("example.com", c.getString(1))
+                assertEquals("proxy", c.getString(2))
+                assertEquals(0, c.getInt(3))
+                assertEquals(1, c.getInt(4))
+            }
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

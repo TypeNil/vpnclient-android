@@ -6,6 +6,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.engine.DnsMode
 import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.engine.RoutingRule
+import dev.typenil.vpnclient.data.db.RoutingRuleDao
+import dev.typenil.vpnclient.data.db.RoutingRuleEntity
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.settings.SettingsRepository
@@ -31,6 +34,8 @@ data class RoutingUiState(
     val dnsUpstream: DnsUpstream = DnsUpstream.Cloudflare,
     /** The DNS profile the live session resolves with — null when idle. */
     val appliedDnsSummary: String? = null,
+    /** User routing rules in order — compiled in ahead of the mode rules. */
+    val rules: List<RoutingRuleEntity> = emptyList(),
     /** A compiled-in setting changed while a session is alive. */
     val reconnectRecommended: Boolean = false,
     val sessionActive: Boolean = false,
@@ -42,6 +47,7 @@ class RoutingViewModel
     constructor(
         private val settings: SettingsRepository,
         private val connectionManager: ConnectionManager,
+        private val routingRuleDao: RoutingRuleDao,
     ) : ViewModel() {
         private val reconnectRecommended = MutableStateFlow(false)
 
@@ -53,6 +59,7 @@ class RoutingViewModel
                 connectionManager.appliedSessionConfig,
                 connectionManager.state,
                 reconnectRecommended,
+                routingRuleDao.observeAll(),
             ) { values ->
                 val routeMode = values[0] as RouteMode
                 val bypassLan = values[1] as Boolean
@@ -63,6 +70,8 @@ class RoutingViewModel
                     values[3] as dev.typenil.vpnclient.core.vpn.AppliedSessionConfig?
                 val state = values[4] as VpnConnectionState
                 val recommended = values[5] as Boolean
+                @Suppress("UNCHECKED_CAST")
+                val rules = values[6] as List<RoutingRuleEntity>
                 RoutingUiState(
                     routeMode = routeMode,
                     bypassLan = bypassLan,
@@ -71,6 +80,7 @@ class RoutingViewModel
                     appliedRouteMode = applied?.routeMode,
                     appliedBypassLan = applied?.bypassLan,
                     appliedDnsSummary = applied?.dnsProfileSummary,
+                    rules = rules,
                     reconnectRecommended = recommended,
                     sessionActive = state.hasLiveConfig(),
                 )
@@ -114,6 +124,101 @@ class RoutingViewModel
                 val changed = settings.dnsUpstream.first() != upstream
                 settings.setDnsUpstream(upstream)
                 if (changed) recommendReconnectIfSessionActive()
+            }
+        }
+
+        // ---- user routing rules -------------------------------------------
+
+        /** Append a validated rule at the end of the list — a compile-in
+         *  change, so a live session gets the reconnect hint. */
+        fun addRule(
+            kind: RoutingRule.Kind,
+            pattern: String,
+            action: RoutingRule.Action,
+        ): Boolean {
+            val p = validatePattern(kind, pattern) ?: return false
+            viewModelScope.launch {
+                routingRuleDao.insert(
+                    RoutingRuleEntity(
+                        kind = kind.key,
+                        pattern = p,
+                        action = action.key,
+                        orderIndex = routingRuleDao.nextOrderIndex(),
+                    ),
+                )
+                recommendReconnectIfSessionActive()
+            }
+            return true
+        }
+
+        fun updateRule(rule: RoutingRuleEntity) {
+            viewModelScope.launch {
+                routingRuleDao.update(rule)
+                recommendReconnectIfSessionActive()
+            }
+        }
+
+        fun deleteRule(id: Long) {
+            viewModelScope.launch {
+                routingRuleDao.delete(id)
+                recommendReconnectIfSessionActive()
+            }
+        }
+
+        fun setRuleEnabled(
+            rule: RoutingRuleEntity,
+            enabled: Boolean,
+        ) {
+            updateRule(rule.copy(isEnabled = enabled))
+        }
+
+        /** Reject anything that isn't a compilable matcher — the value is
+         *  stored verbatim and read back into the engine config, so a bad
+         *  spec would fail the next connect inside checkConfig. Returns the
+         *  canonical pattern or null. */
+        private fun validatePattern(
+            kind: RoutingRule.Kind,
+            raw: String,
+        ): String? {
+            val s = raw.trim().lowercase()
+            if (s.isEmpty()) return null
+            return when (kind) {
+                // domain_suffix: a literal domain or leading-dot suffix. Strip
+                // a leading "*." so "*.example.com" stores as "example.com".
+                RoutingRule.Kind.DOMAIN -> {
+                    val host = s.removePrefix("*.").removeSuffix(".")
+                    val valid = host.isNotEmpty() && host.length <= 253 &&
+                        host.split('.').all { label ->
+                            label.isNotEmpty() && label.length <= 63 &&
+                                label.all { it.isLetterOrDigit() || it == '-' } &&
+                                !label.startsWith('-') && !label.endsWith('-')
+                        }
+                    host.takeIf { valid && it.contains('.') }
+                }
+                // CIDR notation only — a bare IP gets its /32 (v4) or /128
+                // (v6) appended so the user can type either.
+                RoutingRule.Kind.IP_CIDR -> {
+                    val withPrefix =
+                        if ('/' in s) {
+                            s
+                        } else {
+                            s + if (':' in s) "/128" else "/32"
+                        }
+                    val host = withPrefix.substringBefore('/')
+                    val bits = withPrefix.substringAfter('/').toIntOrNull() ?: return null
+                    val max = if (':' in host) 128 else 32
+                    val validIp = runCatching {
+                        java.net.InetAddress.getByName(host)
+                    }.getOrNull() != null && host.all { it.isDigit() || it == '.' || it == ':' }
+                    withPrefix.takeIf { validIp && bits in 0..max }
+                }
+                // A single port or a range "8000:8080".
+                RoutingRule.Kind.PORT -> {
+                    val parts = s.split(':')
+                    val ok = parts.isNotEmpty() && parts.size <= 2 &&
+                        parts.all { it.toIntOrNull() in 1..65535 }
+                    s.takeIf { ok }
+                }
             }
         }
 

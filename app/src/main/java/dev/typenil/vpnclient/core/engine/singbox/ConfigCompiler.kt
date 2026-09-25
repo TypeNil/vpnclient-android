@@ -8,6 +8,7 @@ import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
 import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.engine.RoutingRule
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
@@ -51,6 +52,7 @@ class ConfigCompiler
             selectAuto: Boolean = false,
             bypassLan: Boolean = false,
             dnsProfile: DnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Cloudflare),
+            userRules: List<RoutingRule> = emptyList(),
         ): EngineConfig =
             withContext(Dispatchers.IO) {
                 val compiled =
@@ -64,6 +66,7 @@ class ConfigCompiler
                         selectAuto,
                         bypassLan,
                         dnsProfile,
+                        userRules,
                     )
                 try {
                     Libbox.checkConfig(compiled.configJson)
@@ -86,6 +89,7 @@ class ConfigCompiler
             selectAuto: Boolean = false,
             bypassLan: Boolean = false,
             dnsProfile: DnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Cloudflare),
+            userRules: List<RoutingRule> = emptyList(),
         ): EngineConfig {
             require(nodes.isNotEmpty()) { "no nodes to compile" }
             // Local rule sets only — a missing file must fail at compile, never
@@ -324,6 +328,20 @@ class ConfigCompiler
                                 addJsonObject {
                                     put("ip_version", 6)
                                     put("outbound", SELECTOR_TAG)
+                                }
+                            }
+                            // User rules sit ahead of the mode's broad
+                            // rule-sets: a domain/IP the user picked is a
+                            // precise override, not a candidate the geosite
+                            // should swallow first. Top-down order matches
+                            // the list the user sees.
+                            userRules.forEach { rule ->
+                                addJsonObject {
+                                    putJsonArray(rule.matchField) { add(rule.pattern) }
+                                    when (rule.action) {
+                                        RoutingRule.Action.BLOCK -> put("action", "reject")
+                                        else -> put("outbound", rule.outboundTag)
+                                    }
                                 }
                             }
                             when (routeMode) {
