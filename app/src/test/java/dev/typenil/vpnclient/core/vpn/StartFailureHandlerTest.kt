@@ -138,6 +138,29 @@ class StartFailureHandlerTest {
         }
 
     @Test
+    fun `a disconnect after a queued connect inside the write is not resurrected`() =
+        runTest {
+            val attempt = guard.begin()
+            // A connect was queued behind this attempt, then the user tapped
+            // Disconnect while the stale desire-flag write was suspended. The
+            // teardown that would clear the queue hasn't run yet — the newest
+            // intent alone must outrank it, or the failure path restores a
+            // flag the user just turned off.
+            duringWrite = {
+                connectLands()
+                guard.onUserIntent(StartIntent.Disconnect)
+            }
+
+            handler.finish(VpnError.NoNodeSelected, attempt)
+
+            assertEquals(listOf(false), desireWrites)
+            assertTrue(reported.isEmpty())
+            assertFalse(converged)
+            // The queued start died with the disconnect — no retry from it.
+            assertFalse(guard.consumeQueuedStart())
+        }
+
+    @Test
     fun `a connect that arrived before the read leaves everything alone`() =
         runTest {
             val attempt = guard.begin()

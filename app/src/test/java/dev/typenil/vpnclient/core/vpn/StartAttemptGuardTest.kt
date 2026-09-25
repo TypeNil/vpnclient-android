@@ -109,4 +109,34 @@ class StartAttemptGuardTest {
 
         assertFalse(guard.consumeQueuedStart())
     }
+
+    @Test
+    fun `a disconnect after a queued connect is not a connect`() {
+        val attempt = guard.begin()
+
+        // The connect's ACTION_CONNECT was rejected by the in-flight guard,
+        // so its start waited in the queue. The user then tapped Disconnect
+        // — the newest intent must outrank the queue, which teardown would
+        // only clear once it resumed past the desire-flag write.
+        guard.onUserIntent(StartIntent.Connect)
+        guard.onStartQueued()
+        guard.onUserIntent(StartIntent.Disconnect)
+
+        assertEquals(StartOwner.Disconnect, owner(attempt))
+        // The queue died with the disconnect — nothing may start from it.
+        assertFalse(guard.consumeQueuedStart())
+    }
+
+    @Test
+    fun `a disconnect invalidates a pending session for an older attempt`() {
+        val attempt = guard.begin()
+
+        // A connect left its session waiting for an engine; a disconnect
+        // that follows voids it even while ConnectionManager still reports
+        // the session pending — teardown clears it only when it finishes.
+        guard.onUserIntent(StartIntent.Connect)
+        guard.onUserIntent(StartIntent.Disconnect)
+
+        assertEquals(StartOwner.Disconnect, owner(attempt, sessionPending = true))
+    }
 }

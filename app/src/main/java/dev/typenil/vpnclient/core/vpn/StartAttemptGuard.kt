@@ -40,10 +40,17 @@ internal class StartAttemptGuard {
     /** A start whose `ACTION_CONNECT` the single-flight guard rejected. */
     private var queued = false
 
-    /** A new user intent invalidates every in-flight attempt. */
+    /**
+     * A new user intent invalidates every in-flight attempt. A disconnect
+     * also drops a start queued behind one synchronously — [owner] must
+     * never answer Connect for it, and the queue must not outlive the
+     * intent that voided it (teardown would clear it too late: a resume
+     * inside the desire-flag write lands in that window).
+     */
     fun onUserIntent(intent: StartIntent) {
         this.intent++
         lastIntent = intent
+        if (intent == StartIntent.Disconnect) queued = false
     }
 
     /** Token for a new attempt — compared later by [owner]. */
@@ -63,15 +70,19 @@ internal class StartAttemptGuard {
     }
 
     /**
-     * Who the service works for now. A session waiting for an engine and a
-     * start queued behind this attempt are both connects by construction — a
-     * disconnect leaves neither behind.
+     * Who the service works for now. The newest user intent wins: a
+     * disconnect voids a queued start and a pending session that were set
+     * up before it, because both are cleared only later — the queue on the
+     * teardown path, the session when teardown reports stopped. Without
+     * that precedence a resume inside the desire-flag write would still
+     * see them and misread the disconnect as a connect.
      */
     fun owner(
         attempt: Long,
         sessionPending: Boolean,
     ): StartOwner =
         when {
+            lastIntent == StartIntent.Disconnect -> StartOwner.Disconnect
             sessionPending || queued -> StartOwner.Connect
             intent == attempt -> StartOwner.ThisAttempt
             lastIntent == StartIntent.Connect -> StartOwner.Connect
