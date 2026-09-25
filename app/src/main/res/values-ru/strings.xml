@@ -47,6 +47,15 @@
     <string name="route_mode_sub_all">Весь трафик идёт через выбранный сервер</string>
     <string name="route_mode_sub_bypass_ru">Российские сайты и IP идут напрямую, остальное — через прокси</string>
     <string name="route_mode_sub_proxy_blocked">Заблокированные сервисы идут через прокси, остальное — напрямую</string>
+
+    <!-- Routing screen -->
+    <string name="routing_title">Маршрутизация</string>
+    <string name="routing_bypass_lan">Обход LAN</string>
+    <string name="routing_bypass_lan_sub">Локальный трафик идёт напрямую; принтеры, Chromecast и другие устройства остаются доступны</string>
+    <string name="routing_applied_on">Сейчас применено: вкл. (переподключите для изменения)</string>
+    <string name="routing_applied_off">Сейчас применено: выкл. (переподключите для изменения)</string>
+    <string name="routing_saved_applied">Сохранено: %1$s · применено: %2$s</string>
+    <string name="routing_applies_next_connect">Применяется при следующем подключении</string>
     <string name="theme_system">Системная</string>
     <string name="theme_light">Светлая</string>
     <string name="theme_dark">Тёмная</string>
@@ -142,6 +151,7 @@
     <string name="settings_interval_label">Свой интервал (минуты, мин. 15)</string>
     <string name="settings_interval_placeholder">провайдер</string>
     <string name="settings_route_mode_note">Применяется при следующем подключении</string>
+    <string name="settings_routing_sub">Режим, приложения в VPN, обход LAN</string>
     <string name="settings_notifications">Уведомления</string>
     <string name="settings_notifications_granted">Разрешены</string>
     <string name="settings_notifications_denied">Не разрешены</string>

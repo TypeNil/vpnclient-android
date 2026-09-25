@@ -55,11 +55,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
-import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.ui.common.CORE_VERSION
 
 @Composable
 fun SettingsScreen(
+    onOpenRouting: () -> Unit,
     onOpenAppFilter: () -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
@@ -109,10 +109,25 @@ fun SettingsScreen(
             checked = ui.autoConnectOnLaunch,
             onCheckedChange = viewModel::setAutoConnectOnLaunch,
         )
-        RouteModeRow(
-            mode = ui.routeMode,
-            onSelect = viewModel::setRouteMode,
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenRouting)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.routing_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    stringResource(R.string.settings_routing_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         ThemeModeRow(
             mode = ui.themeMode,
             onSelect = viewModel::setThemeMode,
@@ -128,22 +143,6 @@ fun SettingsScreen(
                 checked = ui.dynamicColor,
                 onCheckedChange = viewModel::setDynamicColor,
             )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenAppFilter)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.common_per_app_vpn), style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    stringResource(R.string.settings_per_app_sub),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
         AlwaysOnRow()
         SwitchRow(
@@ -204,93 +203,6 @@ private fun SwitchRow(
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
-}
-
-/** Region/domain routing picker. The mode is baked into the engine config
- *  at compile time — like per-app, a running tunnel keeps its old mode. */
-@Composable
-private fun RouteModeRow(mode: RouteMode, onSelect: (RouteMode) -> Unit) {
-    var showDialog by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { showDialog = true }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(stringResource(R.string.common_routing_mode), style = MaterialTheme.typography.bodyLarge)
-            Text(
-                routeModeLabel(mode),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text(stringResource(R.string.common_routing_mode)) },
-            text = {
-                Column(Modifier.selectableGroup()) {
-                    RouteMode.entries.forEach { option ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = option == mode,
-                                    onClick = {
-                                        onSelect(option)
-                                        showDialog = false
-                                    },
-                                    role = Role.RadioButton,
-                                )
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = option == mode, onClick = null)
-                            Column(Modifier.padding(start = 8.dp)) {
-                                Text(
-                                    routeModeLabel(option),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                )
-                                Text(
-                                    routeModeSubtitle(option),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        stringResource(R.string.settings_route_mode_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showDialog = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            },
-        )
-    }
-}
-
-@Composable
-private fun routeModeLabel(mode: RouteMode): String = when (mode) {
-    RouteMode.ALL -> stringResource(R.string.route_mode_all)
-    RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_bypass_ru)
-    RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_proxy_blocked)
-}
-
-@Composable
-private fun routeModeSubtitle(mode: RouteMode): String = when (mode) {
-    RouteMode.ALL -> stringResource(R.string.route_mode_sub_all)
-    RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_sub_bypass_ru)
-    RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_sub_proxy_blocked)
 }
 
 /** Theme picker — applies live on selection (no reconnect, no restart). */

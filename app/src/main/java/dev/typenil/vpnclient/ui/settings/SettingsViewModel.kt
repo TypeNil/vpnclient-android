@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
-import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.settings.SettingsRepository
@@ -24,7 +23,6 @@ data class SettingsUiState(
     val dozePowerSave: Boolean = false,
     /** <0 = manual only, 0 = provider-driven, >0 = fixed minutes. */
     val autoRefreshMinutes: Int = 0,
-    val routeMode: RouteMode = RouteMode.ALL,
     /** A compiled-in setting changed while a session is alive — the tunnel
      *  keeps its old config until reconnect. Pending state, not an event:
      *  survives recomposition and is cleared on accept/session end. */
@@ -60,14 +58,12 @@ class SettingsViewModel @Inject constructor(
             settings.ipv6Enabled,
             settings.dozePowerSave,
             settings.autoRefreshMinutes,
-            settings.routeMode,
-        ) { reconnect, ipv6, doze, refreshMinutes, routeMode ->
+        ) { reconnect, ipv6, doze, refreshMinutes ->
             SettingsUiState(
                 reconnectOnNetworkChange = reconnect,
                 ipv6Enabled = ipv6,
                 dozePowerSave = doze,
                 autoRefreshMinutes = refreshMinutes,
-                routeMode = routeMode,
             )
         },
         reconnectRecommended,
@@ -144,16 +140,6 @@ class SettingsViewModel @Inject constructor(
      *  below); never touches the VPN session. */
     fun setAppLanguage(language: AppLanguage) {
         viewModelScope.launch { settings.setAppLanguage(language) }
-    }
-
-    /** Routing policy — baked into the config at compile time, so a running
-     *  tunnel keeps its mode until the next connect. */
-    fun setRouteMode(mode: RouteMode) {
-        viewModelScope.launch {
-            val changed = settings.routeMode.first() != mode
-            settings.setRouteMode(mode)
-            if (changed) recommendReconnectIfSessionActive()
-        }
     }
 
     fun setAutoRefreshEnabled(enabled: Boolean) {

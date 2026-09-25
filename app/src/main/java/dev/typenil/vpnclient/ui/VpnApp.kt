@@ -43,6 +43,7 @@ import dev.typenil.vpnclient.ui.connections.ConnectionsScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
 import dev.typenil.vpnclient.ui.qrscan.QR_RESULT_KEY
 import dev.typenil.vpnclient.ui.qrscan.QrScanScreen
+import dev.typenil.vpnclient.ui.routing.RoutingScreen
 import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
 import dev.typenil.vpnclient.ui.subscriptions.SubscriptionsScreen
@@ -53,6 +54,7 @@ object Routes {
     const val SERVERS = "servers"
     const val SUBSCRIPTIONS = "subscriptions"
     const val SETTINGS = "settings"
+    const val ROUTING = "routing"
     const val APP_FILTER = "app_filter"
     const val QR_SCAN = "qr_scan"
     const val CONNECTIONS = "connections"
@@ -248,6 +250,14 @@ fun VpnApp(
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
+                        onOpenRouting = { navController.navigate(Routes.ROUTING) },
+                        onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                        snackbarHostState = snackbarHostState,
+                    )
+                }
+                composable(Routes.ROUTING) {
+                    RoutingScreen(
+                        onBack = { navController.popBackStack() },
                         onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
                         snackbarHostState = snackbarHostState,
                     )

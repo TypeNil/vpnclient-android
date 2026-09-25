@@ -47,6 +47,15 @@
     <string name="route_mode_sub_all">All traffic goes through the selected server</string>
     <string name="route_mode_sub_bypass_ru">Russian sites and IPs go direct, the rest is proxied</string>
     <string name="route_mode_sub_proxy_blocked">Blocked services use the proxy, the rest goes direct</string>
+
+    <!-- Routing screen -->
+    <string name="routing_title">Routing</string>
+    <string name="routing_bypass_lan">Bypass LAN</string>
+    <string name="routing_bypass_lan_sub">Local network traffic goes direct; printers, Chromecast and other devices stay reachable</string>
+    <string name="routing_applied_on">Currently applied: on (reconnect to change)</string>
+    <string name="routing_applied_off">Currently applied: off (reconnect to change)</string>
+    <string name="routing_saved_applied">Saved: %1$s · applied: %2$s</string>
+    <string name="routing_applies_next_connect">Applies on next connect</string>
     <string name="theme_system">System default</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
@@ -142,6 +151,7 @@
     <string name="settings_interval_label">Interval override (minutes, min 15)</string>
     <string name="settings_interval_placeholder">provider</string>
     <string name="settings_route_mode_note">Applies on next connect</string>
+    <string name="settings_routing_sub">Mode, per-app VPN, LAN bypass</string>
     <string name="settings_notifications">Notifications</string>
     <string name="settings_notifications_granted">Granted</string>
     <string name="settings_notifications_denied">Not granted</string>
