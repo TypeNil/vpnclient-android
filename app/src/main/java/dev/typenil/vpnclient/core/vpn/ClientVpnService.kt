@@ -210,6 +210,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private var rebuildDirty = false
     /** Decides whether a node-set change needs a recompile + rebuild. */
     private val nodeSetReconciler = NodeSetReconciler()
+    /** Ownership bookkeeping for a start attempt — a stale restore must not
+     *  clear the desire flag, publish an error, or stop the service under a
+     *  connect() the user just made. */
+    private val startGuard = StartAttemptGuard()
     /** A queued rebuild must recompile the config, not just re-establish the
      *  TUN — set when the change that requested it altered the node set.
      *  Sticky until the rebuild that consumes it. */
@@ -404,6 +408,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // start — kill it so it can't stopSelf() the new session or
                 // resurrect a tunnel after it.
                 autoStartJob?.cancel()
+                // ...and invalidates a restore attempt that is still compiling:
+                // its failure path must not act on this session's behalf.
+                startGuard.onUserIntent()
                 // User asked for the tunnel — remember it across process
                 // death. The explicit tap also clears the restart guard: a
                 // tripped guard is about *automatic* starts, not the user
@@ -418,6 +425,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
             ACTION_DISCONNECT -> {
                 autoStartJob?.cancel()
+                // A restore compiling right now must not answer this stop with
+                // a stale error, nor stop the service out from under a newer
+                // intent.
+                startGuard.onUserIntent()
                 scope.launch {
                     // Flag write serialized before the stop: a crash between
                     // them must not leave desiredVpnRunning=true pointing at
@@ -541,10 +552,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
     }
 
     private fun startTunnel() {
-        if (destroyed || engine != null || startJob?.isActive == true) {
+        if (destroyed || engine != null) {
+            // Nothing to start — a live engine already serves whatever the
+            // queued request was for.
+            startGuard.clearQueuedStart()
+            return
+        }
+        if (startJob?.isActive == true) {
             // Single-flight: a second start would tear down whatever the
             // in-flight coroutine just built (shared tunFd/engine fields).
-            SecureLog.w(TAG, "start requested while another start is in flight")
+            // A connect() that lands here still needs an engine, so the
+            // request is queued — the running attempt drains it when it ends.
+            SecureLog.i(TAG, "start requested while another start is in flight — queued")
+            startGuard.onStartQueued()
             return
         }
         stopRequested = false
@@ -558,102 +578,126 @@ class ClientVpnService : VpnService(), EnginePlatform {
         runCatching { registerUnderlyingNetworkCallback() }
             .onFailure { SecureLog.w(TAG, "network callback registration failed") }
         startJob = scope.launch {
-            // Same-process fast path uses the handed-off session; after a
-            // process death the service rebuilds from persisted state itself.
-            // A connect() racing this job leaves a pendingSession — adopt it
-            // wholesale: its config is the fresher compile and its generation
-            // is what the state machine is waiting on.
-            var effective = session ?: connectionManager.pendingSession
-            // A handed-off session always carries its config; the compile below
-            // only runs for a service-driven restore, where there is no session
-            // to fail — so the error is published directly instead of the
-            // silent stop this used to be.
-            val config =
-                effective?.config
-                    ?: run {
-                        val outcome = configProvider.compileOutcome()
-                        // Compiling is slow enough for the user to act in the
-                        // meantime. A connect() that landed since owns the
-                        // service and its config supersedes this attempt —
-                        // checked before the outcome, so a stale failure can
-                        // never clear the newer session or publish over it.
-                        val superseded = connectionManager.pendingSession
-                        if (superseded != null) {
-                            SecureLog.i(TAG, "start superseded by a newer connect")
-                            effective = superseded
-                            superseded.config
-                        } else {
-                            when (outcome) {
-                                is CompileOutcome.Ready -> outcome.config
-                                CompileOutcome.NoNodes -> {
-                                    // Genuinely nothing enabled — the user must
-                                    // pick a server; that is a state, not a
-                                    // defect.
-                                    failStart(VpnError.NoNodeSelected)
-                                    return@launch
-                                }
-                                is CompileOutcome.Failed -> {
-                                    // A config the engine refused is not "no
-                                    // servers".
-                                    failStart(engineFailure(outcome.cause, "config rebuild failed"))
-                                    return@launch
-                                }
+            val attempt = startGuard.begin()
+            try {
+                runStartAttempt(attempt, session)
+            } finally {
+                startJob = null
+                // A start whose ACTION_CONNECT the single-flight guard rejected
+                // must not be lost: its session still needs an engine.
+                if (startGuard.consumeQueuedStart() && !destroyed && !stopRequested) {
+                    SecureLog.i(TAG, "starting the session queued behind the last attempt")
+                    startTunnel()
+                }
+            }
+        }
+    }
+
+    /**
+     * One service-driven start attempt. [attempt] is the ownership token: the
+     * failure path may only clear the desire flag, publish an error, or stop
+     * the service while it is still current — a connect() that arrived while
+     * the config compiled owns all three.
+     */
+    private suspend fun runStartAttempt(
+        attempt: Long,
+        session: ConnectionManager.PendingSession?,
+    ) {
+        // Same-process fast path uses the handed-off session; after a
+        // process death the service rebuilds from persisted state itself.
+        // A connect() racing this job leaves a pendingSession — adopt it
+        // wholesale: its config is the fresher compile and its generation
+        // is what the state machine is waiting on.
+        var effective = session ?: connectionManager.pendingSession
+        // A handed-off session always carries its config; the compile below
+        // only runs for a service-driven restore, where there is no session
+        // to fail — so the error is published directly instead of the
+        // silent stop this used to be.
+        val config =
+            effective?.config
+                ?: run {
+                    val outcome = configProvider.compileOutcome()
+                    // Compiling is slow enough for the user to act in the
+                    // meantime. A connect() that landed since owns the
+                    // service and its config supersedes this attempt —
+                    // checked before the outcome, so a stale failure can
+                    // never clear the newer session or publish over it.
+                    val superseded = connectionManager.pendingSession
+                    if (superseded != null) {
+                        SecureLog.i(TAG, "start superseded by a newer connect")
+                        effective = superseded
+                        superseded.config
+                    } else {
+                        when (outcome) {
+                            is CompileOutcome.Ready -> outcome.config
+                            CompileOutcome.NoNodes -> {
+                                // Genuinely nothing enabled — the user must
+                                // pick a server; that is a state, not a
+                                // defect.
+                                failStart(VpnError.NoNodeSelected, attempt)
+                                return
+                            }
+                            is CompileOutcome.Failed -> {
+                                // A config the engine refused is not "no
+                                // servers".
+                                failStart(engineFailure(outcome.cause, "config rebuild failed"), attempt)
+                                return
                             }
                         }
                     }
-            if (stopRequested || destroyed) {
-                connectionManager.onServiceStopped(-1L)
+                }
+        if (stopRequested || destroyed) {
+            connectionManager.onServiceStopped(-1L)
+            cleanup()
+            stopSelf()
+            return
+        }
+        var generation = effective?.generation
+            ?: connectionManager.adoptSession(config.node)
+        if (generation < 0) {
+            // The state machine is owned — but a connect() that raced us
+            // may have left a pendingSession still needing a start (its
+            // ACTION_CONNECT was dropped by the in-flight guard). Take it
+            // over instead of dying with it orphaned.
+            val takeover = connectionManager.pendingSession
+            if (takeover == null) {
+                // A live session owns the service — bail quietly.
                 cleanup()
                 stopSelf()
-                return@launch
+                return
             }
-            var generation = effective?.generation
-                ?: connectionManager.adoptSession(config.node)
-            if (generation < 0) {
-                // The state machine is owned — but a connect() that raced us
-                // may have left a pendingSession still needing a start (its
-                // ACTION_CONNECT was dropped by the in-flight guard). Take it
-                // over instead of dying with it orphaned.
-                val takeover = connectionManager.pendingSession
-                if (takeover == null) {
-                    // A live session owns the service — bail quietly.
-                    cleanup()
-                    stopSelf()
-                    return@launch
-                }
-                effective = takeover
-                generation = takeover.generation
-            }
-            val launchConfig = effective?.config ?: config
+            effective = takeover
+            generation = takeover.generation
+        }
+        val launchConfig = effective?.config ?: config
+        activeGeneration = generation
+        activeConfig = launchConfig
+        // On adopted sessions adoptSession published Connecting before
+        // the generation was set — that emission was gated out, and the
+        // early post above had no session to read the node name from.
+        // Re-post with the compiled config so the text is right.
+        showNotification(
+            title = getString(R.string.notification_connecting),
+            text = launchConfig.node.name,
+            showDisconnect = true,
+        )
+        if (!launchEngine(launchConfig, generation)) return
+        // A connect() that raced this start may have superseded our
+        // generation while the engine was coming up (its ACTION_CONNECT
+        // was dropped by the in-flight guard). Hand the live engine to
+        // the newer session instead of dying with it orphaned.
+        val pending = connectionManager.pendingSession
+        if (pending != null && pending.generation != generation) {
+            connectionManager.detachEngine()
+            connectionManager.attachEngine(engine ?: return, pending.generation)
+            generation = pending.generation
             activeGeneration = generation
-            activeConfig = launchConfig
-            // On adopted sessions adoptSession published Connecting before
-            // the generation was set — that emission was gated out, and the
-            // early post above had no session to read the node name from.
-            // Re-post with the compiled config so the text is right.
-            showNotification(
-                title = getString(R.string.notification_connecting),
-                text = launchConfig.node.name,
-                showDisconnect = true,
-            )
-            if (!launchEngine(launchConfig, generation)) return@launch
-            // A connect() that raced this start may have superseded our
-            // generation while the engine was coming up (its ACTION_CONNECT
-            // was dropped by the in-flight guard). Hand the live engine to
-            // the newer session instead of dying with it orphaned.
-            val pending = connectionManager.pendingSession
-            if (pending != null && pending.generation != generation) {
-                connectionManager.detachEngine()
-                connectionManager.attachEngine(engine ?: return@launch, pending.generation)
-                generation = pending.generation
-                activeGeneration = generation
-            }
-            connectionManager.onServiceStarted(generation)
-            // A network loss during start() left no further callbacks —
-            // re-evaluate so we don't publish Connected while offline.
-            if (lastUnderlyingNetwork == null) {
-                connectionManager.onUnderlyingNetworkLost()
-            }
+        }
+        connectionManager.onServiceStarted(generation)
+        // A network loss during start() left no further callbacks —
+        // re-evaluate so we don't publish Connected while offline.
+        if (lastUnderlyingNetwork == null) {
+            connectionManager.onUnderlyingNetworkLost()
         }
     }
 
@@ -922,7 +966,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * stale error, and a newer connect owns the outcome through
      * [ConnectionManager.onSessionlessStartFailed].
      */
-    private suspend fun failStart(error: VpnError) {
+    private suspend fun failStart(error: VpnError, attempt: Long) {
+        // Checked at every step below: each one follows a suspension point the
+        // user can act inside. A connect() that arrived meanwhile owns the
+        // service — its session is queued behind this attempt (its
+        // ACTION_CONNECT was rejected by the single-flight guard), so the
+        // attempt's job drains it and must not touch anything here.
+        if (startGuard.superseded(attempt, sessionPending = false)) {
+            SecureLog.i(TAG, "stale start failure — handing over to the newer intent")
+            return
+        }
         // A failed read keeps the previous behaviour (report the failure) —
         // silently swallowing it would be worse than a stale error.
         val stillWanted =
@@ -933,9 +986,20 @@ class ClientVpnService : VpnService(), EnginePlatform {
             stopSelf()
             return
         }
+        if (startGuard.superseded(attempt, connectionManager.pendingSession != null)) {
+            SecureLog.i(TAG, "stale start failure — handing over to the newer intent")
+            return
+        }
         SecureLog.w(TAG, "service start failed: ${error.javaClass.simpleName}")
         // Not a transient failure: don't let a boot / always-on restore loop.
         persistSetting { settings.setDesiredVpnRunning(false) }
+        if (startGuard.superseded(attempt, connectionManager.pendingSession != null)) {
+            // The write above suspends — a connect() that landed inside it owns
+            // the desire flag now, so the stale clear is undone.
+            persistSetting { settings.setDesiredVpnRunning(true) }
+            SecureLog.i(TAG, "start failure raced a newer connect — desire restored")
+            return
+        }
         connectionManager.onSessionlessStartFailed(error)
         cleanup()
         stopSelf()
@@ -943,6 +1007,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
 
     private fun stopTunnel() {
         stopRequested = true
+        // A queued start belongs to the session the user just stopped.
+        startGuard.clearQueuedStart()
         // A suspended automatic start must not resurrect the tunnel or
         // stopSelf() past this teardown.
         autoStartJob?.cancel()
