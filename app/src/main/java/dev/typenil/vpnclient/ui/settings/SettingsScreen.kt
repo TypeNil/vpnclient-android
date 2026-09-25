@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -30,15 +30,15 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
@@ -61,6 +61,7 @@ import dev.typenil.vpnclient.ui.common.CORE_VERSION
 fun SettingsScreen(
     onOpenRouting: () -> Unit,
     onOpenAppFilter: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -71,19 +72,20 @@ fun SettingsScreen(
     // process/config change only if the flag flips back to true.
     LaunchedEffect(ui.reconnectRecommended) {
         if (ui.reconnectRecommended) {
-            val result = snackbarHostState.showSnackbar(
-                message = context.getString(R.string.settings_snackbar_reconnect_message),
-                actionLabel = context.getString(R.string.settings_snackbar_reconnect_action),
-            )
+            val result =
+                snackbarHostState.showSnackbar(
+                    message = context.getString(R.string.settings_snackbar_reconnect_message),
+                    actionLabel = context.getString(R.string.settings_snackbar_reconnect_action),
+                )
             if (result == SnackbarResult.ActionPerformed) viewModel.reconnect()
         }
     }
 
-
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+        modifier =
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
     ) {
         SwitchRow(
             title = stringResource(R.string.settings_reconnect_on_change),
@@ -110,10 +112,11 @@ fun SettingsScreen(
             onCheckedChange = viewModel::setAutoConnectOnLaunch,
         )
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onOpenRouting)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenRouting)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -147,19 +150,20 @@ fun SettingsScreen(
         AlwaysOnRow()
         SwitchRow(
             title = stringResource(R.string.settings_auto_refresh),
-            subtitle = if (ui.autoRefreshEnabled) {
-                if (ui.autoRefreshMinutes > 0) {
-                    // Periodic work can't run faster than the platform floor.
-                    stringResource(
-                        R.string.settings_auto_refresh_every,
-                        maxOf(ui.autoRefreshMinutes, 15),
-                    )
+            subtitle =
+                if (ui.autoRefreshEnabled) {
+                    if (ui.autoRefreshMinutes > 0) {
+                        // Periodic work can't run faster than the platform floor.
+                        stringResource(
+                            R.string.settings_auto_refresh_every,
+                            maxOf(ui.autoRefreshMinutes, 15),
+                        )
+                    } else {
+                        stringResource(R.string.settings_auto_refresh_provider)
+                    }
                 } else {
-                    stringResource(R.string.settings_auto_refresh_provider)
-                }
-            } else {
-                stringResource(R.string.settings_auto_refresh_manual)
-            },
+                    stringResource(R.string.settings_auto_refresh_manual)
+                },
             checked = ui.autoRefreshEnabled,
             onCheckedChange = viewModel::setAutoRefreshEnabled,
         )
@@ -176,6 +180,27 @@ fun SettingsScreen(
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenDiagnostics)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.diag_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    stringResource(R.string.settings_diagnostics_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         InfoRow(title = stringResource(R.string.common_vpn_core), value = CORE_VERSION)
     }
 }
@@ -188,9 +213,10 @@ private fun SwitchRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -207,13 +233,17 @@ private fun SwitchRow(
 
 /** Theme picker — applies live on selection (no reconnect, no restart). */
 @Composable
-private fun ThemeModeRow(mode: ThemeMode, onSelect: (ThemeMode) -> Unit) {
+private fun ThemeModeRow(
+    mode: ThemeMode,
+    onSelect: (ThemeMode) -> Unit,
+) {
     var showDialog by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { showDialog = true }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -233,17 +263,17 @@ private fun ThemeModeRow(mode: ThemeMode, onSelect: (ThemeMode) -> Unit) {
                 Column(Modifier.selectableGroup()) {
                     ThemeMode.entries.forEach { option ->
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = option == mode,
-                                    onClick = {
-                                        onSelect(option)
-                                        showDialog = false
-                                    },
-                                    role = Role.RadioButton,
-                                )
-                                .padding(vertical = 6.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = option == mode,
+                                        onClick = {
+                                            onSelect(option)
+                                            showDialog = false
+                                        },
+                                        role = Role.RadioButton,
+                                    ).padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = option == mode, onClick = null)
@@ -266,23 +296,28 @@ private fun ThemeModeRow(mode: ThemeMode, onSelect: (ThemeMode) -> Unit) {
 }
 
 @Composable
-private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
-    ThemeMode.System -> stringResource(R.string.theme_system)
-    ThemeMode.Light -> stringResource(R.string.theme_light)
-    ThemeMode.Dark -> stringResource(R.string.theme_dark)
-}
+private fun themeModeLabel(mode: ThemeMode): String =
+    when (mode) {
+        ThemeMode.System -> stringResource(R.string.theme_system)
+        ThemeMode.Light -> stringResource(R.string.theme_light)
+        ThemeMode.Dark -> stringResource(R.string.theme_dark)
+    }
 
 /** Language picker — persisted via DataStore; applied by the platform on
  *  API 33+ (system per-app language) and by an activity-recreate below.
  *  The VPN service is never restarted for this. */
 @Composable
-private fun LanguageRow(language: AppLanguage, onSelect: (AppLanguage) -> Unit) {
+private fun LanguageRow(
+    language: AppLanguage,
+    onSelect: (AppLanguage) -> Unit,
+) {
     var showDialog by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { showDialog = true }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { showDialog = true }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -302,17 +337,17 @@ private fun LanguageRow(language: AppLanguage, onSelect: (AppLanguage) -> Unit) 
                 Column(Modifier.selectableGroup()) {
                     AppLanguage.entries.forEach { option ->
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = option == language,
-                                    onClick = {
-                                        onSelect(option)
-                                        showDialog = false
-                                    },
-                                    role = Role.RadioButton,
-                                )
-                                .padding(vertical = 6.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = option == language,
+                                        onClick = {
+                                            onSelect(option)
+                                            showDialog = false
+                                        },
+                                        role = Role.RadioButton,
+                                    ).padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = option == language, onClick = null)
@@ -335,11 +370,12 @@ private fun LanguageRow(language: AppLanguage, onSelect: (AppLanguage) -> Unit) 
 }
 
 @Composable
-private fun languageLabel(language: AppLanguage): String = when (language) {
-    AppLanguage.System -> stringResource(R.string.language_system)
-    AppLanguage.English -> stringResource(R.string.language_english)
-    AppLanguage.Russian -> stringResource(R.string.language_russian)
-}
+private fun languageLabel(language: AppLanguage): String =
+    when (language) {
+        AppLanguage.System -> stringResource(R.string.language_system)
+        AppLanguage.English -> stringResource(R.string.language_english)
+        AppLanguage.Russian -> stringResource(R.string.language_russian)
+    }
 
 /** Optional user interval override; empty field = follow the provider hint.
  *  Committed on IME Done — per-keystroke writes would re-enqueue all work. */
@@ -362,9 +398,10 @@ private fun AutoRefreshIntervalRow(
     }
     val focusManager = LocalFocusManager.current
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         OutlinedTextField(
@@ -377,15 +414,17 @@ private fun AutoRefreshIntervalRow(
             placeholder = { Text(stringResource(R.string.settings_interval_placeholder)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    onMinutes(text.text.toIntOrNull() ?: 0)
-                    focusManager.clearFocus()
-                },
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { focused = it.isFocused },
+            keyboardActions =
+                KeyboardActions(
+                    onDone = {
+                        onMinutes(text.text.toIntOrNull() ?: 0)
+                        focusManager.clearFocus()
+                    },
+                ),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused },
         )
     }
 }
@@ -405,47 +444,54 @@ private fun AlwaysOnRow() {
     // Re-read when returning from the system VPN settings screen.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                status = readVpnSystemStatus(context)
+        val observer =
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    status = readVpnSystemStatus(context)
+                }
             }
-        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val subtitle = when {
-        !status.available -> stringResource(R.string.settings_always_on_unavailable)
-        else -> stringResource(
-            R.string.settings_always_on_status,
-            stringResource(
-                if (status.alwaysOn == true) R.string.common_enabled else R.string.common_disabled,
-            ),
-            // Lockdown is only meaningful when always-on is set — the system
-            // reports its raw flag, so surface what it actually says.
-            stringResource(
-                if (status.lockdownEnabled == true) {
-                    R.string.common_enabled
-                } else {
-                    R.string.common_disabled
-                },
-            ),
-        )
-    }
+    val subtitle =
+        when {
+            !status.available -> {
+                stringResource(R.string.settings_always_on_unavailable)
+            }
+
+            else -> {
+                stringResource(
+                    R.string.settings_always_on_status,
+                    stringResource(
+                        if (status.alwaysOn == true) R.string.common_enabled else R.string.common_disabled,
+                    ),
+                    // Lockdown is only meaningful when always-on is set — the system
+                    // reports its raw flag, so surface what it actually says.
+                    stringResource(
+                        if (status.lockdownEnabled == true) {
+                            R.string.common_enabled
+                        } else {
+                            R.string.common_disabled
+                        },
+                    ),
+                )
+            }
+        }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable {
-                // Apps can't enable lockdown themselves — the system VPN
-                // settings screen is the only supported path.
-                runCatching {
-                    context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
-                }.onFailure {
-                    context.startActivity(Intent(Settings.ACTION_SETTINGS))
-                }
-            }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    // Apps can't enable lockdown themselves — the system VPN
+                    // settings screen is the only supported path.
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                    }.onFailure {
+                        context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                    }
+                }.padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -460,11 +506,15 @@ private fun AlwaysOnRow() {
 }
 
 @Composable
-private fun InfoRow(title: String, value: String) {
+private fun InfoRow(
+    title: String,
+    value: String,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -486,31 +536,36 @@ private fun NotificationPermissionRow() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
 
     val context = LocalContext.current
-    fun isGranted() = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.POST_NOTIFICATIONS,
-    ) == PackageManager.PERMISSION_GRANTED
+
+    fun isGranted() =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
 
     var granted by remember { mutableStateOf(isGranted()) }
 
     // Re-check when returning from the system permission dialog/settings.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) granted = isGranted()
-        }
+        val observer =
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) granted = isGranted()
+            }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { result -> granted = result }
+    val launcher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { result -> granted = result }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {

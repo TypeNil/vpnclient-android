@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
-import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
@@ -52,9 +51,12 @@ import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.core.vpn.VpnError
 import dev.typenil.vpnclient.ui.common.CORE_VERSION
+import dev.typenil.vpnclient.ui.common.DetailRow
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
-import java.time.Duration
+import dev.typenil.vpnclient.ui.common.perAppSummary
+import dev.typenil.vpnclient.ui.common.routeModeSummary
+import dev.typenil.vpnclient.ui.common.uptimeText
 import java.time.Instant
 
 @Composable
@@ -163,15 +165,37 @@ fun HomeScreen(
 @Composable
 private fun statusText(state: VpnConnectionState): String =
     when (state) {
-        VpnConnectionState.Idle -> stringResource(R.string.home_status_disconnected)
-        is VpnConnectionState.Preparing -> stringResource(R.string.home_status_preparing)
-        VpnConnectionState.PermissionRequired -> stringResource(R.string.home_status_permission)
-        is VpnConnectionState.Connecting -> stringResource(R.string.home_status_connecting)
-        is VpnConnectionState.Connected -> stringResource(R.string.home_status_connected)
-        is VpnConnectionState.Reconnecting ->
+        VpnConnectionState.Idle -> {
+            stringResource(R.string.home_status_disconnected)
+        }
+
+        is VpnConnectionState.Preparing -> {
+            stringResource(R.string.home_status_preparing)
+        }
+
+        VpnConnectionState.PermissionRequired -> {
+            stringResource(R.string.home_status_permission)
+        }
+
+        is VpnConnectionState.Connecting -> {
+            stringResource(R.string.home_status_connecting)
+        }
+
+        is VpnConnectionState.Connected -> {
+            stringResource(R.string.home_status_connected)
+        }
+
+        is VpnConnectionState.Reconnecting -> {
             stringResource(R.string.home_status_reconnecting, state.attempt)
-        VpnConnectionState.Stopping -> stringResource(R.string.home_status_disconnecting)
-        is VpnConnectionState.Error -> stringResource(R.string.home_status_failed)
+        }
+
+        VpnConnectionState.Stopping -> {
+            stringResource(R.string.home_status_disconnecting)
+        }
+
+        is VpnConnectionState.Error -> {
+            stringResource(R.string.home_status_failed)
+        }
     }
 
 @Composable
@@ -444,8 +468,9 @@ private fun PickerRow(
             Text(
                 text =
                     option.title
-                        ?: option.titleRes?.let { stringResource(it) }
-                        .orEmpty(),
+                        ?: option.titleRes
+                            ?.let { stringResource(it) }
+                            .orEmpty(),
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -555,11 +580,12 @@ private fun StatsCard(
             )
             StatRow(
                 label = stringResource(R.string.home_stat_connections),
-                value = stringResource(
-                    R.string.home_stat_connections_value,
-                    stats.connectionsIn,
-                    stats.connectionsOut,
-                ),
+                value =
+                    stringResource(
+                        R.string.home_stat_connections_value,
+                        stats.connectionsIn,
+                        stats.connectionsOut,
+                    ),
                 // clickable before padding — the padded area stays tappable.
                 modifier =
                     Modifier
@@ -589,50 +615,6 @@ private fun StatsCard(
                 },
             )
         }
-    }
-}
-
-@Composable
-private fun routeModeSummary(mode: RouteMode): String =
-    when (mode) {
-        RouteMode.ALL -> stringResource(R.string.route_mode_all)
-        RouteMode.BYPASS_RU -> stringResource(R.string.route_mode_bypass_ru)
-        RouteMode.PROXY_BLOCKED -> stringResource(R.string.route_mode_proxy_blocked)
-    }
-
-@Composable
-private fun perAppSummary(
-    mode: PerAppMode,
-    count: Int,
-): String =
-    when (mode) {
-        PerAppMode.ALL -> stringResource(R.string.per_app_mode_all)
-        PerAppMode.INCLUDE ->
-            stringResource(
-                if (count == 1) R.string.home_per_app_include_one else R.string.home_per_app_include,
-                count,
-            )
-        PerAppMode.EXCLUDE ->
-            stringResource(
-                if (count == 1) R.string.home_per_app_exclude_one else R.string.home_per_app_exclude,
-                count,
-            )
-    }
-
-/** Elapsed since Connected — whole units, no fake precision. */
-@Composable
-private fun uptimeText(
-    since: Instant,
-    now: Instant = Instant.now(),
-): String {
-    val seconds = Duration.between(since, now).seconds.coerceAtLeast(0)
-    val h = seconds / 3600
-    val m = (seconds % 3600) / 60
-    val s = seconds % 60
-    return when {
-        h > 0 -> stringResource(R.string.home_uptime_hms, h, m, s)
-        m > 0 -> stringResource(R.string.home_uptime_ms, m, s)
-        else -> stringResource(R.string.home_uptime_s, s)
     }
 }
 
@@ -710,31 +692,6 @@ private fun SessionDetailsSheet(
             // live state, so it renders even when the session is healthy.
             details?.lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
         }
-    }
-}
-
-@Composable
-private fun DetailRow(
-    label: String,
-    value: String,
-) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // Floor under the label: a long value (raw outbound tag) would
-            // otherwise squeeze it down to one letter per line.
-            modifier = Modifier.weight(1.1f),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.End,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(0.9f),
-        )
     }
 }
 

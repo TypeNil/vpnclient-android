@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider share roots. Only the diagnostics export directory is
+     exposed — the node DB and settings stores hold proxy credentials and
+     must never be reachable through a content URI. -->
+<paths>
+    <cache-path
+        name="diagnostics"
+        path="diagnostics/" />
+</paths>

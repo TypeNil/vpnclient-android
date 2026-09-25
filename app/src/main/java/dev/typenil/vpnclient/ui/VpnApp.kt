@@ -33,13 +33,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.typenil.vpnclient.R
-import kotlinx.coroutines.flow.StateFlow
 import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.ui.appfilter.AppFilterScreen
 import dev.typenil.vpnclient.ui.connections.ConnectionsScreen
+import dev.typenil.vpnclient.ui.diagnostics.DiagnosticsScreen
 import dev.typenil.vpnclient.ui.home.HomeScreen
 import dev.typenil.vpnclient.ui.qrscan.QR_RESULT_KEY
 import dev.typenil.vpnclient.ui.qrscan.QrScanScreen
@@ -48,6 +48,7 @@ import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
 import dev.typenil.vpnclient.ui.subscriptions.SubscriptionsScreen
 import dev.typenil.vpnclient.ui.theme.VPNClientTheme
+import kotlinx.coroutines.flow.StateFlow
 
 object Routes {
     const val HOME = "home"
@@ -58,6 +59,7 @@ object Routes {
     const val APP_FILTER = "app_filter"
     const val QR_SCAN = "qr_scan"
     const val CONNECTIONS = "connections"
+    const val DIAGNOSTICS = "diagnostics"
 }
 
 /** savedStateHandle flag: the SUBSCRIPTIONS entry should open its add
@@ -71,12 +73,13 @@ private data class TopLevelDestination(
     val icon: ImageVector,
 )
 
-private val topLevelDestinations = listOf(
-    TopLevelDestination(Routes.HOME, R.string.nav_home, Icons.Default.Home),
-    TopLevelDestination(Routes.SERVERS, R.string.nav_servers, Icons.Default.List),
-    TopLevelDestination(Routes.SUBSCRIPTIONS, R.string.nav_subscriptions, Icons.Default.Share),
-    TopLevelDestination(Routes.SETTINGS, R.string.nav_settings, Icons.Default.Settings),
-)
+private val topLevelDestinations =
+    listOf(
+        TopLevelDestination(Routes.HOME, R.string.nav_home, Icons.Default.Home),
+        TopLevelDestination(Routes.SERVERS, R.string.nav_servers, Icons.Default.List),
+        TopLevelDestination(Routes.SUBSCRIPTIONS, R.string.nav_subscriptions, Icons.Default.Share),
+        TopLevelDestination(Routes.SETTINGS, R.string.nav_settings, Icons.Default.Settings),
+    )
 
 /**
  * Root composable: theme + bottom nav + NavHost.
@@ -118,11 +121,12 @@ fun VpnApp(
         }
 
         val prepareIntent by connectionManager.prepareIntent.collectAsStateWithLifecycle()
-        val vpnConsentLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.StartActivityForResult(),
-        ) { result ->
-            connectionManager.onPermissionResult(result.resultCode == Activity.RESULT_OK)
-        }
+        val vpnConsentLauncher =
+            rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult(),
+            ) { result ->
+                connectionManager.onPermissionResult(result.resultCode == Activity.RESULT_OK)
+            }
         LaunchedEffect(prepareIntent) {
             prepareIntent?.let { vpnConsentLauncher.launch(it) }
         }
@@ -136,9 +140,10 @@ fun VpnApp(
                     val currentDestination = backStackEntry?.destination
                     topLevelDestinations.forEach { destination ->
                         NavigationBarItem(
-                            selected = currentDestination?.hierarchy?.any {
-                                it.route == destination.route
-                            } == true,
+                            selected =
+                                currentDestination?.hierarchy?.any {
+                                    it.route == destination.route
+                                } == true,
                             onClick = {
                                 navController.navigate(destination.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {
@@ -252,6 +257,7 @@ fun VpnApp(
                     SettingsScreen(
                         onOpenRouting = { navController.navigate(Routes.ROUTING) },
                         onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                        onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                         snackbarHostState = snackbarHostState,
                     )
                 }
@@ -267,6 +273,9 @@ fun VpnApp(
                 }
                 composable(Routes.CONNECTIONS) {
                     ConnectionsScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Routes.DIAGNOSTICS) {
+                    DiagnosticsScreen(onBack = { navController.popBackStack() })
                 }
                 composable(Routes.QR_SCAN) {
                     QrScanScreen(

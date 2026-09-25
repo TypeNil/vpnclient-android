@@ -200,6 +200,25 @@
     <string name="settings_notifications_denied">Not granted</string>
     <string name="settings_notifications_allow">Allow</string>
 
+    <!-- Diagnostics -->
+    <string name="diag_title">Diagnostics</string>
+    <string name="settings_diagnostics_sub">Session state, IP check, log export</string>
+    <string name="diag_session_state">Connection state</string>
+    <string name="diag_check_ip">Check my IP</string>
+    <string name="diag_check_ip_hint">Fetch an IP-echo endpoint through the tunnel — a connectivity check, not a routing guarantee</string>
+    <string name="diag_check_ip_running">Checking…</string>
+    <string name="diag_ip_result">%1$s · %2$d ms</string>
+    <string name="diag_ip_error">Check failed: %1$s</string>
+    <string name="diag_ip_timeout">request timed out</string>
+    <string name="diag_ip_http">server returned HTTP %1$s</string>
+    <string name="diag_ip_unexpected">unexpected response</string>
+    <string name="diag_ip_network">network error (%1$s)</string>
+    <string name="diag_ip_not_connected">Not connected — the probe goes direct, not through the tunnel</string>
+    <string name="diag_export_log">Export log</string>
+    <string name="diag_export_log_sub">Last %1$d lines, already redacted — shareable as a text file</string>
+    <string name="diag_export_empty">Nothing to export yet</string>
+    <string name="diag_share_chooser">Share diagnostics log</string>
+
     <!-- Subscriptions -->
     <string name="subs_empty">No subscriptions yet</string>
     <string name="subs_add_cd">Add subscription</string>

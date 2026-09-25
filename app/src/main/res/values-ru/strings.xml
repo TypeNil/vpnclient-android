@@ -200,6 +200,25 @@
     <string name="settings_notifications_denied">Не разрешены</string>
     <string name="settings_notifications_allow">Разрешить</string>
 
+    <!-- Diagnostics -->
+    <string name="diag_title">Диагностика</string>
+    <string name="settings_diagnostics_sub">Состояние сессии, проверка IP, экспорт лога</string>
+    <string name="diag_session_state">Состояние подключения</string>
+    <string name="diag_check_ip">Проверить мой IP</string>
+    <string name="diag_check_ip_hint">Запрос к IP-echo сервису через туннель — проверка связности, а не гарантия маршрутизации</string>
+    <string name="diag_check_ip_running">Проверка…</string>
+    <string name="diag_ip_result">%1$s · %2$d мс</string>
+    <string name="diag_ip_error">Ошибка проверки: %1$s</string>
+    <string name="diag_ip_timeout">превышено время ожидания</string>
+    <string name="diag_ip_http">сервер ответил HTTP %1$s</string>
+    <string name="diag_ip_unexpected">неожиданный ответ</string>
+    <string name="diag_ip_network">сетевая ошибка (%1$s)</string>
+    <string name="diag_ip_not_connected">Нет подключения — запрос идёт напрямую, не через туннель</string>
+    <string name="diag_export_log">Экспорт лога</string>
+    <string name="diag_export_log_sub">Последние %1$d строк, уже без секретов — отправляется как текстовый файл</string>
+    <string name="diag_export_empty">Пока нечего экспортировать</string>
+    <string name="diag_share_chooser">Поделиться логом диагностики</string>
+
     <!-- Subscriptions -->
     <string name="subs_empty">Пока нет подписок</string>
     <string name="subs_add_cd">Добавить подписку</string>

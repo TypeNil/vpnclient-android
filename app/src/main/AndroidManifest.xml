@@ -79,6 +79,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Serves the redacted diagnostics export to the share sheet —
+             scoped to cache-path "diagnostics/" only. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- QS tile: toggle connect/disconnect; state mirrors the manager. -->
         <service
             android:name=".core.vpn.VpnTileService"
