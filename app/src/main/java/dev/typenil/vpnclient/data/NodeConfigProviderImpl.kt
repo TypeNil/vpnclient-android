@@ -48,7 +48,7 @@ class NodeConfigProviderImpl
         override val compiledNodeSetFingerprint: StateFlow<String?> =
             _compiledNodeSetFingerprint.asStateFlow()
 
-        override val enabledNodeSetFingerprint: Flow<String?> =
+        override val enabledNodeSetFingerprint: Flow<String> =
             nodeDao.observeEnabled()
                 .map { entities -> nodeSetFingerprint(entities) }
                 // Hashing a few hundred outbound JSONs — off the collector's
@@ -70,10 +70,10 @@ class NodeConfigProviderImpl
             if (nodes.isEmpty()) {
                 // Nothing to compile — record it so a live session comparing
                 // fingerprints sees the emptied set rather than a stale one.
+                // Null (not the empty-set digest): no config was built.
                 _compiledNodeSetFingerprint.value = null
                 return null
-            }
-            // A refresh can commit a node set that no longer contains the
+            }            // A refresh can commit a node set that no longer contains the
             // persisted selection before its post-commit cleanup runs — clear it
             // here so a connect in that window falls back instead of failing.
             // The conditional clear can't wipe a selection the user just made.
@@ -154,11 +154,10 @@ fun NodeEntity.toDomain(): ProxyNode =
  * plus their outbound JSON. Order-insensitive (row position is presentation
  * and a refresh that only reorders must not force a rebuild) and blind to
  * display-only fields (name, protocol label) — the compiled outbound list is
- * what a live session depends on. Null when nothing is enabled. Pure —
- * JVM-testable.
+ * what a live session depends on. An empty set digests to a stable value of
+ * its own, never to null. Pure — JVM-testable.
  */
-internal fun nodeSetFingerprint(entities: List<NodeEntity>): String? {
-    if (entities.isEmpty()) return null
+internal fun nodeSetFingerprint(entities: List<NodeEntity>): String {
     val digest = MessageDigest.getInstance("SHA-256")
     entities.sortedBy { it.id }.forEach { node ->
         digest.update(node.id.toByteArray(Charsets.UTF_8))

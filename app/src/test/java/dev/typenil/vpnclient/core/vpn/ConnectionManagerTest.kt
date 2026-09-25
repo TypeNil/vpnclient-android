@@ -91,7 +91,7 @@ class ConnectionManagerTest {
         var summaries = mapOf<String, NodeSummary>()
 
         /** Fingerprint of the enabled set the live session compares against. */
-        val enabledFingerprint = MutableStateFlow<String?>(null)
+        val enabledFingerprint = MutableStateFlow("fingerprint-a")
 
         /** Fingerprint the last compile ran against — the fake compile just
          *  records whatever the test set as [enabledFingerprint]. */
@@ -105,7 +105,7 @@ class ConnectionManagerTest {
 
         override val selectedNodeId: Flow<String?> get() = selected
         override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id]
-        override val enabledNodeSetFingerprint: Flow<String?> get() = enabledFingerprint
+        override val enabledNodeSetFingerprint: Flow<String> get() = enabledFingerprint
         override val compiledNodeSetFingerprint: StateFlow<String?> get() = compiledFingerprint
     }
 
@@ -587,7 +587,7 @@ class ConnectionManagerTest {
                 AppliedSessionConfig(
                     routeMode = RouteMode.BYPASS_RU,
                     perAppMode = PerAppMode.EXCLUDE,
-                    perAppPackageCount = 3,
+                    perAppPackages = setOf("com.a", "com.b", "com.c"),
                 )
 
             manager.reportAppliedSessionConfig(applied)

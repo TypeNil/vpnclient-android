@@ -3,7 +3,6 @@ package dev.typenil.vpnclient.data
 import dev.typenil.vpnclient.data.db.NodeEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -31,8 +30,13 @@ class NodeSetFingerprintTest {
     )
 
     @Test
-    fun `no enabled nodes has no fingerprint`() {
-        assertNull(nodeSetFingerprint(emptyList()))
+    fun `an empty set has its own stable fingerprint, never null`() {
+        // Null is reserved for "no reading / no compile yet" — an empty set
+        // must be distinguishable from a missing baseline.
+        val empty = nodeSetFingerprint(emptyList())
+
+        assertEquals(empty, nodeSetFingerprint(emptyList()))
+        assertNotEquals(empty, nodeSetFingerprint(listOf(node("a"))))
     }
 
     @Test

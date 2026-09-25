@@ -614,7 +614,7 @@ private fun SessionDetailsSheet(
             DetailRow("Routing mode", details?.applied?.let { routeModeSummary(it.routeMode) } ?: "—")
             DetailRow(
                 "Per-app VPN",
-                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackageCount) } ?: "—",
+                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackages.size) } ?: "—",
             )
             // Named, not silently ignored: these are changed-but-unapplied.
             details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {

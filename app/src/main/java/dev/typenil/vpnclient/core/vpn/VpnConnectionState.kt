@@ -75,12 +75,26 @@ sealed class VpnError : Exception() {
     data class Unexpected(val detail: String) : VpnError()
 
     companion object {
-        fun fromEngine(error: EngineError): VpnError = when (error) {
-            is EngineError.InvalidConfig -> ConfigInvalid(error.message)
-            is EngineError.MissingVpnPermission -> PermissionRevoked
-            is EngineError.TunnelFailed -> TunnelFailed(error.message)
-            is EngineError.StartFailed -> EngineFailed(error.message)
-            is EngineError.CoreError -> EngineFailed(error.message)
-        }
+        fun fromEngine(error: EngineError): VpnError =
+            when (error) {
+                is EngineError.InvalidConfig -> ConfigInvalid(error.message)
+                is EngineError.MissingVpnPermission -> PermissionRevoked
+                is EngineError.TunnelFailed -> TunnelFailed(error.message)
+                is EngineError.StartFailed -> EngineFailed(error.message)
+                is EngineError.CoreError -> EngineFailed(error.message)
+            }
     }
 }
+
+/**
+ * Typed error for a failed compile/start. [EngineError]s carry their own kind;
+ * anything else (a rule-set preparation failure, an unexpected crash) is
+ * reported with its message rather than flattened into a generic guess — a
+ * config that couldn't be compiled must never read as "no servers selected".
+ */
+internal fun engineFailure(cause: Exception, fallback: String): VpnError =
+    if (cause is EngineError) {
+        VpnError.fromEngine(cause)
+    } else {
+        VpnError.Unexpected(cause.message ?: fallback)
+    }

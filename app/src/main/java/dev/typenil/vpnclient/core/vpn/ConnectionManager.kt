@@ -39,8 +39,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 data class AppliedSessionConfig(
     val routeMode: RouteMode,
     val perAppMode: PerAppMode,
-    /** Packages in the applied include/exclude list (0 in ALL mode). */
-    val perAppPackageCount: Int,
+    /** The applied include/exclude list. Compared as a set — swapping one app
+     *  for another keeps the count but is still an unapplied change. The UI
+     *  shows only its size. */
+    val perAppPackages: Set<String>,
 )
 
 /**
@@ -59,17 +61,18 @@ interface NodeConfigProvider {
     suspend fun nodeSummary(id: String): NodeSummary?
 
     /**
-     * Fingerprint of the enabled node set's tunnel-relevant content; null
-     * when nothing is enabled. Changes whenever the compiled outbound list
-     * would change — the signal a live session must rebuild on. Insensitive
-     * to row order and to display-only edits.
+     * Fingerprint of the enabled node set's tunnel-relevant content. Changes
+     * whenever the compiled outbound list would change — the signal a live
+     * session must rebuild on. Insensitive to row order and to display-only
+     * edits. Never null: an empty set has its own stable digest, so "nothing
+     * enabled" can't be confused with "no reading yet".
      */
-    val enabledNodeSetFingerprint: Flow<String?>
+    val enabledNodeSetFingerprint: Flow<String>
 
     /**
      * Fingerprint of the node set the most recent [compileSelected] ran
      * against — the baseline a live session compares
-     * [enabledNodeSetFingerprint] to. Null before the first compile.
+     * [enabledNodeSetFingerprint] to. Null until this process compiles.
      */
     val compiledNodeSetFingerprint: StateFlow<String?>
 }

@@ -225,8 +225,11 @@ class HomeViewModel
                                             if (appliedConfig.routeMode != routeMode) {
                                                 add("Routing mode")
                                             }
+                                            // The set, not the size: replacing
+                                            // one app with another is still
+                                            // an unapplied change.
                                             if (appliedConfig.perAppMode != perAppMode ||
-                                                appliedConfig.perAppPackageCount != perAppPackages.size
+                                                appliedConfig.perAppPackages != perAppPackages
                                             ) {
                                                 add("Per-app VPN")
                                             }

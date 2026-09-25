@@ -22,6 +22,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.VpnSocketProtector
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.EngineConfig
+import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineNotification
 import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
@@ -207,6 +208,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
      *  protocol as the network-change path — main-thread confined. */
     private var rebuildJob: Job? = null
     private var rebuildDirty = false
+    /** Decides whether a node-set change needs a recompile + rebuild. */
+    private val nodeSetReconciler = NodeSetReconciler()
     /** A queued rebuild must recompile the config, not just re-establish the
      *  TUN — set when the change that requested it altered the node set.
      *  Sticky until the rebuild that consumes it. */
@@ -266,20 +269,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // compiled from — not a locally remembered baseline — so the signal
         // is exact even if the change raced the connect.
         scope.launch {
-            // The last fingerprint a rebuild was requested for. A single
-            // logical change can emit twice (e.g. a node delete plus the row
-            // cleanup) before the in-flight compile has updated
-            // [NodeConfigProvider.compiledNodeSetFingerprint] — without this
-            // the second emission queues a duplicate rebuild.
-            var requested: String? = null
+            // Compared against the fingerprint the running config was compiled
+            // from — not a locally remembered baseline — so the signal is
+            // exact even if the change raced the connect. The reconciler owns
+            // the "already requested" bookkeeping: an empty set is a real
+            // fingerprint, not the absence of one.
             configProvider.enabledNodeSetFingerprint.collect { fingerprint ->
                 if (activeGeneration < 0) {
-                    requested = null
+                    nodeSetReconciler.onSessionEnded()
                     return@collect
                 }
-                if (fingerprint == requested) return@collect
-                requested = fingerprint
-                if (fingerprint == configProvider.compiledNodeSetFingerprint.value) {
+                if (!nodeSetReconciler.shouldRebuild(
+                        fingerprint,
+                        configProvider.compiledNodeSetFingerprint.value,
+                    )
+                ) {
                     return@collect
                 }
                 requestTunnelRebuild(recompileConfig = true)
@@ -674,7 +678,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 AppliedSessionConfig(
                     routeMode = config.routeMode,
                     perAppMode = perAppMode,
-                    perAppPackageCount = perAppPackages.size,
+                    perAppPackages = perAppPackages,
                 ),
             )
             created.start(
@@ -731,11 +735,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     connectionManager.onServiceStopped(generation)
                 } else {
                     connectionManager.onServiceFailed(
-                        if (e is dev.typenil.vpnclient.core.engine.EngineError) {
-                            VpnError.fromEngine(e)
-                        } else {
-                            VpnError.Unexpected(e.message ?: "engine start failed")
-                        },
+                        engineFailure(e, "engine start failed"),
                         // A connect() may have superseded our generation —
                         // the error belongs to the session now waiting.
                         connectionManager.pendingSession?.generation ?: generation,
@@ -804,28 +804,30 @@ class ClientVpnService : VpnService(), EnginePlatform {
     private suspend fun rebuildTunnel(recompile: Boolean) {
         val generation = activeGeneration
         if (destroyed || generation < 0) return
-        val config =
-            if (recompile) {
-                val fresh =
-                    try {
-                        configProvider.compileSelected()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        // A transient compile failure must not kill a working
-                        // tunnel — the next node-set change retries.
-                        SecureLog.w(TAG, "rebuild compile failed: ${e.javaClass.simpleName}")
-                        null
-                    }
-                if (fresh == null) {
-                    endSessionWithoutNodes(generation)
+        val config: EngineConfig
+        if (recompile) {
+            val fresh =
+                try {
+                    configProvider.compileSelected()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The engine's config no longer matches the store, so the
+                    // session can't simply continue — but the user must see
+                    // the real cause, not a claim that no servers exist.
+                    SecureLog.w(TAG, "rebuild compile failed: ${e.javaClass.simpleName}")
+                    endSessionWithFailure(e, generation)
                     return
                 }
-                activeConfig = fresh
-                fresh
-            } else {
-                activeConfig ?: return
+            if (fresh == null) {
+                endSessionWithoutNodes(generation)
+                return
             }
+            activeConfig = fresh
+            config = fresh
+        } else {
+            config = activeConfig ?: return
+        }
         connectionManager.onTunnelRebuildStarted()
         val old = engine
         engine = null
@@ -881,6 +883,25 @@ class ClientVpnService : VpnService(), EnginePlatform {
         connectionManager.onServiceFailed(VpnError.NoNodeSelected, generation)
         stopTunnel()
     }
+
+    /**
+     * The node-set change couldn't be compiled: the running engine would keep
+     * servers the user just removed, so the session ends — reporting the real
+     * error instead of "no servers selected".
+     */
+    private suspend fun endSessionWithFailure(cause: Exception, generation: Long) {
+        SecureLog.w(TAG, "session ended — node set change failed to compile")
+        persistSetting { settings.setDesiredVpnRunning(false) }
+        connectionManager.onServiceFailed(
+            engineFailure(cause, "node set change could not be applied"),
+            generation,
+        )
+        stopTunnel()
+    }
+
+    /** Typed error for a failed compile/start — the user sees the real cause. */
+    private fun engineFailure(cause: Exception, fallback: String): VpnError =
+        dev.typenil.vpnclient.core.vpn.engineFailure(cause, fallback)
 
     private fun stopTunnel() {
         stopRequested = true

@@ -67,7 +67,7 @@ class ConnectionsViewModelTest {
         override suspend fun compileSelected(): EngineConfig = config
         override val selectedNodeId: Flow<String?> = MutableStateFlow(null)
         override suspend fun nodeSummary(id: String): NodeSummary? = null
-        override val enabledNodeSetFingerprint: Flow<String?> = MutableStateFlow(null)
+        override val enabledNodeSetFingerprint: Flow<String> = MutableStateFlow("fingerprint-a")
         override val compiledNodeSetFingerprint: StateFlow<String?> = MutableStateFlow(null)
     }
 
