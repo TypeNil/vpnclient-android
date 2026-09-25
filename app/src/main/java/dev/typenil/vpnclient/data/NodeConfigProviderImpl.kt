@@ -16,9 +16,16 @@ import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import java.net.Inet6Address
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,6 +41,20 @@ class NodeConfigProviderImpl
     ) : NodeConfigProvider {
         override val selectedNodeId: Flow<String?> = settings.selectedNodeId
 
+        /** Fingerprint of the node set the last compile ran against. Written
+         *  from the same DB read the compile used, so a live session can
+         *  detect a change without racing the compile itself. */
+        private val _compiledNodeSetFingerprint = MutableStateFlow<String?>(null)
+        override val compiledNodeSetFingerprint: StateFlow<String?> =
+            _compiledNodeSetFingerprint.asStateFlow()
+
+        override val enabledNodeSetFingerprint: Flow<String?> =
+            nodeDao.observeEnabled()
+                .map { entities -> nodeSetFingerprint(entities) }
+                // Hashing a few hundred outbound JSONs — off the collector's
+                // thread (the service collects on the main dispatcher).
+                .flowOn(Dispatchers.Default)
+
         override suspend fun nodeSummary(id: String): NodeSummary? =
             // The Auto sentinel has no node row — its label comes from the
             // compiler's AUTO_NODE_SUMMARY, not the database.
@@ -44,8 +65,14 @@ class NodeConfigProviderImpl
             }
 
         override suspend fun compileSelected(): EngineConfig? {
-            val nodes = nodeDao.getEnabled().map { it.toDomain() }
-            if (nodes.isEmpty()) return null
+            val entities = nodeDao.getEnabled()
+            val nodes = entities.map { it.toDomain() }
+            if (nodes.isEmpty()) {
+                // Nothing to compile — record it so a live session comparing
+                // fingerprints sees the emptied set rather than a stale one.
+                _compiledNodeSetFingerprint.value = null
+                return null
+            }
             // A refresh can commit a node set that no longer contains the
             // persisted selection before its post-commit cleanup runs — clear it
             // here so a connect in that window falls back instead of failing.
@@ -60,15 +87,20 @@ class NodeConfigProviderImpl
             // lands here, and a still-stale id keeps failing loudly.
             val pick = settings.selectedNodeId.first()
             val routeMode = settings.routeMode.first()
-            return compiler.compile(
-                nodes = nodes,
-                selectedNodeId = pick,
-                ipv6Enabled = settings.ipv6Enabled.first(),
-                routeMode = routeMode,
-                underlayIpv6 = underlayHasIpv6(),
-                ruleSetPaths = ruleSetStore.ensureReady(routeMode),
-                selectAuto = pick == NodeSelection.AUTO_ID,
-            )
+            val compiled =
+                compiler.compile(
+                    nodes = nodes,
+                    selectedNodeId = pick,
+                    ipv6Enabled = settings.ipv6Enabled.first(),
+                    routeMode = routeMode,
+                    underlayIpv6 = underlayHasIpv6(),
+                    ruleSetPaths = ruleSetStore.ensureReady(routeMode),
+                    selectAuto = pick == NodeSelection.AUTO_ID,
+                )
+            // Only a successful compile becomes the baseline — a throw leaves
+            // the previous fingerprint so the change stays pending.
+            _compiledNodeSetFingerprint.value = nodeSetFingerprint(entities)
+            return compiled
         }
 
         /**
@@ -116,3 +148,23 @@ fun NodeEntity.toDomain(): ProxyNode =
         outboundJson = outboundJson,
         rawUri = rawUri,
     )
+
+/**
+ * Stable digest of the enabled node set's tunnel-relevant content: node ids
+ * plus their outbound JSON. Order-insensitive (row position is presentation
+ * and a refresh that only reorders must not force a rebuild) and blind to
+ * display-only fields (name, protocol label) — the compiled outbound list is
+ * what a live session depends on. Null when nothing is enabled. Pure —
+ * JVM-testable.
+ */
+internal fun nodeSetFingerprint(entities: List<NodeEntity>): String? {
+    if (entities.isEmpty()) return null
+    val digest = MessageDigest.getInstance("SHA-256")
+    entities.sortedBy { it.id }.forEach { node ->
+        digest.update(node.id.toByteArray(Charsets.UTF_8))
+        digest.update(0)
+        digest.update(node.outboundJson.toByteArray(Charsets.UTF_8))
+        digest.update(0)
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}

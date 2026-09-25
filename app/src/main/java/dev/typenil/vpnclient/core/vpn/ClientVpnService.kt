@@ -207,6 +207,10 @@ class ClientVpnService : VpnService(), EnginePlatform {
      *  protocol as the network-change path — main-thread confined. */
     private var rebuildJob: Job? = null
     private var rebuildDirty = false
+    /** A queued rebuild must recompile the config, not just re-establish the
+     *  TUN — set when the change that requested it altered the node set.
+     *  Sticky until the rebuild that consumes it. */
+    private var rebuildRecompile = false
     /** A policy change landed while the session wasn't Connected (e.g.
      *  network-loss Reconnecting — the live TUN would keep the stale plan).
      *  Drained when the session returns to Connected. */
@@ -253,6 +257,33 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 .filter { connectionManager.state.value is VpnConnectionState.Connected }
                 .debounce(PER_APP_REBUILD_DEBOUNCE_MS)
                 .collect { requestTunnelRebuild() }
+        }
+        // The enabled node set changed under a live session (a subscription
+        // was disabled, refreshed, edited, removed, or a share link was
+        // imported): the engine's compiled outbounds no longer match the
+        // store, so the tunnel would keep using servers the user just
+        // removed. Compared against the fingerprint the running config was
+        // compiled from — not a locally remembered baseline — so the signal
+        // is exact even if the change raced the connect.
+        scope.launch {
+            // The last fingerprint a rebuild was requested for. A single
+            // logical change can emit twice (e.g. a node delete plus the row
+            // cleanup) before the in-flight compile has updated
+            // [NodeConfigProvider.compiledNodeSetFingerprint] — without this
+            // the second emission queues a duplicate rebuild.
+            var requested: String? = null
+            configProvider.enabledNodeSetFingerprint.collect { fingerprint ->
+                if (activeGeneration < 0) {
+                    requested = null
+                    return@collect
+                }
+                if (fingerprint == requested) return@collect
+                requested = fingerprint
+                if (fingerprint == configProvider.compiledNodeSetFingerprint.value) {
+                    return@collect
+                }
+                requestTunnelRebuild(recompileConfig = true)
+            }
         }
         // A change parked by rebuildPending (network-loss Reconnecting)
         // applies the moment the session is Connected again.
@@ -636,6 +667,16 @@ class ClientVpnService : VpnService(), EnginePlatform {
             registerDozeReceiver()
             val (perAppMode, perAppPackages) = settings.perAppPolicySnapshot()
             val plan = resolvePerAppPlan(perAppMode, perAppPackages, packageName)
+            // Publish what this engine actually runs with — the details sheet
+            // must describe the applied plan, not settings that only take
+            // effect after a reconnect (route mode) or a rebuild (per-app).
+            connectionManager.reportAppliedSessionConfig(
+                AppliedSessionConfig(
+                    routeMode = config.routeMode,
+                    perAppMode = perAppMode,
+                    perAppPackageCount = perAppPackages.size,
+                ),
+            )
             created.start(
                 config.copy(
                     includedPackages = plan.allowed,
@@ -719,7 +760,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * dirty flag for one bounded re-run — same coalescing as
      * [notifyEngineNetworkChanged].
      */
-    private fun requestTunnelRebuild() {
+    private fun requestTunnelRebuild(recompileConfig: Boolean = false) {
+        // Sticky: a request that needs a fresh compile must not be downgraded
+        // to a plain TUN rebuild by a policy-only request landing later in
+        // the coalescing window.
+        if (recompileConfig) rebuildRecompile = true
         if (rebuildJob?.isActive == true) {
             rebuildDirty = true
             return
@@ -734,7 +779,9 @@ class ClientVpnService : VpnService(), EnginePlatform {
             var runs = 0
             do {
                 rebuildDirty = false
-                rebuildTunnel()
+                val recompile = rebuildRecompile
+                rebuildRecompile = false
+                rebuildTunnel(recompile)
             } while (
                 rebuildDirty && ++runs < MAX_TUNNEL_REBUILDS &&
                     connectionManager.state.value is VpnConnectionState.Connected
@@ -754,10 +801,31 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * is the only way to apply a new plan — the generation, notification,
      * and service all survive; the UI sees a brief Reconnecting.
      */
-    private suspend fun rebuildTunnel() {
+    private suspend fun rebuildTunnel(recompile: Boolean) {
         val generation = activeGeneration
-        val config = activeConfig
-        if (destroyed || generation < 0 || config == null) return
+        if (destroyed || generation < 0) return
+        val config =
+            if (recompile) {
+                val fresh =
+                    try {
+                        configProvider.compileSelected()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A transient compile failure must not kill a working
+                        // tunnel — the next node-set change retries.
+                        SecureLog.w(TAG, "rebuild compile failed: ${e.javaClass.simpleName}")
+                        null
+                    }
+                if (fresh == null) {
+                    endSessionWithoutNodes(generation)
+                    return
+                }
+                activeConfig = fresh
+                fresh
+            } else {
+                activeConfig ?: return
+            }
         connectionManager.onTunnelRebuildStarted()
         val old = engine
         engine = null
@@ -785,7 +853,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
             return
         }
         if (!launchEngine(config, generation)) return
-        connectionManager.onTunnelRebuilt(generation)
+        connectionManager.onTunnelRebuilt(generation, config.node)
         // A rebuilt engine never saw the current Doze state — the receiver
         // only forwards transitions.
         if (dozePowerSave) {
@@ -797,6 +865,21 @@ class ClientVpnService : VpnService(), EnginePlatform {
         if (lastUnderlyingNetwork == null) {
             connectionManager.onUnderlyingNetworkLost()
         }
+    }
+
+    /**
+     * The enabled node set emptied while a session was live: there is nothing
+     * left to route through, and keeping the engine would keep using nodes the
+     * user just removed. Ends the session with the honest error instead of a
+     * silent disconnect.
+     */
+    private suspend fun endSessionWithoutNodes(generation: Long) {
+        SecureLog.i(TAG, "session ended — no enabled nodes left")
+        // Not a transient failure: don't let a boot / always-on restore
+        // resurrect a tunnel that has nothing to connect to.
+        persistSetting { settings.setDesiredVpnRunning(false) }
+        connectionManager.onServiceFailed(VpnError.NoNodeSelected, generation)
+        stopTunnel()
     }
 
     private fun stopTunnel() {

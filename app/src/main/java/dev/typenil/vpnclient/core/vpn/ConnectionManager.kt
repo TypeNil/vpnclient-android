@@ -7,6 +7,7 @@ import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.resolveSelectionTarget
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -31,6 +32,18 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
+ * Routing/per-app snapshot the live session is actually running with. The
+ * service reports it when it (re)launches an engine; the UI shows this
+ * instead of the current settings, which may not be applied yet.
+ */
+data class AppliedSessionConfig(
+    val routeMode: RouteMode,
+    val perAppMode: PerAppMode,
+    /** Packages in the applied include/exclude list (0 in ALL mode). */
+    val perAppPackageCount: Int,
+)
+
+/**
  * Provides the engine config for the currently selected node.
  * Implemented by the subscription/config layer — keeps the VPN layer free
  * of subscription and core-format details.
@@ -44,6 +57,21 @@ interface NodeConfigProvider {
 
     /** Display summary for a node id, or null when the node is gone. */
     suspend fun nodeSummary(id: String): NodeSummary?
+
+    /**
+     * Fingerprint of the enabled node set's tunnel-relevant content; null
+     * when nothing is enabled. Changes whenever the compiled outbound list
+     * would change — the signal a live session must rebuild on. Insensitive
+     * to row order and to display-only edits.
+     */
+    val enabledNodeSetFingerprint: Flow<String?>
+
+    /**
+     * Fingerprint of the node set the most recent [compileSelected] ran
+     * against — the baseline a live session compares
+     * [enabledNodeSetFingerprint] to. Null before the first compile.
+     */
+    val compiledNodeSetFingerprint: StateFlow<String?>
 }
 
 /**
@@ -146,6 +174,11 @@ class ConnectionManager @Inject constructor(
      *  or when there is no usable underlay. */
     private val _underlyingTransport = MutableStateFlow(UnderlyingTransport.UNKNOWN)
     val underlyingTransport: StateFlow<UnderlyingTransport> = _underlyingTransport
+
+    /** Routing/per-app snapshot the service last applied to a live engine.
+     *  Null outside a session — there is no applied config to describe. */
+    private val _appliedSessionConfig = MutableStateFlow<AppliedSessionConfig?>(null)
+    val appliedSessionConfig: StateFlow<AppliedSessionConfig?> = _appliedSessionConfig
 
     /** User pressed Connect. */
     fun connect() {
@@ -531,10 +564,15 @@ class ConnectionManager @Inject constructor(
             // pick the label stays the generic "Auto · Fastest".
             val resolved = resolvedTag?.let { configProvider.nodeSummary(it) }
             if (resolved != null) {
-                summary = summary.copy(
-                    name = "${summary.name} → ${resolved.name}",
-                    server = resolved.server,
-                )
+                summary =
+                    summary.copy(
+                        name = "${summary.name} → ${resolved.name}",
+                        // The leaf's real protocol, not the group's internal
+                        // OTHER placeholder — the card describes the node the
+                        // tunnel is actually using.
+                        protocol = resolved.protocol,
+                        server = resolved.server,
+                    )
             }
         }
         sessionNode = summary
@@ -789,7 +827,7 @@ class ConnectionManager @Inject constructor(
         failureResetJob?.cancel()
         detachEngine()
         pendingSession = null
-        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
+        clearSessionObservations()
         publish(VpnConnectionState.Error(error, sessionNode))
     }
 
@@ -799,7 +837,7 @@ class ConnectionManager @Inject constructor(
         detachEngine()
         pendingSession = null
         teardownRequested = false
-        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
+        clearSessionObservations()
         val error = pendingTerminalError
         pendingTerminalError = null
         val current = _state.value
@@ -843,6 +881,22 @@ class ConnectionManager @Inject constructor(
      */
     fun reportUnderlyingTransport(transport: UnderlyingTransport) {
         _underlyingTransport.value = transport
+    }
+
+    /**
+     * Service reports the routing/per-app plan it just applied to an engine.
+     * Published so the UI can describe the running session instead of the
+     * settings — a route-mode change is only real after a reconnect.
+     */
+    fun reportAppliedSessionConfig(config: AppliedSessionConfig) {
+        _appliedSessionConfig.value = config
+    }
+
+    /** Session ended — the live observations describe a tunnel that no longer
+     *  exists and must not linger as fake state. */
+    private fun clearSessionObservations() {
+        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
+        _appliedSessionConfig.value = null
     }
 
     /** A usable underlying network is back → resume Connected — but only
@@ -892,17 +946,25 @@ class ConnectionManager @Inject constructor(
      * Connected from a network callback) is left alone. Goes through the
      * same launch+mutex path as [onTunnelRebuildStarted]: the mutex grants
      * in FIFO order, so "rebuilt" can never publish before "started".
+     *
+     * [node] is the outbound the rebuilt engine was compiled with — a rebuild
+     * can follow a node-set change that removed the old pick, and the state
+     * label must follow the engine, not the previous session.
      */
-    fun onTunnelRebuilt(generation: Long) {
+    fun onTunnelRebuilt(generation: Long, node: NodeSummary? = null) {
         scope.launch {
             mutex.withLock {
                 if (!isCurrent(generation)) return@withLock
+                if (node != null) {
+                    sessionNode = node
+                    compiledNodeId = node.id
+                }
                 val current = _state.value
                 // teardownRequested marks a failure-reconnect — the rebuilt
                 // engine is about to be torn down by the pending disconnect
                 // anyway, so Connected would be fake.
                 if (current is VpnConnectionState.Reconnecting && !teardownRequested) {
-                    publish(VpnConnectionState.Connected(current.node, Instant.now(), null))
+                    publish(VpnConnectionState.Connected(node ?: current.node, Instant.now(), null))
                 }
             }
         }
@@ -919,7 +981,7 @@ class ConnectionManager @Inject constructor(
         pendingSession = null
         pendingTerminalError = null
         detachEngine()
-        _underlyingTransport.value = UnderlyingTransport.UNKNOWN
+        clearSessionObservations()
         publish(VpnConnectionState.Error(VpnError.PermissionRevoked, sessionNode))
     }
 

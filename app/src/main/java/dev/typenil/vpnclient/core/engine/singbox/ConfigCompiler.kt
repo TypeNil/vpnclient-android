@@ -300,7 +300,11 @@ class ConfigCompiler
                     }
                 }
 
-            return EngineConfig(config.toString(), selected?.summary() ?: AUTO_NODE_SUMMARY)
+            return EngineConfig(
+                configJson = config.toString(),
+                node = selected?.summary() ?: AUTO_NODE_SUMMARY,
+                routeMode = routeMode,
+            )
         }
 
         companion object {

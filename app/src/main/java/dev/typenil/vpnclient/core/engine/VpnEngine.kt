@@ -9,6 +9,10 @@ data class EngineConfig(
     /** Complete engine config (sing-box JSON) including the tun inbound. */
     val configJson: String,
     val node: NodeSummary,
+    /** Routing mode this config was compiled with — carried so the service
+     *  can report what the live session actually applies instead of
+     *  re-reading a setting the running engine may not have. */
+    val routeMode: RouteMode = RouteMode.ALL,
     /** Resolved per-app plan handed to the core — the Builder applies the
      *  same lists at openTun; the core needs them for `route.find_process`. */
     val includedPackages: List<String> = emptyList(),

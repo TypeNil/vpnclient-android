@@ -7,6 +7,7 @@ import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.OutboundItemInfo
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
@@ -31,6 +32,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -87,12 +89,24 @@ class ConnectionManagerTest {
     ) : NodeConfigProvider {
         val selected = MutableStateFlow<String?>(null)
         var summaries = mapOf<String, NodeSummary>()
+
+        /** Fingerprint of the enabled set the live session compares against. */
+        val enabledFingerprint = MutableStateFlow<String?>(null)
+
+        /** Fingerprint the last compile ran against — the fake compile just
+         *  records whatever the test set as [enabledFingerprint]. */
+        val compiledFingerprint = MutableStateFlow<String?>(null)
+
         override suspend fun compileSelected(): EngineConfig? {
             failure?.let { throw it }
+            compiledFingerprint.value = enabledFingerprint.value
             return config
         }
+
         override val selectedNodeId: Flow<String?> get() = selected
         override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id]
+        override val enabledNodeSetFingerprint: Flow<String?> get() = enabledFingerprint
+        override val compiledNodeSetFingerprint: StateFlow<String?> get() = compiledFingerprint
     }
 
     private class FakeEngine : VpnEngine {
@@ -545,6 +559,45 @@ class ConnectionManagerTest {
             manager.onTunnelRebuilt(generation)
             advanceUntilIdle()
             assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
+    fun `a rebuilt tunnel with a recompiled node relabels the session`() =
+        testScope.runTest {
+            // The node-set change removed the session's node: the rebuilt
+            // engine runs a different one, and the label must follow it
+            // instead of describing the previous session.
+            val generation = connectToRunning()
+            manager.onTunnelRebuildStarted()
+            advanceUntilIdle()
+
+            manager.onTunnelRebuilt(generation, node2)
+            advanceUntilIdle()
+
+            val state = manager.state.value
+            assertTrue(state is VpnConnectionState.Connected)
+            assertEquals(node2, (state as VpnConnectionState.Connected).node)
+        }
+
+    @Test
+    fun `applied session config is reported and cleared with the session`() =
+        testScope.runTest {
+            val generation = connectToRunning()
+            val applied =
+                AppliedSessionConfig(
+                    routeMode = RouteMode.BYPASS_RU,
+                    perAppMode = PerAppMode.EXCLUDE,
+                    perAppPackageCount = 3,
+                )
+
+            manager.reportAppliedSessionConfig(applied)
+            assertEquals(applied, manager.appliedSessionConfig.value)
+
+            // The teardown must not leave a stale plan describing a session
+            // that no longer exists.
+            manager.onServiceStopped(generation)
+            advanceUntilIdle()
+            assertNull(manager.appliedSessionConfig.value)
         }
 
     @Test
