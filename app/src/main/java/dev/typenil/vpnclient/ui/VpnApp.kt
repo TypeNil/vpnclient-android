@@ -159,6 +159,17 @@ fun VpnApp(
                 composable(Routes.HOME) {
                     HomeScreen(
                         onOpenConnections = { navController.navigate(Routes.CONNECTIONS) },
+                        // The picker's "all servers" escape hatch — the
+                        // Servers tab owns filters, sorting and latency tests.
+                        onOpenServers = {
+                            navController.navigate(Routes.SERVERS) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
                         // Same cross-tab add funnel the Servers empty state
                         // uses — see the comment there.
                         onAddServer = {

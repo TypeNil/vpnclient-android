@@ -8,22 +8,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +43,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.TrafficStats
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
+import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -49,6 +60,7 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     onOpenConnections: () -> Unit = {},
     onAddServer: () -> Unit = {},
+    onOpenServers: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -98,6 +110,10 @@ fun HomeScreen(
                 onPick = {
                     showPicker = false
                     viewModel.selectServer(it)
+                },
+                onOpenServers = {
+                    showPicker = false
+                    onOpenServers()
                 },
                 onDismiss = { showPicker = false },
             )
@@ -167,6 +183,20 @@ private fun errorText(error: VpnError): String =
 
 private fun protocolLabel(protocol: String): String = runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol
 
+/**
+ * Display parts for the session node. The Auto sentinel stands for the
+ * urltest group, not for one of its members: until the group reports a winner
+ * it has no protocol or server of its own (its OTHER protocol is internal
+ * plumbing, not a user-facing description), and a resolved Auto carries the
+ * leaf's real values.
+ */
+private fun nodeDetail(node: NodeSummary): Pair<String?, String?> =
+    if (node.id == NodeSelection.AUTO_ID && node.protocol == ProtocolType.OTHER) {
+        null to null
+    } else {
+        node.protocol.label to node.server
+    }
+
 /** Tap opens the quick-pick sheet — but only when there is something to
  *  pick: with no nodes the card is an add prompt, not a picker. */
 @Composable
@@ -184,26 +214,30 @@ private fun NodeCard(
     when (state) {
         is VpnConnectionState.Connected -> {
             name = state.node.name
-            protocol = state.node.protocol.label
-            server = state.node.server
+            val (p, s) = nodeDetail(state.node)
+            protocol = p
+            server = s
         }
 
         is VpnConnectionState.Connecting -> {
             name = state.node.name
-            protocol = state.node.protocol.label
-            server = state.node.server
+            val (p, s) = nodeDetail(state.node)
+            protocol = p
+            server = s
         }
 
         is VpnConnectionState.Reconnecting -> {
             name = state.node.name
-            protocol = state.node.protocol.label
-            server = state.node.server
+            val (p, s) = nodeDetail(state.node)
+            protocol = p
+            server = s
         }
 
         is VpnConnectionState.Preparing -> {
             name = state.node.name
-            protocol = state.node.protocol.label
-            server = state.node.server
+            val (p, s) = nodeDetail(state.node)
+            protocol = p
+            server = s
         }
 
         is VpnConnectionState.Error -> {
@@ -275,56 +309,137 @@ private fun NodeCard(
     }
 }
 
-/** Quick-pick bottom sheet: Auto + every enabled node. Picking persists
- *  `selected_node_id` — ConnectionManager live-switches or reconnects. */
+/**
+ * Quick-pick bottom sheet: Auto pinned first, then every enabled node behind a
+ * search box. Bounded and lazy — a subscription with hundreds of nodes must not
+ * turn the picker into a full-screen list, and the Servers tab stays the place
+ * for filters, sorting and latency tests.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServerPickerSheet(
     options: List<ServerOption>,
     selectedId: String?,
     onPick: (String) -> Unit,
+    onOpenServers: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val auto = options.firstOrNull { it.id == NodeSelection.AUTO_ID }
+    val nodes = options.filter { it.id != NodeSelection.AUTO_ID }
+    val trimmed = query.trim()
+    val matches =
+        if (trimmed.isEmpty()) {
+            nodes
+        } else {
+            nodes.filter { it.searchText.contains(trimmed, ignoreCase = true) }
+        }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 32.dp)) {
+        Column(Modifier.padding(bottom = 24.dp)) {
             Text(
                 text = "Server",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
-            options.forEach { option ->
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onPick(option.id) }
-                            .padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = option.title,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                        )
-                        option.subtitle?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                placeholder = { Text("Search servers") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
                         }
                     }
-                    if (option.id == selectedId) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Selected",
-                            tint = MaterialTheme.colorScheme.primary,
+                },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(4.dp))
+            // Outside the list: the escape hatch must stay reachable with the
+            // soft keyboard open, which covers the bottom of the sheet.
+            TextButton(
+                onClick = onOpenServers,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            ) {
+                Text("All servers, filters & latency")
+            }
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                // Auto is the picker's first-class choice — a search for a
+                // node name must not hide it.
+                auto?.let { option ->
+                    item(key = option.id) {
+                        PickerRow(
+                            option = option,
+                            selected = option.id == selectedId,
+                            onClick = { onPick(option.id) },
+                        )
+                    }
+                }
+                items(matches, key = { it.id }) { option ->
+                    PickerRow(
+                        option = option,
+                        selected = option.id == selectedId,
+                        onClick = { onPick(option.id) },
+                    )
+                }
+                if (matches.isEmpty()) {
+                    item(key = "no-match") {
+                        Text(
+                            text = "No servers match \"$trimmed\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PickerRow(
+    option: ServerOption,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = option.title,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            option.subtitle?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }
@@ -494,11 +609,17 @@ private fun SessionDetailsSheet(
             // The selector group's pick is what actually egresses — can
             // diverge from the session node after a live outbound switch.
             DetailRow("Outbound", details?.activeOutbound ?: "—")
-            DetailRow("Routing mode", details?.let { routeModeSummary(it.routeMode) } ?: "—")
+            // Applied plan only — the settings value may not be live yet
+            // (a route-mode change needs a reconnect, per-app a rebuild).
+            DetailRow("Routing mode", details?.applied?.let { routeModeSummary(it.routeMode) } ?: "—")
             DetailRow(
                 "Per-app VPN",
-                details?.let { perAppSummary(it.perAppMode, it.perAppPackageCount) } ?: "—",
+                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackageCount) } ?: "—",
             )
+            // Named, not silently ignored: these are changed-but-unapplied.
+            details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {
+                DetailRow("Pending reconnect", it.pendingReconnect.joinToString(", "))
+            }
             DetailRow("Underlying network", details?.underlay?.label ?: "—")
             DetailRow("Uptime", uptimeText(state.since))
             state.stats?.let { stats ->

@@ -202,13 +202,17 @@ fun ServersScreen(
 
         // "Auto / Fastest" — persisted as the AUTO_ID sentinel; the engine
         // compiles/selects the urltest group for it, so it never maps to a
-        // concrete node card.
-        item(key = "auto", span = { GridItemSpan(maxLineSpan) }) {
-            AutoCard(
-                selected = ui.autoSelected,
-                delayMs = ui.delays[NodeSelection.AUTO_ID],
-                onClick = viewModel::selectAuto,
-            )
+        // concrete node card. Hidden with no nodes at all: there would be
+        // nothing to measure, and picking it would persist a selection that
+        // cannot connect.
+        if (!ui.noSubscriptions) {
+            item(key = "auto", span = { GridItemSpan(maxLineSpan) }) {
+                AutoCard(
+                    selected = ui.autoSelected,
+                    delayMs = ui.delays[NodeSelection.AUTO_ID],
+                    onClick = viewModel::selectAuto,
+                )
+            }
         }
 
         ui.groups.forEach { group ->

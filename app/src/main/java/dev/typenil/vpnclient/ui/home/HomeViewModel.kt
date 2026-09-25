@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
+import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.UnderlyingTransport
@@ -49,11 +50,14 @@ data class HomeUiState(
 )
 
 /** One row in the Home server picker. [id] is the raw `selected_node_id`
- *  value to persist — [NodeSelection.AUTO_ID] for the Auto row. */
+ *  value to persist — [NodeSelection.AUTO_ID] for the Auto row. [searchText]
+ *  carries the fields the picker's search matches (name + host) without
+ *  widening what the row renders. */
 data class ServerOption(
     val id: String,
     val title: String,
     val subtitle: String? = null,
+    val searchText: String = title,
 )
 
 /** Sheet payload — assembled per state emission so it stays in lockstep
@@ -63,10 +67,11 @@ data class SessionDetails(
      *  the group's `selected` is a raw outbound tag (node id hash or
      *  "auto"), which the UI must not render. */
     val activeOutbound: String?,
-    val routeMode: RouteMode,
-    val perAppMode: PerAppMode,
-    /** Packages in the include/exclude list (0 in ALL mode). */
-    val perAppPackageCount: Int,
+    /** The routing/per-app plan the live engine actually runs — null until
+     *  the service reports one; never guessed from the current settings. */
+    val applied: AppliedSessionConfig?,
+    /** Settings that changed but aren't applied to the live session yet. */
+    val pendingReconnect: List<String>,
     /** Physical underlay label reported by the service's network tracker. */
     val underlay: UnderlyingTransport,
     /** Message of the most recent Error state this process observed —
@@ -109,6 +114,7 @@ class HomeViewModel
                 settings.routeMode,
                 connectionManager.underlyingTransport,
                 lastErrorMessage,
+                connectionManager.appliedSessionConfig,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -130,10 +136,20 @@ class HomeViewModel
                 val routeMode = values[7] as RouteMode
                 val underlay = values[8] as UnderlyingTransport
                 val lastError = values[9] as String?
+                val appliedConfig = values[10] as AppliedSessionConfig?
 
                 val selected = nodes.firstOrNull { it.id == selectedId }
                 val auto = selectedId == NodeSelection.AUTO_ID
                 val subscriptionNames = profiles.associate { it.id to it.name }
+                // What the header describes: the picked node, or — for Auto —
+                // the urltest group's measured winner. "First enabled
+                // subscription" would name a provider the session isn't using.
+                val shownNode =
+                    selected
+                        ?: groups
+                            .firstOrNull { it.tag == NodeSelection.AUTO_ID }
+                            ?.selected
+                            ?.let { winnerId -> nodes.firstOrNull { it.id == winnerId } }
                 HomeUiState(
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
@@ -165,13 +181,17 @@ class HomeViewModel
                                                     node.protocol,
                                                     subscriptionNames[node.subscriptionId],
                                                 ).joinToString(" · "),
+                                            // Match the host too — a user hunting
+                                            // for a specific server usually
+                                            // knows its address, not its name.
+                                            searchText = "${node.name} ${node.server}",
                                         ),
                                     )
                                 }
                             }
                         },
                     selectedOptionId = selectedId,
-                    subscriptionName = profiles.firstOrNull { it.enabled }?.name,
+                    subscriptionName = shownNode?.let { subscriptionNames[it.subscriptionId] },
                     restartGuardTripped = guardTripped,
                     // The sheet is real-state only: it exists only while Connected —
                     // outside that there is no session to describe.
@@ -195,9 +215,23 @@ class HomeViewModel
                                                 else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
                                             }
                                         },
-                                routeMode = routeMode,
-                                perAppMode = perAppMode,
-                                perAppPackageCount = perAppPackages.size,
+                                // Applied plan — a route-mode change is only
+                                // real after a reconnect, and per-app after a
+                                // TUN rebuild; the settings flow is intent.
+                                applied = appliedConfig,
+                                pendingReconnect =
+                                    buildList {
+                                        if (appliedConfig != null) {
+                                            if (appliedConfig.routeMode != routeMode) {
+                                                add("Routing mode")
+                                            }
+                                            if (appliedConfig.perAppMode != perAppMode ||
+                                                appliedConfig.perAppPackageCount != perAppPackages.size
+                                            ) {
+                                                add("Per-app VPN")
+                                            }
+                                        }
+                                    },
                                 underlay = underlay,
                                 lastError = lastError,
                             )
