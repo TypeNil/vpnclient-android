@@ -13,6 +13,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.subscription.UriListParser
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
+import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -192,6 +193,7 @@ class SubscriptionsViewModelTest {
             SubscriptionRepository(
                 subscriptionDao = subscriptionDao,
                 nodeDao = nodeDao,
+                nodePreferenceDao = FakeNodePreferenceDao(),
                 fetcher = SubscriptionFetcher(OkHttpClient()),
                 classifier = SubscriptionClassifier(),
                 dispatcher =
@@ -450,6 +452,7 @@ class SubscriptionsViewModelTest {
         SubscriptionRepository(
             subscriptionDao = FakeSubscriptionDao(),
             nodeDao = nodeDao,
+            nodePreferenceDao = FakeNodePreferenceDao(),
             fetcher = SubscriptionFetcher(OkHttpClient()),
             classifier = SubscriptionClassifier(),
             dispatcher =

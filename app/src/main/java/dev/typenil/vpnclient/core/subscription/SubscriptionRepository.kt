@@ -10,6 +10,7 @@ import dev.typenil.vpnclient.core.subscription.model.SubscriptionUserInfo
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
+import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
 import kotlinx.coroutines.CancellationException
@@ -41,6 +42,7 @@ class SubscriptionRepository
     constructor(
         private val subscriptionDao: SubscriptionDao,
         private val nodeDao: NodeDao,
+        private val nodePreferenceDao: NodePreferenceDao,
         private val fetcher: SubscriptionFetcher,
         private val classifier: SubscriptionClassifier,
         private val dispatcher: SubscriptionParserDispatcher,
@@ -390,6 +392,11 @@ class SubscriptionRepository
                         sub = subscriptionDao.get(id) ?: return@runCatching
                         SecureLog.i(TAG, "subscription migrated sub=$id")
                     }
+                    // A refresh can retire node ids (credential rotation gives a
+                    // node a new id). Prefs are never migrated across ids — the
+                    // match would be a guess — but orphaned rows are pruned so
+                    // the table can't grow unboundedly.
+                    nodePreferenceDao.deleteOrphans()
                     // If the selected node vanished (disabled subs' nodes count as
                     // unusable too), clear it so the next connect picks a sane
                     // default. The conditional clear can't wipe a selection the
@@ -661,6 +668,10 @@ class SubscriptionRepository
                 // tunnel rebuild for a single logical change.
                 transactions.run {
                     nodeDao.delete(nodeId)
+                    // The node's user prefs die with it — manual nodes are
+                    // never re-created, so a pref row could only linger as
+                    // an orphan.
+                    nodePreferenceDao.delete(nodeId)
                     // Nothing left to show — the sentinel row goes too, so an
                     // empty "Manual servers" entry never lingers.
                     if (nodeDao.countForSubscription(node.subscriptionId) == 0) {
@@ -691,6 +702,9 @@ class SubscriptionRepository
                 // The work is cancelled only after commit so a failed delete
                 // leaves the retry job in place.
                 transactions.run {
+                    // Prefs go first while the node rows still exist — the
+                    // DAO prunes by sub-select on nodes, so ordering matters.
+                    nodePreferenceDao.deleteForSubscription(id)
                     nodeDao.deleteForSubscription(id)
                     subscriptionDao.delete(id)
                 }

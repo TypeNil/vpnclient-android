@@ -5,6 +5,7 @@ import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
+import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -239,6 +240,7 @@ class SubscriptionRepositoryTest {
 
     private lateinit var subscriptionDao: FakeSubscriptionDao
     private lateinit var nodeDao: FakeNodeDao
+    private lateinit var nodePreferenceDao: FakeNodePreferenceDao
     private lateinit var validator: FakeValidator
     private lateinit var scheduler: FakeScheduler
     private lateinit var settings: FakeSettings
@@ -296,6 +298,7 @@ class SubscriptionRepositoryTest {
     fun setUp() {
         subscriptionDao = FakeSubscriptionDao()
         nodeDao = FakeNodeDao()
+        nodePreferenceDao = FakeNodePreferenceDao()
         validator = FakeValidator(nodeDao)
         settings = FakeSettings()
         scheduler = FakeScheduler()
@@ -304,6 +307,7 @@ class SubscriptionRepositoryTest {
         repository = SubscriptionRepository(
             subscriptionDao = subscriptionDao,
             nodeDao = nodeDao,
+            nodePreferenceDao = nodePreferenceDao,
             fetcher = SubscriptionFetcher(OkHttpClient()),
             classifier = SubscriptionClassifier(),
             dispatcher = SubscriptionParserDispatcher(

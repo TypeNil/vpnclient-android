@@ -11,6 +11,7 @@ import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
+import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,7 @@ import javax.inject.Inject
 data class ServerGroup(
     val subscriptionId: Long,
     val subscriptionName: String,
-    val nodes: List<NodeEntity>,
+    val nodes: List<ServerNode>,
 )
 
 /** A selectable subscription filter — id + display name. */
@@ -37,8 +38,24 @@ data class SubscriptionFilterOption(
 
 enum class ServerSortMode { Default, Latency, Name }
 
+/** Resolved per-node user-facing state — the node row plus its persisted
+ *  preferences (missing row = all defaults). [customName]/[isHidden] exist
+ *  in storage already; this slice only consumes [favorite]. */
+data class ServerNode(
+    val entity: NodeEntity,
+    val favorite: Boolean,
+)
+
+val ServerNode.id: String get() = entity.id
+val ServerNode.name: String get() = entity.name
+val ServerNode.protocol: String get() = entity.protocol
+val ServerNode.server: String get() = entity.server
+val ServerNode.subscriptionId: Long get() = entity.subscriptionId
+
 data class ServersUiState(
     val groups: List<ServerGroup> = emptyList(),
+    /** Show only starred nodes — chip-driven filter, orthogonal to query. */
+    val favoritesOnly: Boolean = false,
     val selectedNodeId: String? = null,
     /** The persisted pick is the "Auto / Fastest" urltest group, not a node. */
     val autoSelected: Boolean = false,
@@ -88,7 +105,7 @@ private data class ProbeSurface(
 /** The raw inputs filtering/sorting operate on — bundled so the filter
  *  combine stays under the 5-flow arity limit. */
 private data class NodeSurface(
-    val nodes: List<NodeEntity>,
+    val nodes: List<ServerNode>,
     val subscriptionNames: Map<Long, String>,
 )
 
@@ -98,6 +115,7 @@ private data class ListControls(
     val sortMode: ServerSortMode,
     val subscriptionFilter: Long?,
     val protocolFilter: String?,
+    val favoritesOnly: Boolean,
 )
 
 @HiltViewModel
@@ -107,6 +125,7 @@ class ServersViewModel
         private val settings: SettingsRepository,
         private val connectionManager: ConnectionManager,
         private val nodeDao: NodeDao,
+        private val nodePreferenceDao: NodePreferenceDao,
         private val latencyProbe: LatencyProbe,
         subscriptions: SubscriptionRepository,
     ) : ViewModel() {
@@ -123,18 +142,28 @@ class ServersViewModel
         /** ProtocolType.name value; null = all protocols. */
         private val protocolFilter = MutableStateFlow<String?>(null)
 
+        /** True = restrict the list to starred nodes. */
+        private val favoritesOnly = MutableStateFlow(false)
+
         private val controls: StateFlow<ListControls> =
             combine(
                 query,
                 sortMode,
                 subscriptionFilter,
                 protocolFilter,
-            ) { q, sort, sub, proto ->
-                ListControls(query = q, sortMode = sort, subscriptionFilter = sub, protocolFilter = proto)
+                favoritesOnly,
+            ) { q, sort, sub, proto, fav ->
+                ListControls(
+                    query = q,
+                    sortMode = sort,
+                    subscriptionFilter = sub,
+                    protocolFilter = proto,
+                    favoritesOnly = fav,
+                )
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = ListControls("", ServerSortMode.Default, null, null),
+                initialValue = ListControls("", ServerSortMode.Default, null, null, false),
             )
 
         private val engineSurface: StateFlow<EngineSurface> =
@@ -159,10 +188,18 @@ class ServersViewModel
         private val nodeSurface: StateFlow<NodeSurface> =
             combine(
                 nodeDao.observeEnabled(),
+                nodePreferenceDao.observeAll(),
                 subscriptions.profiles,
-            ) { nodes, profiles ->
+            ) { nodes, prefs, profiles ->
+                val prefById = prefs.associateBy { it.nodeId }
                 NodeSurface(
-                    nodes = nodes,
+                    nodes =
+                        nodes.map { entity ->
+                            ServerNode(
+                                entity = entity,
+                                favorite = prefById[entity.id]?.isFavorite == true,
+                            )
+                        },
                     subscriptionNames = profiles.associate { it.id to it.name },
                 )
             }.stateIn(
@@ -193,6 +230,8 @@ class ServersViewModel
                         .asSequence()
                         .filter { node ->
                             ctl.subscriptionFilter == null || node.subscriptionId == ctl.subscriptionFilter
+                        }.filter { node ->
+                            !ctl.favoritesOnly || node.favorite
                         }.filter { node ->
                             !searching ||
                                 node.name.contains(trimmedQuery, ignoreCase = true) ||
@@ -242,6 +281,7 @@ class ServersViewModel
                 // present one flat result list instead.
                 val flat =
                     searching || ctl.subscriptionFilter != null ||
+                        ctl.favoritesOnly ||
                         ctl.sortMode != ServerSortMode.Default
                 val groups =
                     if (flat) {
@@ -279,6 +319,7 @@ class ServersViewModel
                     sortMode = ctl.sortMode,
                     subscriptionFilter = ctl.subscriptionFilter,
                     protocolFilter = effectiveProtocol,
+                    favoritesOnly = ctl.favoritesOnly,
                     subscriptionOptions =
                         surface.nodes
                             .map { it.subscriptionId }
@@ -314,6 +355,22 @@ class ServersViewModel
 
         fun setProtocolFilter(protocol: String?) {
             protocolFilter.value = protocol
+        }
+
+        /** Toggle semantics: tapping the active chip clears the filter. */
+        fun setFavoritesOnly(enabled: Boolean) {
+            favoritesOnly.value = enabled
+        }
+
+        /**
+         * Star/unstar a node — writes only the prefs row; the node row itself
+         * is subscription-owned and rewritten on every refresh.
+         */
+        fun toggleFavorite(nodeId: String) {
+            viewModelScope.launch {
+                val current = nodePreferenceDao.get(nodeId)?.isFavorite == true
+                nodePreferenceDao.setFavorite(nodeId, !current)
+            }
         }
 
         /**

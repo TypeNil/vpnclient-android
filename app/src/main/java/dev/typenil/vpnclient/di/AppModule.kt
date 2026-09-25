@@ -27,6 +27,7 @@ import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.data.work.WorkManagerRefreshScheduler
 import dev.typenil.vpnclient.data.db.AppDatabase
 import dev.typenil.vpnclient.data.db.NodeDao
+import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,7 @@ object AppModule {
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
             )
             // Last resort only: every version jump must ship a real migration
             // (schema JSONs are committed for exactly this reason). Destructive
@@ -62,6 +64,10 @@ object AppModule {
 
     @Provides
     fun provideNodeDao(db: AppDatabase): NodeDao = db.nodeDao()
+
+    @Provides
+    fun provideNodePreferenceDao(db: AppDatabase): NodePreferenceDao =
+        db.nodePreferenceDao()
 
     @Provides
     @Singleton

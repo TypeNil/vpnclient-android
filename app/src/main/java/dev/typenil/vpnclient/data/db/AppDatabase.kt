@@ -163,6 +163,97 @@ interface SubscriptionDao {
     )
 }
 
+@Entity(tableName = "node_preferences")
+data class NodePreferenceEntity(
+    /** Same stable id the parser computes for the node row it refers to. */
+    @PrimaryKey val nodeId: String,
+    /** Priority display — surfaces in the Favorites filter and Home pick. */
+    @ColumnInfo(defaultValue = "0") val isFavorite: Boolean = false,
+    /** Whether the node joins the effective VPN node set at all. */
+    @ColumnInfo(defaultValue = "1") val isEnabled: Boolean = true,
+    /** Local display name override — never written back into node rows. */
+    val customName: String? = null,
+    /** Hide from user lists without disabling (lists filter, not engine). */
+    @ColumnInfo(defaultValue = "0") val isHidden: Boolean = false,
+)
+
+/**
+ * Per-node user preferences, stored apart from `nodes`: the nodes table is
+ * rewritten wholesale on every refresh, while these rows are user-owned and
+ * must survive atomic node-set replacement. Rows reference node ids — a
+ * credential change gives a node a new id and its prefs are orphaned by
+ * design (no fuzzy matching), then pruned by [deleteOrphans].
+ */
+@Dao
+abstract class NodePreferenceDao {
+    @Query("SELECT * FROM node_preferences")
+    abstract fun observeAll(): Flow<List<NodePreferenceEntity>>
+
+    @Query("SELECT * FROM node_preferences WHERE nodeId = :nodeId")
+    abstract suspend fun get(nodeId: String): NodePreferenceEntity?
+
+    /** Single-statement read-modify-write — concurrent toggles can't tear. */
+    @Query(
+        """INSERT INTO node_preferences (nodeId, isFavorite, isEnabled, customName, isHidden)
+            VALUES (:nodeId, :favorite, 1, NULL, 0)
+            ON CONFLICT(nodeId) DO UPDATE SET isFavorite = :favorite""",
+    )
+    abstract suspend fun setFavorite(
+        nodeId: String,
+        favorite: Boolean,
+    )
+
+    @Query(
+        """INSERT INTO node_preferences (nodeId, isFavorite, isEnabled, customName, isHidden)
+            VALUES (:nodeId, 0, :enabled, NULL, 0)
+            ON CONFLICT(nodeId) DO UPDATE SET isEnabled = :enabled""",
+    )
+    abstract suspend fun setEnabled(
+        nodeId: String,
+        enabled: Boolean,
+    )
+
+    @Query(
+        """INSERT INTO node_preferences (nodeId, isFavorite, isEnabled, customName, isHidden)
+            VALUES (:nodeId, 0, 1, :customName, 0)
+            ON CONFLICT(nodeId) DO UPDATE SET customName = :customName""",
+    )
+    abstract suspend fun setCustomName(
+        nodeId: String,
+        customName: String?,
+    )
+
+    @Query(
+        """INSERT INTO node_preferences (nodeId, isFavorite, isEnabled, customName, isHidden)
+            VALUES (:nodeId, 0, 1, NULL, :hidden)
+            ON CONFLICT(nodeId) DO UPDATE SET isHidden = :hidden""",
+    )
+    abstract suspend fun setHidden(
+        nodeId: String,
+        hidden: Boolean,
+    )
+
+    @Query("DELETE FROM node_preferences WHERE nodeId = :nodeId")
+    abstract suspend fun delete(nodeId: String)
+
+    /** Drop prefs for every node of a subscription — called inside the same
+     *  transaction that removes the node rows so no orphans linger. */
+    @Query(
+        """DELETE FROM node_preferences WHERE nodeId IN
+            (SELECT id FROM nodes WHERE subscriptionId = :subscriptionId)""",
+    )
+    abstract suspend fun deleteForSubscription(subscriptionId: Long)
+
+    /** Drop every pref whose node id no longer exists — safety net for ids
+     *  retired by a provider credential change (prefs are never migrated
+     *  across ids: the match would be a guess, not a fact). */
+    @Query(
+        """DELETE FROM node_preferences WHERE nodeId NOT IN
+            (SELECT id FROM nodes)""",
+    )
+    abstract suspend fun deleteOrphans()
+}
+
 @Dao
 abstract class NodeDao {
     @Query("SELECT * FROM nodes WHERE subscriptionId = :subscriptionId ORDER BY position")
@@ -221,14 +312,16 @@ abstract class NodeDao {
 }
 
 @Database(
-    entities = [SubscriptionEntity::class, NodeEntity::class],
-    version = 4,
+    entities = [SubscriptionEntity::class, NodeEntity::class, NodePreferenceEntity::class],
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun subscriptionDao(): SubscriptionDao
 
     abstract fun nodeDao(): NodeDao
+
+    abstract fun nodePreferenceDao(): NodePreferenceDao
 
     companion object {
         /** v2: per-subscription cleartext opt-in. */
@@ -271,6 +364,22 @@ abstract class AppDatabase : RoomDatabase() {
                             "ADD COLUMN updateAlways INTEGER NOT NULL DEFAULT 0",
                     )
                     db.execSQL("ALTER TABLE subscriptions ADD COLUMN fallbackUrl TEXT")
+                }
+            }
+
+        /** v5: per-node user preferences (favorite/enabled/custom name/hidden),
+         *  keyed by the parser-computed node id and independent of node rows. */
+        val MIGRATION_4_5 =
+            object : androidx.room.migration.Migration(4, 5) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """CREATE TABLE IF NOT EXISTS `node_preferences` (
+                            `nodeId` TEXT PRIMARY KEY NOT NULL,
+                            `isFavorite` INTEGER NOT NULL DEFAULT 0,
+                            `isEnabled` INTEGER NOT NULL DEFAULT 1,
+                            `customName` TEXT,
+                            `isHidden` INTEGER NOT NULL DEFAULT 0)""",
+                    )
                 }
             }
     }

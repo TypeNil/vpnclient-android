@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.UnderlyingTransport
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.db.NodeDao
+import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -85,6 +86,7 @@ class HomeViewModel
     constructor(
         private val connectionManager: ConnectionManager,
         nodeDao: NodeDao,
+        nodePreferenceDao: NodePreferenceDao,
         private val settings: SettingsRepository,
         subscriptions: SubscriptionRepository,
     ) : ViewModel() {
@@ -115,6 +117,7 @@ class HomeViewModel
                 connectionManager.underlyingTransport,
                 lastErrorMessage,
                 connectionManager.appliedSessionConfig,
+                nodePreferenceDao.observeAll(),
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -137,6 +140,11 @@ class HomeViewModel
                 val underlay = values[8] as UnderlyingTransport
                 val lastError = values[9] as String?
                 val appliedConfig = values[10] as AppliedSessionConfig?
+
+                @Suppress("UNCHECKED_CAST")
+                val prefs =
+                    values[11] as List<dev.typenil.vpnclient.data.db.NodePreferenceEntity>
+                val favoriteIds = prefs.asSequence().filter { it.isFavorite }.map { it.nodeId }.toSet()
 
                 val selected = nodes.firstOrNull { it.id == selectedId }
                 val auto = selectedId == NodeSelection.AUTO_ID
@@ -171,7 +179,13 @@ class HomeViewModel
                                         subtitle = "Latency-tested pick",
                                     ),
                                 )
-                                nodes.forEach { node ->
+                                // Favorites first, right after Auto — the
+                                // quick pick is where they pay off. Original
+                                // order (subscriptionId, position) is kept
+                                // inside each partition.
+                                val ordered =
+                                    nodes.sortedByDescending { it.id in favoriteIds }
+                                ordered.forEach { node ->
                                     add(
                                         ServerOption(
                                             id = node.id,

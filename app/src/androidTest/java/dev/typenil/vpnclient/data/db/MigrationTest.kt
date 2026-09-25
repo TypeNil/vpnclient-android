@@ -109,6 +109,50 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate4To5CreatesNodePreferencesTable() {
+        helper.createDatabase(TEST_DB, 4).use { db ->
+            db.execSQL(
+                """INSERT INTO subscriptions
+                    (name, url, createdAtEpochMs, lastUpdatedAtEpochMs,
+                     lastAttemptAtEpochMs, lastError, enabled, userInfoJson,
+                     supportUrl, updateIntervalMinutes, allowInsecureHttp,
+                     announce, updateAlways, fallbackUrl)
+                   VALUES ('sub', ?, 1, NULL, NULL, NULL, 1, NULL, NULL, 12, 0,
+                           NULL, 0, NULL)""",
+                arrayOf("https://127.0.0.1:9/sub"),
+            )
+            db.execSQL(
+                """INSERT INTO nodes
+                    (id, subscriptionId, name, protocol, server, port,
+                     outboundJson, rawUri, position)
+                   VALUES ('n1', 1, 'n', 'VLESS', '127.0.0.1', 443, '{}', NULL, 0)""",
+            )
+        }
+        helper.runMigrationsAndValidate(
+            TEST_DB, 5, true, AppDatabase.MIGRATION_4_5,
+        ).use { db ->
+            // The table exists with the expected defaults — a row written
+            // with only the PK must read back as all-defaults.
+            db.execSQL("INSERT INTO node_preferences (nodeId) VALUES ('n1')")
+            db.query(
+                "SELECT isFavorite, isEnabled, customName, isHidden " +
+                    "FROM node_preferences WHERE nodeId = 'n1'",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(0, c.getInt(0))
+                assertEquals(1, c.getInt(1))
+                assertTrue(c.isNull(2))
+                assertEquals(0, c.getInt(3))
+            }
+            // Pre-existing node rows are untouched by the migration.
+            db.query("SELECT COUNT(*) FROM nodes").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(1, c.getInt(0))
+            }
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

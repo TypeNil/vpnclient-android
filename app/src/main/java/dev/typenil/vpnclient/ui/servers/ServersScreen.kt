@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -49,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
-import dev.typenil.vpnclient.data.db.NodeEntity
+
 
 @Composable
 fun ServersScreen(
@@ -98,6 +100,18 @@ fun ServersScreen(
                     SortSelector(
                         sortMode = ui.sortMode,
                         onSelect = viewModel::setSortMode,
+                    )
+                    FilterChip(
+                        selected = ui.favoritesOnly,
+                        onClick = { viewModel.setFavoritesOnly(!ui.favoritesOnly) },
+                        label = { Text("Favorites") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
                     )
                     ui.subscriptionOptions.forEach { option ->
                         FilterChip(
@@ -236,6 +250,7 @@ fun ServersScreen(
                     delayMs = ui.delays[node.id],
                     tested = node.id in ui.testedNodeIds,
                     onClick = { viewModel.selectNode(node.id) },
+                    onToggleFavorite = { viewModel.toggleFavorite(node.id) },
                 )
             }
         }
@@ -322,11 +337,12 @@ private fun AutoCard(
 
 @Composable
 private fun ServerCard(
-    node: NodeEntity,
+    node: ServerNode,
     selected: Boolean,
     delayMs: Int?,
     tested: Boolean,
     onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
 ) {
     Card(
         onClick = onClick,
@@ -344,6 +360,24 @@ private fun ServerCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector =
+                            if (node.favorite) Icons.Filled.Star else Icons.Outlined.Star,
+                        contentDescription =
+                            if (node.favorite) "Remove from favorites" else "Add to favorites",
+                        tint =
+                            if (node.favorite) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
                 if (selected) {
                     Spacer(Modifier.width(4.dp))
                     Icon(
