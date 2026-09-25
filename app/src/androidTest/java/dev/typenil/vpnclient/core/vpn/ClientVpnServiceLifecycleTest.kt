@@ -90,6 +90,9 @@ class ClientVpnServiceLifecycleTest {
     @Inject
     lateinit var connectionManager: ConnectionManager
 
+    @Inject
+    lateinit var settings: dev.typenil.vpnclient.data.settings.SettingsRepository
+
     // ---- fakes (resolved from the test component, not the test class) ----
 
     /** The same singletons the service is injected with — resolved from the
@@ -317,18 +320,29 @@ class ClientVpnServiceLifecycleTest {
      * config itself when desiredVpnRunning is set — no pendingSession handoff.
      */
     @Test
-    fun restoreStart_rebuildsTunnelAutomatically() {
+    fun restoreStart_withDesiredVpnRunning_rebuildsTunnel() {
         runBlocking {
-            // Simulate the durable "user wanted the tunnel running" flag that a
-            // restore relies on. The service reads it via SettingsRepository.
-            // We don't have direct access to write it from the test without the
-            // repo, but a stray/RESTORE start with the flag unset must stopSelf
-            // and stay Idle — that's the deterministic contract we can assert.
+            // Arm the durable flag the way a clean disconnect during a live
+            // session does — then the service must auto-adopt a new session.
+            settings.setDesiredVpnRunning(true)
+
             restore()
 
-            // With no prior CONNECT the flag is false: the auto-start bails to
-            // stopSelf without adopting a session — state must stay Idle and no
-            // engine must be created.
+            // No pendingSession handoff — the restore path compiles and
+            // launches an engine on its own.
+            val connected = awaitState<VpnConnectionState.Connected>()
+            assertEquals(FakeNodeConfigProvider.NODE, connected.node)
+            assertEquals(1, fakeFactory().createCalls.get())
+        }
+    }
+
+    @Test
+    fun restoreStart_withoutDesiredVpnRunning_staysIdle() {
+        runBlocking {
+            // Flag unset → a stray/RESTORE start must stopSelf without
+            // adopting a session — no engine, stays Idle.
+            settings.setDesiredVpnRunning(false)
+            restore()
             settleService()
             assertEquals(0, fakeFactory().createCalls.get())
             requireState<VpnConnectionState.Idle>()

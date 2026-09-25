@@ -58,8 +58,16 @@ data class AppliedSessionConfig(
  * of subscription and core-format details.
  */
 interface NodeConfigProvider {
-    /** Compile the engine config for the selected node, or null if none. */
+    /** Compile the engine config for the selected node, or null if none.
+     *  The provider derives its own underlay view — the caller doesn't
+     *  have to pass the physical network. */
     suspend fun compileSelected(): EngineConfig?
+
+    /** Whether the physical underlay currently offers global IPv6 — fed by
+     *  ClientVpnService's NOT_VPN-tracked network. Lives on the provider so
+     *  the compile path doesn't need a ConnectivityManager read that could
+     *  pick the VPN's own default network while a session is live. */
+    var underlayHasIpv6: Boolean
 
     /** Persisted server pick — the desired outbound for any live session. */
     val selectedNodeId: Flow<String?>

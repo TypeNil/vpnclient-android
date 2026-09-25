@@ -213,6 +213,9 @@ class FakeNodeConfigProvider(
     val enabledFingerprint = MutableStateFlow("fp-a")
     val compiledFingerprint = MutableStateFlow<String?>(null)
 
+    /** Underlay IPv6 posture — the service pushes it; tests set it directly. */
+    override var underlayHasIpv6: Boolean = true
+
     override suspend fun compileSelected(): EngineConfig? {
         failure?.let { throw it }
         val c = config

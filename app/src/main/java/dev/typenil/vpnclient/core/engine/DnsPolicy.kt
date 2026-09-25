@@ -2,7 +2,7 @@ package dev.typenil.vpnclient.core.engine
 
 import dev.typenil.vpnclient.core.common.log.Redactor
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import java.net.InetAddress
+
 
 /**
  * DNS resolution mode — persisted in DataStore as [key].
@@ -82,15 +82,15 @@ sealed class DnsUpstream {
     ) : DnsUpstream() {
         override val key = "custom:$spec"
         override val serverUrl = spec
+        // Syntax check only — never resolve the host: this property runs on
+        // the UI/main path during settings read and would otherwise fire a
+        // real DNS lookup per custom upstream.
         override val hostname =
             spec
                 .substringAfter("://")
                 .substringBefore('/')
                 .substringBefore(':')
-                .let { host ->
-                    runCatching { InetAddress.getByName(host) }.getOrNull() == null ||
-                        host.any { it.isLetter() }
-                }
+                .let { host -> !isIpLiteral(host) }
         override val labelResName = "dns_upstream_custom"
     }
 
@@ -158,14 +158,29 @@ sealed class DnsUpstream {
             }
         }
 
-        private fun isIpLiteral(s: String): Boolean =
-            runCatching {
-                InetAddress.getByName(s)
-            }.getOrNull()?.let {
-                // getByName resolves hostnames too — require the input to be
-                // numeric (digits/dots/colons only) to count as a literal.
-                s.all { it.isDigit() || it == '.' || it == ':' }
-            } == true
+        /** Syntax-only IP check — no DNS resolution. IPv4: dotted quad,
+         *  each octet 0–255. IPv6: hex/colon groups, at least one ':' and
+         *  no characters outside hex+colon. Anything else is a hostname. */
+        private fun isIpLiteral(s: String): Boolean {
+            if (s.isEmpty()) return false
+            return when {
+                // IPv4
+                '.' in s && ':' !in s -> {
+                    val parts = s.split('.')
+                    parts.size == 4 && parts.all { p ->
+                        p.isNotEmpty() && p.length <= 3 &&
+                            p.all { it.isDigit() } && p.toIntOrNull()?.let { it in 0..255 } == true
+                    }
+                }
+                // IPv6 — has at least one ':', only hex digits + colons,
+                // groups within bounds (single '::' compression allowed).
+                ':' in s -> {
+                    s.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' } &&
+                        !s.contains(":::")
+                }
+                else -> false
+            }
+        }
     }
 }
 

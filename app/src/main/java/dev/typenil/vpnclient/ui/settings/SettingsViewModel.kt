@@ -1,9 +1,11 @@
 package dev.typenil.vpnclient.ui.settings
 
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.AppLanguage
+import dev.typenil.vpnclient.core.common.LocaleSupport
 import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
@@ -45,6 +47,7 @@ data class SettingsUiState(
 class SettingsViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val connectionManager: ConnectionManager,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
     /** Pending "reconnect to apply" recommendation — set when a compiled-in
@@ -136,10 +139,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settings.setDynamicColor(enabled) }
     }
 
-    /** Persisted — MainActivity applies it (LocaleManager on 33+, compat wrap
-     *  below); never touches the VPN session. */
+    /** On 33+ write straight to the system per-app locale store — that's
+     *  the authoritative surface (Android Settings → App info → Language
+     *  reads/writes the same slot), so an in-app pick and an OS pick land
+     *  on the same value. Below 33 the SharedPreferences tag is the only
+     *  store, so DataStore stays the source of truth there. Either way the
+     *  write is fire-and-forget; MainActivity reads the effective locale. */
     fun setAppLanguage(language: AppLanguage) {
-        viewModelScope.launch { settings.setAppLanguage(language) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            LocaleSupport.applyToSystem(appContext, language.tag)
+        } else {
+            viewModelScope.launch { settings.setAppLanguage(language) }
+        }
     }
 
     fun setAutoRefreshEnabled(enabled: Boolean) {

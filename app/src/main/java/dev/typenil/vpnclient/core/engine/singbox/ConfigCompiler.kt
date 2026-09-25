@@ -172,6 +172,7 @@ class ConfigCompiler
                                 val upstream = dnsProfile.upstream
                                 val url = upstream.serverUrl
                                 val scheme = url.substringBefore("://")
+                                val rest = url.substringAfter("://")
                                 put(
                                     "type",
                                     when (scheme) {
@@ -182,13 +183,21 @@ class ConfigCompiler
                                     },
                                 )
                                 put("tag", "remote")
-                                // sing-box takes host[:port] for tls/udp and a
-                                // full URL for https; the validated spec is
-                                // already one of those forms.
-                                put(
-                                    "server",
-                                    if (scheme == "https") url else url.substringAfter("://"),
-                                )
+                                // sing-box's typed dns schema wants the bare
+                                // host in `server` — not a URL, not host:port.
+                                // https gets `path` + `server_port`; tls/quic
+                                // get `server_port`; udp is bare host.
+                                val host = rest.substringBefore('/').substringBefore(':')
+                                put("server", host)
+                                val port = rest.substringBefore('/').substringAfter(':', "")
+                                if (port.isNotEmpty()) {
+                                    port.toIntOrNull()?.let { put("server_port", it) }
+                                }
+                                if (scheme == "https") {
+                                    rest.substringAfter('/', "")
+                                        .takeIf { it.isNotEmpty() }
+                                        ?.let { put("path", "/$it") }
+                                }
                                 // DNS resolution dials like an outbound: without a
                                 // detour it goes direct, leaking queries past the
                                 // proxy in policy/proxy-only mode alike.

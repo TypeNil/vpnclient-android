@@ -120,6 +120,11 @@ fun ServersScreen(
                             )
                         },
                     )
+                    FilterChip(
+                        selected = ui.showHidden,
+                        onClick = { viewModel.setShowHidden(!ui.showHidden) },
+                        label = { Text(stringResource(R.string.servers_show_hidden)) },
+                    )
                     ui.subscriptionOptions.forEach { option ->
                         FilterChip(
                             selected = ui.subscriptionFilter == option.id,
@@ -274,7 +279,10 @@ fun ServersScreen(
                     selected = node.id == ui.selectedNodeId,
                     delayMs = ui.delays[node.id],
                     tested = node.id in ui.testedNodeIds,
-                    onClick = { viewModel.selectNode(node.id) },
+                    // A disabled node stays rendered (the user manages it) but
+                    // tapping it must not persist a selection the engine can't
+                    // honor — keep the card, drop the click.
+                    onClick = { if (node.enabled) viewModel.selectNode(node.id) },
                     onToggleFavorite = { viewModel.toggleFavorite(node.id) },
                     onRename = { newName -> viewModel.setNodeCustomName(node.id, newName) },
                     onSetEnabled = { enabled -> viewModel.setNodeEnabled(node.id, enabled) },
@@ -496,11 +504,18 @@ private fun ServerCard(
                     )
                 }
             }
-            // Disabled dimming is honest state — the card is still there
-            // (the user manages it) but the engine won't pick it.
+            // Disabled / hidden are honest state — the card stays rendered
+            // (the user manages it), but neither is engine-pickable.
             if (!node.enabled) {
                 Text(
                     stringResource(R.string.servers_disabled_label),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (node.hidden) {
+                Text(
+                    stringResource(R.string.servers_hidden_label),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

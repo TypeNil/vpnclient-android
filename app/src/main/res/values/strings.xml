@@ -99,6 +99,8 @@
     <string name="servers_hide">Hide from lists</string>
     <string name="servers_unhide">Unhide</string>
     <string name="servers_disabled_label">Disabled — not used for VPN</string>
+    <string name="servers_show_hidden">Show hidden</string>
+    <string name="servers_hidden_label">Hidden — not shown in lists</string>
     <string name="theme_system">System default</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>

@@ -39,14 +39,17 @@ class MainActivity : ComponentActivity() {
         super.attachBaseContext(LocaleSupport.wrap(newBase, tag))
     }
 
-    /** Mirrors the DataStore language choice into the mechanism the platform
-     *  layer consumes: LocaleManager on 33+ (system-driven recreation), the
-     *  compat tag + explicit recreate below. Skips the first emission when it
-     *  matches what the context already applies — otherwise process start
-     *  would recreate the just-created activity. */
+    /** Push the user's choice into the mechanism the platform consumes.
+     *  On 33+ the system store is authoritative — the in-app picker writes to
+     *  it via [LocaleSupport.applyToSystem], and we deliberately don't push a
+     *  stale DataStore value back over a system-level pick (that would undo
+     *  a change made in Android Settings). Below 33 our own SharedPreferences
+     *  tag is the only store, so it stays the source of truth there. */
     private fun syncLanguage(language: AppLanguage) {
         val tag = language.tag
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // The Settings screen writes the same system store directly —
+            // this call is only a no-op re-assert, not a restore.
             LocaleSupport.applyToSystem(this, tag)
         } else {
             val previous = LocaleSupport.storedTag(this)
@@ -78,14 +81,20 @@ class MainActivity : ComponentActivity() {
                 onImportConsumed = { _importUrl.value = null },
             )
         }
-        // Keep the platform locale store and the pre-33 wrap tag in sync with
-        // the user's persisted choice. `distinctUntilChanged` guards against
-        // DataStore re-emissions; on 33+ applyToSystem no-ops on equality.
+        // On 33+ LocaleManager is the source of truth — a system-level
+        // change (Android Settings → App info → Language) wins over any
+        // DataStore leftover. We only read DataStore to *propagate* an
+        // in-app pick into LocaleManager; the UI reads the effective value
+        // from the system store, not the pref. Below 33 the SharedPreferences
+        // tag is the only store, so it stays authoritative.
         lifecycleScope.launch {
             var first = true
             settings.appLanguage.collect { language ->
                 if (first) {
                     first = false
+                    // Skip re-applying when the platform already reflects the
+                    // stored pick — a process start would otherwise recreate
+                    // the just-created activity.
                     val appliedTag =
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             LocaleSupport.currentSystemTag(this@MainActivity)

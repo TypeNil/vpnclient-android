@@ -69,6 +69,7 @@ class ConnectionsViewModelTest {
         override suspend fun nodeSummary(id: String): NodeSummary? = null
         override val enabledNodeSetFingerprint: Flow<String> = MutableStateFlow("fingerprint-a")
         override val compiledNodeSetFingerprint: StateFlow<String?> = MutableStateFlow(null)
+        override var underlayHasIpv6: Boolean = true
     }
 
     private class FakeEngine : VpnEngine {

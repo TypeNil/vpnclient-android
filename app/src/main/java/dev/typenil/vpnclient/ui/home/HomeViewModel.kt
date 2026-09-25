@@ -161,10 +161,20 @@ class HomeViewModel
                 @Suppress("UNCHECKED_CAST")
                 val prefs =
                     values[11] as List<dev.typenil.vpnclient.data.db.NodePreferenceEntity>
+                val prefById = prefs.associateBy { it.nodeId }
                 val favoriteIds = prefs.asSequence().filter { it.isFavorite }.map { it.nodeId }.toSet()
                 val dnsProfile = values[12] as DnsProfile
 
-                val selected = nodes.firstOrNull { it.id == selectedId }
+                // Picker source: usable + not hidden — the engine can't
+                // select a disabled node, and a hidden one has already left
+                // the user's lists. The prefs join (not just the node row)
+                // decides both. Auto stays first regardless.
+                val usableNodes =
+                    nodes.filter { node ->
+                        val pref = prefById[node.id]
+                        (pref?.isEnabled ?: true) && !(pref?.isHidden ?: false)
+                    }
+                val selected = usableNodes.firstOrNull { it.id == selectedId }
                 val auto = selectedId == NodeSelection.AUTO_ID
                 val subscriptionNames = profiles.associate { it.id to it.name }
                 // What the header describes: the picked node, or — for Auto —
@@ -180,7 +190,13 @@ class HomeViewModel
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
                     // disconnected (or during a session) the label stands alone.
-                    selectedNodeName = selected?.name,
+                    // Custom name applies to the header too — same presentation
+                    // rule as the picker.
+                    selectedNodeName =
+                        selected?.let {
+                            prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
+                                ?: it.name
+                        },
                     selectedNodeNameRes =
                         if (!auto || selected != null) null else R.string.common_auto_fastest,
                     selectedNodeProtocol = selected?.protocol,
@@ -205,12 +221,18 @@ class HomeViewModel
                                 // order (subscriptionId, position) is kept
                                 // inside each partition.
                                 val ordered =
-                                    nodes.sortedByDescending { it.id in favoriteIds }
+                                    usableNodes.sortedByDescending { it.id in favoriteIds }
                                 ordered.forEach { node ->
                                     add(
                                         ServerOption(
                                             id = node.id,
-                                            title = node.name,
+                                            // Local override wins over the
+                                            // provider name — same rule as
+                                            // ServersCard.
+                                            title =
+                                                prefById[node.id]?.customName
+                                                    ?.takeIf { it.isNotBlank() }
+                                                    ?: node.name,
                                             subtitle =
                                                 listOfNotNull(
                                                     node.protocol,

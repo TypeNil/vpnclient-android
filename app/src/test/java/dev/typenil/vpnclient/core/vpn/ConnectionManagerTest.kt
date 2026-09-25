@@ -107,6 +107,8 @@ class ConnectionManagerTest {
         override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id]
         override val enabledNodeSetFingerprint: Flow<String> get() = enabledFingerprint
         override val compiledNodeSetFingerprint: StateFlow<String?> get() = compiledFingerprint
+
+        override var underlayHasIpv6: Boolean = true
     }
 
     private class FakeEngine : VpnEngine {

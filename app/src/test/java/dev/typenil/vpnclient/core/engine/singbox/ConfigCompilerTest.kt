@@ -411,7 +411,10 @@ class ConfigCompilerTest {
             .map { it.jsonObject }
             .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("https", remote["type"]!!.jsonPrimitive.content)
-        assertEquals("https://dns.example.com/dns-query", remote["server"]!!.jsonPrimitive.content)
+        // Typed schema: bare host in server, path + port separate — not a
+        // full URL.
+        assertEquals("dns.example.com", remote["server"]!!.jsonPrimitive.content)
+        assertEquals("/dns-query", remote["path"]!!.jsonPrimitive.content)
         // DoH dials like an outbound: without the proxy detour it leaks direct.
         assertEquals("proxy", remote["detour"]!!.jsonPrimitive.content)
         // Hostname upstream needs bootstrap — routed to local so remote→proxy
@@ -430,9 +433,27 @@ class ConfigCompilerTest {
             .map { it.jsonObject }
             .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("https", remote["type"]!!.jsonPrimitive.content)
-        assertEquals("https://9.9.9.9/dns-query", remote["server"]!!.jsonPrimitive.content)
+        assertEquals("9.9.9.9", remote["server"]!!.jsonPrimitive.content)
+        assertEquals("/dns-query", remote["path"]!!.jsonPrimitive.content)
         // Literal-IP upstream needs no bootstrap resolution.
         assertTrue("domain_resolver" !in remote)
+    }
+
+    @Test
+    fun `custom dot upstream with non-standard port splits host and server_port`() {
+        val custom = DnsUpstream.parseCustom("tls://dns.example.com:8853")!!
+        val config = compiler.build(
+            listOf(node("n1")), "n1", true,
+            dnsProfile = DnsProfile(DnsMode.POLICY, custom),
+        )
+        val remote = json.parseToJsonElement(config.configJson)
+            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        assertEquals("tls", remote["type"]!!.jsonPrimitive.content)
+        assertEquals("dns.example.com", remote["server"]!!.jsonPrimitive.content)
+        assertEquals(8853, remote["server_port"]!!.jsonPrimitive.int)
+        assertTrue("domain_resolver" in remote)
     }
 
     @Test

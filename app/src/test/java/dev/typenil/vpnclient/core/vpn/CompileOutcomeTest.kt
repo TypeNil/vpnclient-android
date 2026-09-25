@@ -32,6 +32,8 @@ class CompileOutcomeTest {
         override val enabledNodeSetFingerprint: Flow<String> = MutableStateFlow("fingerprint")
 
         override val compiledNodeSetFingerprint: StateFlow<String?> = MutableStateFlow(null)
+
+        override var underlayHasIpv6: Boolean = true
     }
 
     private val config =

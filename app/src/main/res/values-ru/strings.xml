@@ -99,6 +99,8 @@
     <string name="servers_hide">Скрыть из списков</string>
     <string name="servers_unhide">Показать</string>
     <string name="servers_disabled_label">Отключён — не участвует в VPN</string>
+    <string name="servers_show_hidden">Показать скрытые</string>
+    <string name="servers_hidden_label">Скрыт — не показывается в списках</string>
     <string name="theme_system">Системная</string>
     <string name="theme_light">Светлая</string>
     <string name="theme_dark">Тёмная</string>

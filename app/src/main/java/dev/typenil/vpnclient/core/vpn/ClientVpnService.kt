@@ -28,6 +28,7 @@ import dev.typenil.vpnclient.core.engine.EngineNotificationSink
 import dev.typenil.vpnclient.core.engine.EnginePlatform
 import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.TunRequest
+import dev.typenil.vpnclient.data.isGlobalIpv6
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import dev.typenil.vpnclient.core.engine.singbox.isUsableUnderlyingNetwork
@@ -1387,6 +1388,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
             active?.let { transportLabel(connectivity.getNetworkCapabilities(it)) }
                 ?: UnderlyingTransport.UNKNOWN,
         )
+        // Feed the compile path the *physical* underlay's IPv6 posture — a
+        // direct ConnectivityManager read there would resolve our own VPN
+        // interface once a session is live and flip the ip_version:6 rule.
+        // UNKNOWN/no network → true: v6-via-proxy still works, and preferring
+        // it costs nothing when the underlay is gone.
+        configProvider.underlayHasIpv6 = active?.let { networkHasGlobalIpv6(it) } ?: true
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1400,6 +1407,22 @@ class ClientVpnService : VpnService(), EnginePlatform {
             connectionManager.onUnderlyingNetworkAvailable()
         }
         if (reconnectOnChange) notifyEngineNetworkChanged()
+    }
+
+    /** Real IPv6 reachability on a physical network: a global v6 address
+     *  *and* a ::/0 route — an address alone (rogue RA, stale lease) is a
+     *  dead dial. Mirrors the compile-time check this replaces. */
+    private fun networkHasGlobalIpv6(network: Network): Boolean {
+        val link = connectivity.getLinkProperties(network) ?: return false
+        val hasDefaultV6Route =
+            link.routes.any { route ->
+                route.destination.address is java.net.Inet6Address &&
+                    route.destination.prefixLength == 0
+            }
+        return hasDefaultV6Route &&
+            link.linkAddresses.any {
+                (it.address as? java.net.Inet6Address)?.let(::isGlobalIpv6) == true
+            }
     }
 
     /** Coarse display label for the underlay — wifi/cell/other, never the

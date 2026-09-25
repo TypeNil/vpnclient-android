@@ -86,6 +86,8 @@ data class ServersUiState(
     /** Protocols present in the (search-filtered) node set — drives the
      *  protocol filter row. ProtocolType.name values, not labels. */
     val protocolOptions: List<String> = emptyList(),
+    /** Reveal hidden nodes for management — default off. */
+    val showHidden: Boolean = false,
     /** False when any filter/search is active — the screen keeps the flat
      *  "filtered" look instead of per-subscription headers. */
     val showHeaders: Boolean = true,
@@ -124,6 +126,9 @@ private data class ListControls(
     val subscriptionFilter: Long?,
     val protocolFilter: String?,
     val favoritesOnly: Boolean,
+    /** Reveal hidden nodes for management — they stay dimmed/managed, not
+     *  selectable. Default false: hidden means "leave the picker". */
+    val showHidden: Boolean,
 )
 
 @HiltViewModel
@@ -153,6 +158,10 @@ class ServersViewModel
         /** True = restrict the list to starred nodes. */
         private val favoritesOnly = MutableStateFlow(false)
 
+        /** Reveal hidden nodes so the user can Unhide them — off by default
+         *  since "hidden" is presentation, not disablement. */
+        private val showHidden = MutableStateFlow(false)
+
         private val controls: StateFlow<ListControls> =
             combine(
                 query,
@@ -160,18 +169,22 @@ class ServersViewModel
                 subscriptionFilter,
                 protocolFilter,
                 favoritesOnly,
-            ) { q, sort, sub, proto, fav ->
+                showHidden,
+            ) { values ->
                 ListControls(
-                    query = q,
-                    sortMode = sort,
-                    subscriptionFilter = sub,
-                    protocolFilter = proto,
-                    favoritesOnly = fav,
+                    query = values[0] as String,
+                    sortMode = values[1] as ServerSortMode,
+                    subscriptionFilter = values[2] as Long?,
+                    protocolFilter = values[3] as String?,
+                    favoritesOnly = values[4] as Boolean,
+                    showHidden = values[5] as Boolean,
                 )
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = ListControls("", ServerSortMode.Default, null, null, false),
+                initialValue = ListControls(
+                    "", ServerSortMode.Default, null, null, false, false,
+                ),
             )
 
         private val engineSurface: StateFlow<EngineSurface> =
@@ -237,9 +250,13 @@ class ServersViewModel
 
                 val trimmedQuery = ctl.query.trim()
                 val searching = trimmedQuery.isNotEmpty()
+                // Hidden nodes leave every picker unless the user asked to
+                // manage them — the flag is presentation-only, the engine
+                // still sees the node as usable.
                 val filtered =
                     surface.nodes
                         .asSequence()
+                        .filter { node -> ctl.showHidden || !node.hidden }
                         .filter { node ->
                             ctl.subscriptionFilter == null || node.subscriptionId == ctl.subscriptionFilter
                         }.filter { node ->
@@ -335,6 +352,7 @@ class ServersViewModel
                     subscriptionFilter = ctl.subscriptionFilter,
                     protocolFilter = effectiveProtocol,
                     favoritesOnly = ctl.favoritesOnly,
+                    showHidden = ctl.showHidden,
                     subscriptionOptions =
                         surface.nodes
                             .map { it.subscriptionId }
@@ -375,6 +393,10 @@ class ServersViewModel
         /** Toggle semantics: tapping the active chip clears the filter. */
         fun setFavoritesOnly(enabled: Boolean) {
             favoritesOnly.value = enabled
+        }
+
+        fun setShowHidden(enabled: Boolean) {
+            showHidden.value = enabled
         }
 
         /**
@@ -425,7 +447,14 @@ class ServersViewModel
          * apply it). Nothing else to do here.
          */
         fun selectNode(nodeId: String) {
-            viewModelScope.launch { settings.setSelectedNodeId(nodeId) }
+            viewModelScope.launch {
+                // A disabled node can't be picked — the compiled set won't
+                // carry it, so the reconcile would chase a ghost selection.
+                val usable = nodeDao.getUsable().map { it.id }.toSet()
+                if (nodeId in usable) {
+                    settings.setSelectedNodeId(nodeId)
+                }
+            }
         }
 
         /** Persist the "Auto / Fastest" pick — stored as the [NodeSelection.AUTO_ID]

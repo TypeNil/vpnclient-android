@@ -49,6 +49,13 @@ class NodeConfigProviderImpl
         override val compiledNodeSetFingerprint: StateFlow<String?> =
             _compiledNodeSetFingerprint.asStateFlow()
 
+        /** Global-IPv6 reachability of the *physical* underlay — pushed by
+         *  ClientVpnService's NOT_VPN-tracked observer. Reading it here
+         *  (not `activeNetwork`) keeps a live-session recompile from
+         *  resolving the VPN's own default network as the underlay. */
+        @Volatile
+        override var underlayHasIpv6: Boolean = true
+
         override val enabledNodeSetFingerprint: Flow<String> =
             // The fingerprint tracks the effective set — a pref-disabled node
             // changes the compiled config, so it must change the fingerprint
@@ -97,7 +104,7 @@ class NodeConfigProviderImpl
                     selectedNodeId = pick,
                     ipv6Enabled = settings.ipv6Enabled.first(),
                     routeMode = routeMode,
-                    underlayIpv6 = underlayHasIpv6(),
+                    underlayIpv6 = underlayHasIpv6,
                     ruleSetPaths = ruleSetStore.ensureReady(routeMode),
                     selectAuto = pick == NodeSelection.AUTO_ID,
                     bypassLan = settings.bypassLan.first(),
@@ -138,21 +145,11 @@ class NodeConfigProviderImpl
          * v6 while Wi-Fi is active) must not count: the direct outbound never
          * uses it. On ambiguous reads assume false — v6 via the proxy works.
          */
-        private fun underlayHasIpv6(): Boolean {
-            val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
-            // Our package is always disallowed from the tunnel, so activeNetwork
-            // is the underlay even while Connected — never our own tun0.
-            val network = cm.activeNetwork ?: return false
-            val caps = cm.getNetworkCapabilities(network) ?: return false
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false
-            val link = cm.getLinkProperties(network) ?: return false
-            val hasDefaultV6Route =
-                link.routes.any { route ->
-                    route.destination.address is Inet6Address && route.destination.prefixLength == 0
-                }
-            return hasDefaultV6Route &&
-                link.linkAddresses.any { (it.address as? Inet6Address)?.let(::isGlobalIpv6) == true }
-        }
+        /** The compile path no longer reads ConnectivityManager directly:
+         *  `activeNetwork` resolves to the VPN's own interface while a
+         *  session is live (self is tunneled), which would flip the
+         *  ip_version:6 rule mid-session. The service's NOT_VPN tracker is
+         *  the authoritative underlay signal. */
     }
 
 /** Global-unicast IPv6: not link-local, site-local, ULA, loopback,
