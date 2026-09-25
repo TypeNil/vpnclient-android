@@ -186,7 +186,9 @@ sealed class DnsUpstream {
 
                 // IPv6 — strict: ≤8 hex groups of 1–4 chars, at most one
                 // '::' compression, no leading/trailing single ':', no ':::'.
-                ':' in s -> isIpv6Literal(s)
+                ':' in s -> {
+                    isIpv6Literal(s)
+                }
 
                 else -> {
                     false
@@ -220,20 +222,31 @@ internal fun splitHostPort(authority: String): Pair<String, String?> {
     if (authority.startsWith('[')) {
         val end = authority.indexOf(']')
         if (end < 0) return authority to null
-        val host = authority.substring(0, end + 1)
         val after = authority.substring(end + 1)
+        // After ']' only a :port suffix is legal — anything else means the
+        // brackets weren't an authority (e.g. "[v6]garbage"); hand the whole
+        // string back so the caller's host validation rejects it.
+        if (after.isNotEmpty() && !after.startsWith(':')) return authority to null
+        val host = authority.substring(0, end + 1)
         val port = if (after.startsWith(':')) after.substring(1) else ""
         return host to port.ifEmpty { null }
     }
     val last = authority.lastIndexOf(':')
     val first = authority.indexOf(':')
     return when {
-        last < 0 -> authority to null
+        last < 0 -> {
+            authority to null
+        }
+
         // more than one colon without brackets = bare IPv6
-        last != first -> authority to null
-        else ->
+        last != first -> {
+            authority to null
+        }
+
+        else -> {
             authority.substring(0, last) to
                 authority.substring(last + 1).ifEmpty { null }
+        }
     }
 }
 

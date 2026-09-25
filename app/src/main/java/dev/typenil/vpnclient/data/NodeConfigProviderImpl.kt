@@ -62,9 +62,30 @@ class NodeConfigProviderImpl
         override var underlayHasIpv6: Boolean = true
 
         /** True once the service has pushed a value — distinguishes
-         *  "tracker hasn't run yet" from "tracker reported no v6". */
+         *  "tracker hasn't run yet" from "tracker reported no v6". Only
+         *  trusted while a tracker epoch is active (see [underlayEpoch]). */
         @Volatile
         private var underlayReported: Boolean = false
+
+        /** Epoch of the current underlay tracker owner. Each
+         *  [acquireUnderlayEpoch] bumps it and clears [underlayReported] so a
+         *  previous session's snapshot can't leak into the next compile;
+         *  [releaseUnderlayEpoch] only invalidates when its epoch still
+         *  matches — a stale teardown can't clobber a newer owner's value. */
+        @Volatile
+        private var underlayEpoch: Long = 0
+
+        override fun acquireUnderlayEpoch(): Long {
+            underlayEpoch++
+            underlayReported = false
+            return underlayEpoch
+        }
+
+        override fun releaseUnderlayEpoch(epoch: Long) {
+            if (epoch == underlayEpoch) {
+                underlayReported = false
+            }
+        }
 
         override val enabledNodeSetFingerprint: Flow<String> =
             // The fingerprint tracks the effective set — a pref-disabled node
@@ -153,7 +174,9 @@ class NodeConfigProviderImpl
 
         /** The service pushes [underlayHasIpv6] and marks it reported;
          *  until then the compile path can't trust the optimistic default —
-         *  the first connect() runs before the NOT_VPN tracker fires. */
+         *  the first connect() runs before the NOT_VPN tracker fires.
+         *  An epoch acquired then released without a report leaves
+         *  [underlayReported] false, so the next compile re-probes. */
         override fun reportUnderlay(hasIpv6: Boolean) {
             underlayHasIpv6 = hasIpv6
             underlayReported = true
@@ -176,8 +199,9 @@ class NodeConfigProviderImpl
                     caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                         !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                 }
-            val active = cm.activeNetwork?.takeIf { candidates.contains(it) } ?: candidates.firstOrNull()
-                ?: return true
+            val active =
+                cm.activeNetwork?.takeIf { candidates.contains(it) } ?: candidates.firstOrNull()
+                    ?: return true
             val link = cm.getLinkProperties(active) ?: return true
             val hasDefaultV6Route =
                 link.routes.any { route ->

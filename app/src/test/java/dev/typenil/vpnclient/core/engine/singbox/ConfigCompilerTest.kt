@@ -554,14 +554,21 @@ class ConfigCompilerTest {
     @Test
     fun `custom DoH upstream with bracketed ipv6 keeps brackets and path`() {
         val custom = DnsUpstream.parseCustom("https://[2001:db8::853]/dns-query")!!
-        val config = compiler.build(
-            listOf(node("n1")), "n1", true,
-            dnsProfile = DnsProfile(DnsMode.POLICY, custom),
-        )
-        val remote = json.parseToJsonElement(config.configJson)
-            .jsonObject["dns"]!!.jsonObject["servers"]!!.jsonArray
-            .map { it.jsonObject }
-            .first { it["tag"]!!.jsonPrimitive.content == "remote" }
+        val config =
+            compiler.build(
+                listOf(node("n1")),
+                "n1",
+                true,
+                dnsProfile = DnsProfile(DnsMode.POLICY, custom),
+            )
+        val remote =
+            json
+                .parseToJsonElement(config.configJson)
+                .jsonObject["dns"]!!
+                .jsonObject["servers"]!!
+                .jsonArray
+                .map { it.jsonObject }
+                .first { it["tag"]!!.jsonPrimitive.content == "remote" }
         assertEquals("https", remote["type"]!!.jsonPrimitive.content)
         // Brackets preserved — server is a valid literal, not "[2001".
         assertEquals("[2001:db8::853]", remote["server"]!!.jsonPrimitive.content)

@@ -99,7 +99,11 @@ class DnsPolicyTest {
     @Test
     fun `splitHostPort handles v4 v6 bracketed and hostname authorities`() {
         // (authority) -> (host, port)
-        data class Case(val authority: String, val host: String, val port: String?)
+        data class Case(
+            val authority: String,
+            val host: String,
+            val port: String?,
+        )
         listOf(
             Case("1.1.1.1", "1.1.1.1", null),
             Case("1.1.1.1:853", "1.1.1.1", "853"),
@@ -110,7 +114,9 @@ class DnsPolicyTest {
             // bare multi-colon IPv6 without brackets — whole is the host
             Case("2001:db8::853", "2001:db8::853", null),
         ).forEach { (authority, host, port) ->
-            val (h, p) = dev.typenil.vpnclient.core.engine.splitHostPort(authority)
+            val (h, p) =
+                dev.typenil.vpnclient.core.engine
+                    .splitHostPort(authority)
             assertEquals("host for $authority", host, h)
             assertEquals("port for $authority", port, p)
         }
@@ -119,16 +125,21 @@ class DnsPolicyTest {
     @Test
     fun `malformed ipv6 literals rejected`() {
         listOf(
-            "2001:db8:::53",       // triple colon
-            "2001::db8::53",      // two compressions
-            ":2001:db8::53",      // leading single colon
-            "2001:db8::53:",      // trailing single colon
-            "2001:db8:gggg::1",   // non-hex group
-            "12345::1",           // group > 4 hex
-            "1:2:3:4:5:6:7:8:9",  // too many groups
+            "2001:db8:::53", // triple colon
+            "2001::db8::53", // two compressions
+            ":2001:db8::53", // leading single colon
+            "2001:db8::53:", // trailing single colon
+            "2001:db8:gggg::1", // non-hex group
+            "12345::1", // group > 4 hex
+            "1:2:3:4:5:6:7:8:9", // too many groups
         ).forEach { s ->
             assertNull("must reject: $s", DnsUpstream.parseCustom(s))
             assertNull("must reject: $s", DnsUpstream.parseCustom("udp://$s"))
         }
+        // Garbage after ']' must not be silently dropped into a valid spec
+        assertNull(DnsUpstream.parseCustom("udp://[2001:db8::53]garbage"))
+        assertNull(DnsUpstream.parseCustom("https://[2001:db8::853]x/dns-query"))
+        assertNull(DnsUpstream.parseCustom("tls://[2001:db8::853]:bogus"))
+        assertNull(DnsUpstream.parseCustom("udp://[2001:db8::53]:99999"))
     }
 }

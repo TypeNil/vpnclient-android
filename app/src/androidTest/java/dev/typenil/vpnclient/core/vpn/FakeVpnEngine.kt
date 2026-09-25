@@ -216,8 +216,22 @@ class FakeNodeConfigProvider(
     /** Underlay IPv6 posture — the service pushes it; tests set it directly. */
     override var underlayHasIpv6: Boolean = true
 
+    private var underlayEpoch = 0L
+    private var underlayReported = false
+
+    override fun acquireUnderlayEpoch(): Long {
+        underlayEpoch++
+        underlayReported = false
+        return underlayEpoch
+    }
+
+    override fun releaseUnderlayEpoch(epoch: Long) {
+        if (epoch == underlayEpoch) underlayReported = false
+    }
+
     override fun reportUnderlay(hasIpv6: Boolean) {
         underlayHasIpv6 = hasIpv6
+        underlayReported = true
     }
 
     override suspend fun compileSelected(): EngineConfig? {

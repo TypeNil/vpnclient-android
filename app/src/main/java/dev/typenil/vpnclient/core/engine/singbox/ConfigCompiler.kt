@@ -188,7 +188,9 @@ class ConfigCompiler
                                 // https gets `path` + `server_port`; tls/quic
                                 // get `server_port`; udp is bare host.
                                 val authority = rest.substringBefore('/')
-                                val (host, port) = dev.typenil.vpnclient.core.engine.splitHostPort(authority)
+                                val (host, port) =
+                                    dev.typenil.vpnclient.core.engine
+                                        .splitHostPort(authority)
                                 put("server", host)
                                 port?.toIntOrNull()?.let { put("server_port", it) }
                                 if (scheme == "https") {

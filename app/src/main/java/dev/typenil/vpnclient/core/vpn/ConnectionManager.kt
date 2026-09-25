@@ -69,6 +69,18 @@ interface NodeConfigProvider {
      *  pick the VPN's own default network while a session is live. */
     var underlayHasIpv6: Boolean
 
+    /** Acquire ownership of the underlay-IPv6 snapshot — returns an epoch
+     *  token the caller must later pass to [releaseUnderlayEpoch]. A new
+     *  epoch invalidates any prior snapshot so the next compile re-probes
+     *  the physical network instead of trusting a previous session's
+     *  cached value. */
+    fun acquireUnderlayEpoch(): Long
+
+    /** Release the epoch when the tracker goes away. Only the owner that
+     *  acquired [epoch] can invalidate it — a stale teardown from an older
+     *  session must not clobber a snapshot a newer owner has already pushed. */
+    fun releaseUnderlayEpoch(epoch: Long)
+
     /** Push the physical underlay's IPv6 posture into the provider — the
      *  service calls this from its NOT_VPN tracker so a first compile can
      *  distinguish "not yet reported" (falls back to a physical probe) from

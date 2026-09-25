@@ -120,7 +120,8 @@ class SettingsViewModel
                     while (true) {
                         emit(
                             dev.typenil.vpnclient.core.common.AppLanguage.fromTag(
-                                dev.typenil.vpnclient.core.common.LocaleSupport.currentSystemTag(appContext),
+                                dev.typenil.vpnclient.core.common.LocaleSupport
+                                    .currentSystemTag(appContext),
                             ),
                         )
                         kotlinx.coroutines.delay(1_000)

@@ -161,6 +161,11 @@ class ClientVpnService :
     private var engine: VpnEngine? = null
     private var tunFd: ParcelFileDescriptor? = null
     private var underlyingCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Epoch of the currently-owned underlay tracker — acquired on
+     *  register, released on unregister so a stale snapshot can't leak
+     *  into the next session's first compile. */
+    private var underlayEpoch: Long = -1L
     private var lastUnderlyingNetwork: Network? = null
     private var dozeReceiverRegistered = false
 
@@ -1426,6 +1431,10 @@ class ClientVpnService :
 
     private fun registerUnderlyingNetworkCallback() {
         if (underlyingCallback != null) return
+        // Take ownership of the underlay snapshot — invalidates any stale
+        // value from a previous session so this session's first report
+        // (or the provider's probe until then) decides the ip_version:6 rule.
+        underlayEpoch = configProvider.acquireUnderlayEpoch()
         val cb =
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
@@ -1468,6 +1477,13 @@ class ClientVpnService :
         }
         underlyingCallback = null
         lastUnderlyingNetwork = null
+        // Drop the snapshot this epoch pushed — the next session's first
+        // compile must re-probe the physical network (it may have changed
+        // while the tunnel was down), not trust our cached value. The
+        // epoch token guards a stale teardown from clobbering a newer
+        // owner that registered between our release and this call.
+        configProvider.releaseUnderlayEpoch(underlayEpoch)
+        underlayEpoch = -1L
     }
 
     private fun isUsablePhysicalNetwork(network: Network): Boolean {
