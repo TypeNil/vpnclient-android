@@ -184,6 +184,18 @@ abstract class NodeDao {
     @Query("SELECT * FROM nodes WHERE id = :id")
     abstract suspend fun get(id: String): NodeEntity?
 
+    /** Nodes of one subscription in display order, addressed by the owning
+     *  row's URL — drives the manual sentinel's per-node delete list. */
+    @Query(
+        """SELECT * FROM nodes WHERE subscriptionId IN
+            (SELECT id FROM subscriptions WHERE url = :url)
+            ORDER BY position""",
+    )
+    abstract fun observeForSubscriptionUrl(url: String): Flow<List<NodeEntity>>
+
+    @Query("DELETE FROM nodes WHERE id = :id")
+    abstract suspend fun delete(id: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertAll(nodes: List<NodeEntity>)
 

@@ -7,6 +7,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.data.db.NodeDao
+import dev.typenil.vpnclient.data.db.NodeEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,9 @@ data class SubscriptionsUiState(
     val profiles: List<SubscriptionProfile> = emptyList(),
     /** subscriptionId → enabled node count (computed from observeEnabled). */
     val nodeCounts: Map<Long, Int> = emptyMap(),
+    /** Manually imported nodes in display order — the manual row's detail
+     *  sheet lists them so a bad paste can be undone. */
+    val manualNodes: List<NodeEntity> = emptyList(),
     val refreshingIds: Set<Long> = emptySet(),
     val pendingMessage: PendingMessage? = null,
 )
@@ -49,10 +53,12 @@ class SubscriptionsViewModel
                 nodeDao.observeEnabled(),
                 refreshing,
                 pendingMessage,
-            ) { profiles, nodes, refreshingIds, message ->
+                repository.manualNodes,
+            ) { profiles, nodes, refreshingIds, message, manualNodes ->
                 SubscriptionsUiState(
                     profiles = profiles,
                     nodeCounts = nodes.groupingBy { it.subscriptionId }.eachCount(),
+                    manualNodes = manualNodes,
                     refreshingIds = refreshingIds,
                     pendingMessage = message,
                 )
@@ -197,6 +203,18 @@ class SubscriptionsViewModel
 
         fun remove(id: Long) {
             viewModelScope.launch { repository.remove(id) }
+        }
+
+        /**
+         * Delete one manually imported node — the only way to undo a bad paste,
+         * since the manual row has no refresh to replace its nodes. The row
+         * itself goes with its last node.
+         */
+        fun removeManualNode(nodeId: String) {
+            viewModelScope.launch {
+                runCatching { repository.removeManualNode(nodeId) }
+                    .onFailure { postMessage("Failed to remove server") }
+            }
         }
 
         private companion object {

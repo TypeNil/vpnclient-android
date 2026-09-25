@@ -56,6 +56,12 @@ class SubscriptionRepository
         val profiles: Flow<List<SubscriptionProfile>> =
             subscriptionDao.observeAll().map { list -> list.map { it.toDomain() } }
 
+        /** Nodes of the manual/local sentinel row in display order — drives
+         *  the detail sheet's per-node delete list. Empty until the first
+         *  import creates the row. */
+        val manualNodes: Flow<List<NodeEntity>> =
+            nodeDao.observeForSubscriptionUrl(MANUAL_SUBSCRIPTION_URL)
+
         suspend fun add(
             url: String,
             requestedName: String?,
@@ -114,12 +120,18 @@ class SubscriptionRepository
         suspend fun refresh(id: Long): Result<RefreshOutcome> = refreshMutex.withLock { refreshLocked(id) }
 
         /**
-         * Import one pasted share link (`vless://…`, `vmess://…`, …) as a
-         * manual node. The node is stored under the reserved
+         * Import pasted share links (`vless://…`, `vmess://…`, …) as manual
+         * nodes. The nodes are stored under the reserved
          * [MANUAL_SUBSCRIPTION_URL] row — a sentinel that is never fetched
          * (refresh() fails fast on it, no refresh job is ever enqueued for
          * it), so its node rows are append/upsert only, not
          * replace-per-refresh.
+         *
+         * The same last-known-good contract as [refresh] applies: the parse
+         * AND the engine validation must pass before anything is committed,
+         * and a multi-line paste imports every usable link. A sentinel row
+         * created for a failed first import is removed again so an empty
+         * "Manual servers" entry never lingers.
          *
          * Idempotent on node id: node ids are content hashes salted with the
          * manual row's id, so re-importing a known link upserts the same row
@@ -128,46 +140,78 @@ class SubscriptionRepository
          */
         suspend fun importShareLink(uri: String): Result<RefreshOutcome> =
             refreshMutex.withLock {
+                var subId: Long? = null
+                var createdRow = false
                 try {
-                    var subId = subscriptionDao.findIdByUrl(MANUAL_SUBSCRIPTION_URL)
+                    subId = subscriptionDao.findIdByUrl(MANUAL_SUBSCRIPTION_URL)
                     if (subId == null) {
                         // Insert the sentinel row first — node identity is
                         // salted with the subscription id, so the parse must
                         // run against the id that will persist the node.
                         subId = subscriptionDao.insert(manualSubscriptionEntity())
+                        createdRow = true
                     }
-                    // nodes.size == 1 guaranteed below — the parser only
-                    // throws EmptyResult on zero; a multi-line paste imports
-                    // the first usable link and reports the rest as skipped.
                     val parsed =
                         withContext(Dispatchers.Default) {
                             uriListParser.parse(uri.trim(), subId)
                         }
-                    val node = parsed.nodes.first()
+                    // Nothing commits before the engine accepts the candidate —
+                    // a parser-valid link whose outbound sing-box rejects would
+                    // otherwise break the compiled config of every other
+                    // subscription too.
+                    try {
+                        validator.validate(parsed.nodes)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        throw SubscriptionError.ConfigRejected
+                    }
                     // Append/upsert: a re-import REPLACEs the same primary
-                    // key in place; ids are deduped by construction.
-                    val position =
+                    // key in place; ids are deduped by construction. Every
+                    // parsed node is kept — the paste was the user's intent.
+                    val basePosition =
                         nodeDao
                             .forSubscription(subId)
                             .maxOfOrNull { it.position + 1 } ?: 0
-                    transactions.run {
-                        nodeDao.upsert(node.toEntity(subId, position))
-                    }
-                    SecureLog.i(TAG, "share-link imported sub=$subId")
+                    val entities =
+                        parsed.nodes.mapIndexed { index, node ->
+                            node.toEntity(subId, basePosition + index)
+                        }
+                    transactions.run { nodeDao.upsertAll(entities) }
+                    SecureLog.i(TAG, "share-link imported sub=$subId nodes=${entities.size}")
                     Result.success(
-                        RefreshOutcome(nodeCount = 1, skipped = parsed.skipped),
+                        RefreshOutcome(nodeCount = entities.size, skipped = parsed.skipped),
                     )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: SubscriptionError) {
                     SecureLog.w(TAG, "share-link import failed: ${e.safeMessage()}")
+                    dropEmptyManualRow(subId, createdRow)
                     Result.failure(e)
                 } catch (e: Exception) {
                     // e.message can embed the pasted URI — log the type only.
                     SecureLog.w(TAG, "share-link import failed: ${e.javaClass.simpleName}", e)
+                    dropEmptyManualRow(subId, createdRow)
                     Result.failure(SubscriptionError.ParseFailed(e.javaClass.simpleName))
                 }
             }
+
+        /**
+         * Remove the manual row when this call created it and nothing was
+         * committed into it — a failed first import must not leave an empty
+         * "Manual servers" entry behind. Best-effort: the row is recreated
+         * on the next import anyway.
+         */
+        private suspend fun dropEmptyManualRow(subId: Long?, createdRow: Boolean) {
+            if (!createdRow || subId == null) return
+            runCatching {
+                if (nodeDao.countForSubscription(subId) == 0) {
+                    subscriptionDao.delete(subId)
+                }
+            }.onFailure {
+                SecureLog.w(TAG, "manual row rollback failed: ${it.javaClass.simpleName}")
+            }
+        }
 
         private fun ProxyNode.toEntity(
             subscriptionId: Long,
@@ -587,6 +631,37 @@ class SubscriptionRepository
                     }
                 }
                 return result
+            }
+
+        /**
+         * Delete one manually imported node. The manual row's nodes are
+         * append-only (no refresh replaces them), so this is the only way to
+         * undo a bad paste. The row itself goes once its last node does — an
+         * empty "Manual servers" entry has nothing to show and would be
+         * recreated on the next import anyway.
+         */
+        suspend fun removeManualNode(nodeId: String) =
+            refreshMutex.withLock {
+                val node = nodeDao.get(nodeId) ?: return@withLock
+                val sub = subscriptionDao.get(node.subscriptionId) ?: return@withLock
+                // Only the manual sentinel is per-node removable — a remote
+                // subscription's nodes are owned by its refresh.
+                if (!isManualSubscription(sub.url)) return@withLock
+                // One transaction: the row cleanup must not be a second
+                // write that re-emits the node set and triggers a duplicate
+                // tunnel rebuild for a single logical change.
+                transactions.run {
+                    nodeDao.delete(nodeId)
+                    // Nothing left to show — the sentinel row goes too, so an
+                    // empty "Manual servers" entry never lingers.
+                    if (nodeDao.countForSubscription(node.subscriptionId) == 0) {
+                        subscriptionDao.delete(node.subscriptionId)
+                    }
+                }
+                // A selection can't outlive its node — same conditional clear
+                // the refresh path uses (a concurrent pick isn't wiped).
+                settings.clearSelectedNodeIdIf(nodeId)
+                SecureLog.i(TAG, "manual node removed sub=${node.subscriptionId}")
             }
 
         suspend fun remove(id: Long) {

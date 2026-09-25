@@ -125,6 +125,11 @@ class SubscriptionRepositoryTest {
         override fun observeEnabled(): Flow<List<NodeEntity>> = flowOf(nodes.values.toList())
         override suspend fun getEnabled() = nodes.values.toList()
         override suspend fun get(id: String) = nodes[id]
+        override fun observeForSubscriptionUrl(url: String): Flow<List<NodeEntity>> =
+            flowOf(nodes.values.toList())
+        override suspend fun delete(id: String) {
+            nodes.remove(id)
+        }
         override suspend fun upsertAll(new: List<NodeEntity>) {
             new.forEach { nodes[it.id] = it }
         }
@@ -748,6 +753,99 @@ class SubscriptionRepositoryTest {
         assertEquals(1, subscriptionDao.subs.size)
         assertEquals(1, nodeDao.forSubscription(id).size)
         assertTrue(scheduler.cancelled.isEmpty())
+    }
+
+    @Test
+    fun `importShareLink keeps every node of a multi-line paste`() = runTest {
+        val pasted =
+            listOf(
+                uri("a.example.com", "A"),
+                uri("b.example.com", "B"),
+                uri("c.example.com", "C"),
+            ).joinToString("\n")
+
+        val result = repository.importShareLink(pasted)
+
+        assertTrue(result.isSuccess)
+        assertEquals(3, result.getOrThrow().nodeCount)
+        val stored = nodeDao.forSubscription(manualSubId())
+        assertEquals(3, stored.size)
+        // Contiguous positions in paste order.
+        assertEquals(listOf(0, 1, 2), stored.sortedBy { it.position }.map { it.position })
+    }
+
+    @Test
+    fun `importShareLink rejects an engine-invalid link and commits nothing`() = runTest {
+        validator.failure = EngineError.InvalidConfig("rejected")
+
+        val result = repository.importShareLink(uri("a.example.com", "A"))
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is SubscriptionError.ConfigRejected)
+        assertEquals(1, validator.calls)
+        // Nothing committed, and the sentinel row created for this attempt is
+        // gone again — an outbound sing-box rejects must never reach the DB.
+        assertTrue(nodeDao.nodes.isEmpty())
+        assertTrue(subscriptionDao.subs.isEmpty())
+    }
+
+    @Test
+    fun `a failed first import leaves no empty manual row`() = runTest {
+        val result = repository.importShareLink("definitely not a share link")
+
+        assertTrue(result.isFailure)
+        assertTrue(subscriptionDao.subs.isEmpty())
+    }
+
+    @Test
+    fun `a failed import keeps the existing manual row and its nodes`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        validator.failure = EngineError.InvalidConfig("rejected")
+
+        val result = repository.importShareLink(uri("b.example.com", "B"))
+
+        assertTrue(result.isFailure)
+        assertEquals(1, subscriptionDao.subs.size)
+        assertEquals(1, nodeDao.forSubscription(manualSubId()).size)
+    }
+
+    // ---- manual node removal ----
+
+    @Test
+    fun `removeManualNode deletes the node and clears its selection`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        repository.importShareLink(uri("b.example.com", "B"))
+        val id = manualSubId()
+        val nodes = nodeDao.forSubscription(id).sortedBy { it.position }
+        settings.selected.value = nodes[0].id
+
+        repository.removeManualNode(nodes[0].id)
+
+        assertEquals(listOf(nodes[1].id), nodeDao.forSubscription(id).map { it.id })
+        assertNull(settings.selected.value)
+        assertEquals(1, subscriptionDao.subs.size)
+    }
+
+    @Test
+    fun `removeManualNode drops the row with its last node`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val only = nodeDao.forSubscription(manualSubId()).single()
+
+        repository.removeManualNode(only.id)
+
+        assertTrue(nodeDao.nodes.isEmpty())
+        assertTrue(subscriptionDao.subs.isEmpty())
+    }
+
+    @Test
+    fun `removeManualNode refuses a node owned by a remote subscription`() = runTest {
+        seedSubscription()
+        val node = nodeEntity(uri("a.example.com", "A"), 1)
+        nodeDao.nodes[node.id] = node
+
+        repository.removeManualNode(node.id)
+
+        assertEquals(1, nodeDao.forSubscription(1).size)
     }
 
     // ---- enable/disable ----

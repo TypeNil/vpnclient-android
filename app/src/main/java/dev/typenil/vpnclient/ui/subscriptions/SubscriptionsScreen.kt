@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -58,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
+import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.ui.common.formatBytes
@@ -204,12 +207,14 @@ fun SubscriptionsScreen(
         SubscriptionDetailSheet(
             profile = profile,
             nodeCount = ui.nodeCounts[profile.id] ?: 0,
+            manualNodes = ui.manualNodes,
             refreshing = profile.id in ui.refreshingIds,
             onDismiss = { detailId = null },
             onToggle = { enabled -> viewModel.setEnabled(profile.id, enabled) },
             onRefresh = { viewModel.refresh(profile.id) },
             onRename = { name -> viewModel.rename(profile.id, name) },
             onEditUrl = { url -> viewModel.editUrl(profile.id, url) },
+            onRemoveNode = viewModel::removeManualNode,
             onDelete = {
                 detailId = null
                 pendingDelete = profile
@@ -487,12 +492,14 @@ private fun AddSubscriptionDialog(
 private fun SubscriptionDetailSheet(
     profile: SubscriptionProfile,
     nodeCount: Int,
+    manualNodes: List<NodeEntity>,
     refreshing: Boolean,
     onDismiss: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onRename: (String) -> Unit,
     onEditUrl: (String) -> Unit,
+    onRemoveNode: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
@@ -502,7 +509,13 @@ private fun SubscriptionDetailSheet(
     val manual = SubscriptionRepository.isManualSubscription(profile.url)
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 32.dp)) {
+        // Scrollable: a long manual-node list (or a big announcement) must
+        // not push the actions out of the sheet.
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp),
+        ) {
             Text(
                 text = profile.name.ifBlank { "Subscription" },
                 style = MaterialTheme.typography.titleLarge,
@@ -565,6 +578,43 @@ private fun SubscriptionDetailSheet(
                     )
                 }
                 Switch(checked = profile.enabled, onCheckedChange = onToggle)
+            }
+
+            // --- manually imported nodes: per-node delete ---
+            // The manual row's nodes are append-only (nothing replaces them),
+            // so without this an accidentally pasted link is stuck: the row
+            // can only be disabled, never corrected.
+            if (manual && manualNodes.isNotEmpty()) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = "Imported servers",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
+                manualNodes.forEach { node ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 24.dp, end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = node.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { onRemoveNode(node.id) }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove ${node.name}",
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
             }
 
             // --- actions ---
