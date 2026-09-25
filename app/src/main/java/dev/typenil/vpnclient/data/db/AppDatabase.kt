@@ -68,6 +68,9 @@ interface SubscriptionDao {
     @Query("SELECT * FROM subscriptions WHERE id = :id")
     suspend fun get(id: Long): SubscriptionEntity?
 
+    @Query("SELECT id FROM subscriptions WHERE url = :url")
+    suspend fun findIdByUrl(url: String): Long?
+
     @Query("SELECT * FROM subscriptions")
     suspend fun getAll(): List<SubscriptionEntity>
 
@@ -76,6 +79,18 @@ interface SubscriptionDao {
 
     @Update
     suspend fun update(entity: SubscriptionEntity)
+
+    @Query("UPDATE subscriptions SET enabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(
+        id: Long,
+        enabled: Boolean,
+    )
+
+    @Query("UPDATE subscriptions SET name = :name WHERE id = :id")
+    suspend fun updateName(
+        id: Long,
+        name: String,
+    )
 
     @Query("DELETE FROM subscriptions WHERE id = :id")
     suspend fun delete(id: Long)
@@ -86,7 +101,11 @@ interface SubscriptionDao {
             lastError = :error
         WHERE id = :id""",
     )
-    suspend fun markAttempt(id: Long, attemptAt: Long, error: String?)
+    suspend fun markAttempt(
+        id: Long,
+        attemptAt: Long,
+        error: String?,
+    )
 
     @Query(
         """UPDATE subscriptions SET
@@ -103,6 +122,36 @@ interface SubscriptionDao {
     )
     suspend fun markSuccess(
         id: Long,
+        updatedAt: Long,
+        attemptAt: Long,
+        userInfoJson: String?,
+        supportUrl: String?,
+        updateIntervalMinutes: Int?,
+        announce: String?,
+        updateAlways: Boolean,
+        fallbackUrl: String?,
+    )
+
+    /** [markSuccess] plus the URL repoint — used by editUrl so the new URL
+     *  and the node swap commit atomically: a crash between them can't
+     *  leave nodes fetched from a URL the row doesn't record. */
+    @Query(
+        """UPDATE subscriptions SET
+            url = :url,
+            lastUpdatedAtEpochMs = :updatedAt,
+            lastAttemptAtEpochMs = :attemptAt,
+            lastError = NULL,
+            userInfoJson = :userInfoJson,
+            supportUrl = :supportUrl,
+            updateIntervalMinutes = :updateIntervalMinutes,
+            announce = :announce,
+            updateAlways = :updateAlways,
+            fallbackUrl = :fallbackUrl
+        WHERE id = :id""",
+    )
+    suspend fun updateUrlAndMarkSuccess(
+        id: Long,
+        url: String,
         updatedAt: Long,
         attemptAt: Long,
         userInfoJson: String?,
@@ -138,6 +187,9 @@ abstract class NodeDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertAll(nodes: List<NodeEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun upsert(node: NodeEntity)
+
     @Query("DELETE FROM nodes WHERE subscriptionId = :subscriptionId")
     abstract suspend fun deleteForSubscription(subscriptionId: Long)
 
@@ -147,7 +199,10 @@ abstract class NodeDao {
     /** Delete + insert as one transaction — a mid-write failure can't
      *  leave a subscription with a partial node list. */
     @Transaction
-    open suspend fun replaceForSubscription(subscriptionId: Long, nodes: List<NodeEntity>) {
+    open suspend fun replaceForSubscription(
+        subscriptionId: Long,
+        nodes: List<NodeEntity>,
+    ) {
         deleteForSubscription(subscriptionId)
         upsertAll(nodes)
     }
@@ -160,18 +215,20 @@ abstract class NodeDao {
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun subscriptionDao(): SubscriptionDao
+
     abstract fun nodeDao(): NodeDao
 
     companion object {
         /** v2: per-subscription cleartext opt-in. */
-        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
-            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                db.execSQL(
-                    "ALTER TABLE subscriptions " +
-                        "ADD COLUMN allowInsecureHttp INTEGER NOT NULL DEFAULT 0",
-                )
+        val MIGRATION_1_2 =
+            object : androidx.room.migration.Migration(1, 2) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "ALTER TABLE subscriptions " +
+                            "ADD COLUMN allowInsecureHttp INTEGER NOT NULL DEFAULT 0",
+                    )
+                }
             }
-        }
 
         /**
          * v3: `updateIntervalMinutes` was reinterpreted hours→minutes — rows
@@ -181,26 +238,28 @@ abstract class AppDatabase : RoomDatabase() {
          * under a cleartext-allowed regime and would otherwise be stuck with
          * no way to re-enable the opt-in.
          */
-        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
-            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                db.execSQL("UPDATE subscriptions SET updateIntervalMinutes = NULL")
-                db.execSQL(
-                    "UPDATE subscriptions SET allowInsecureHttp = 1 " +
-                        "WHERE url LIKE 'http://%'",
-                )
+        val MIGRATION_2_3 =
+            object : androidx.room.migration.Migration(2, 3) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("UPDATE subscriptions SET updateIntervalMinutes = NULL")
+                    db.execSQL(
+                        "UPDATE subscriptions SET allowInsecureHttp = 1 " +
+                            "WHERE url LIKE 'http://%'",
+                    )
+                }
             }
-        }
 
         /** v4: provider metadata — announcement, refresh-on-launch, fallback URL. */
-        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
-            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE subscriptions ADD COLUMN announce TEXT")
-                db.execSQL(
-                    "ALTER TABLE subscriptions " +
-                        "ADD COLUMN updateAlways INTEGER NOT NULL DEFAULT 0",
-                )
-                db.execSQL("ALTER TABLE subscriptions ADD COLUMN fallbackUrl TEXT")
+        val MIGRATION_3_4 =
+            object : androidx.room.migration.Migration(3, 4) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE subscriptions ADD COLUMN announce TEXT")
+                    db.execSQL(
+                        "ALTER TABLE subscriptions " +
+                            "ADD COLUMN updateAlways INTEGER NOT NULL DEFAULT 0",
+                    )
+                    db.execSQL("ALTER TABLE subscriptions ADD COLUMN fallbackUrl TEXT")
+                }
             }
-        }
     }
 }

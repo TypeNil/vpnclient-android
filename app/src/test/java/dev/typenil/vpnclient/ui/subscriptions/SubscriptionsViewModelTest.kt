@@ -57,6 +57,8 @@ class SubscriptionsViewModelTest {
         val subs = mutableMapOf<Long, SubscriptionEntity>()
         override fun observeAll() = flowOf(subs.values.toList())
         override suspend fun get(id: Long) = subs[id]
+        override suspend fun findIdByUrl(url: String): Long? =
+            subs.values.firstOrNull { it.url == url }?.id
         override suspend fun getAll() = subs.values.toList()
         override suspend fun insert(entity: SubscriptionEntity): Long {
             subs[entity.id] = entity
@@ -66,6 +68,20 @@ class SubscriptionsViewModelTest {
             subs[entity.id] = entity
         }
         override suspend fun delete(id: Long) { subs.remove(id) }
+        override suspend fun setEnabled(id: Long, enabled: Boolean) = Unit
+        override suspend fun updateName(id: Long, name: String) = Unit
+        override suspend fun updateUrlAndMarkSuccess(
+            id: Long,
+            url: String,
+            updatedAt: Long,
+            attemptAt: Long,
+            userInfoJson: String?,
+            supportUrl: String?,
+            updateIntervalMinutes: Int?,
+            announce: String?,
+            updateAlways: Boolean,
+            fallbackUrl: String?,
+        ) = Unit
         override suspend fun markAttempt(id: Long, attemptAt: Long, error: String?) = Unit
         override suspend fun markSuccess(
             id: Long,
@@ -89,6 +105,9 @@ class SubscriptionsViewModelTest {
         override suspend fun get(id: String) = nodes[id]
         override suspend fun upsertAll(new: List<NodeEntity>) {
             new.forEach { nodes[it.id] = it }
+        }
+        override suspend fun upsert(node: NodeEntity) {
+            nodes[node.id] = node
         }
         override suspend fun deleteForSubscription(subscriptionId: Long) {
             nodes.values.removeAll { it.subscriptionId == subscriptionId }
@@ -143,6 +162,7 @@ class SubscriptionsViewModelTest {
                     expireEpochSeconds: Long,
                 ): Boolean = true
             },
+            uriListParser = UriListParser(),
         )
         viewModel = SubscriptionsViewModel(repository, FakeNodeDao())
     }
@@ -238,4 +258,79 @@ class SubscriptionsViewModelTest {
             server.shutdown()
         }
     }
+
+    // ---- share-link routing ----
+
+    @Test
+    fun `a share link routes to manual import, not subscription add`() = testScope.runTest {
+        collectUi()
+        val nodeDao = FakeNodeDao()
+        // Rebuild a VM whose DAO we can inspect.
+        val repo = newRepository(nodeDao)
+        viewModel = SubscriptionsViewModel(repo, nodeDao)
+
+        viewModel.add(
+            "vless://11111111-1111-1111-1111-111111111111@a.example.com:443" +
+                "?security=none&type=tcp#A",
+            null,
+        )
+        advanceUntilIdle()
+
+        // No error surfaced; the node landed under the manual sentinel row.
+        assertNull(viewModel.uiState.value.pendingMessage)
+        assertEquals(1, nodeDao.nodes.size)
+    }
+
+    @Test
+    fun `an http url still goes through the subscription path`() = testScope.runTest {
+        collectUi()
+        val nodeDao = FakeNodeDao()
+        viewModel = SubscriptionsViewModel(newRepository(nodeDao), nodeDao)
+
+        // A http URL (not https) hits InsecureTransport — proving it took the
+        // add() path, not importShareLink (which would fail differently).
+        viewModel.add("http://insecure.example/sub", null)
+        advanceUntilIdle()
+
+        assertEquals(
+            "insecure transport not allowed for this subscription",
+            viewModel.uiState.value.pendingMessage?.text,
+        )
+        assertTrue(nodeDao.nodes.isEmpty())
+    }
+
+    private fun newRepository(nodeDao: FakeNodeDao): SubscriptionRepository =
+        SubscriptionRepository(
+            subscriptionDao = FakeSubscriptionDao(),
+            nodeDao = nodeDao,
+            fetcher = SubscriptionFetcher(OkHttpClient()),
+            classifier = SubscriptionClassifier(),
+            dispatcher = SubscriptionParserDispatcher(
+                UriListParser(), SingBoxJsonParser(), ClashYamlParser(),
+            ),
+            validator = object : SubscriptionCandidateValidator {
+                override suspend fun validate(nodes: List<ProxyNode>) = Unit
+            },
+            transactions = object : DbTransactionRunner {
+                override suspend fun <T> run(block: suspend () -> T): T = block()
+            },
+            scheduler = object : SubscriptionRefreshScheduler {
+                override suspend fun schedule(
+                    subscriptionId: Long,
+                    providerMinutes: Int?,
+                    userOverrideMinutes: Int,
+                    enabled: Boolean,
+                ) = Unit
+                override fun cancel(subscriptionId: Long) = Unit
+            },
+            settings = FakeSettings(),
+            expiryNotifier = object : SubscriptionExpiryNotifier {
+                override fun notifyExpiring(
+                    subscriptionId: Long,
+                    subscriptionName: String,
+                    expireEpochSeconds: Long,
+                ): Boolean = true
+            },
+            uriListParser = UriListParser(),
+        )
 }

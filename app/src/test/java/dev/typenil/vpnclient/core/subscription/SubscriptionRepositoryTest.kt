@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.core.subscription
 
 import dev.typenil.vpnclient.core.engine.EngineError
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
@@ -41,6 +42,8 @@ class SubscriptionRepositoryTest {
 
         override fun observeAll() = flowOf(subs.values.toList())
         override suspend fun get(id: Long) = subs[id]
+        override suspend fun findIdByUrl(url: String): Long? =
+            subs.values.firstOrNull { it.url == url }?.id
         override suspend fun getAll() = subs.values.toList()
         override suspend fun insert(entity: SubscriptionEntity): Long {
             subs[entity.id] = entity
@@ -50,6 +53,39 @@ class SubscriptionRepositoryTest {
             subs[entity.id] = entity
         }
         override suspend fun delete(id: Long) { subs.remove(id) }
+        override suspend fun setEnabled(id: Long, enabled: Boolean) {
+            subs[id]?.let { subs[id] = it.copy(enabled = enabled) }
+        }
+        override suspend fun updateName(id: Long, name: String) {
+            subs[id]?.let { subs[id] = it.copy(name = name) }
+        }
+        var urlSuccessCalls = 0
+        override suspend fun updateUrlAndMarkSuccess(
+            id: Long,
+            url: String,
+            updatedAt: Long,
+            attemptAt: Long,
+            userInfoJson: String?,
+            supportUrl: String?,
+            updateIntervalMinutes: Int?,
+            announce: String?,
+            updateAlways: Boolean,
+            fallbackUrl: String?,
+        ) {
+            urlSuccessCalls++
+            subs[id]?.let { subs[id] = it.copy(
+                url = url,
+                lastUpdatedAtEpochMs = updatedAt,
+                lastAttemptAtEpochMs = attemptAt,
+                lastError = null,
+                userInfoJson = userInfoJson,
+                supportUrl = supportUrl,
+                updateIntervalMinutes = updateIntervalMinutes,
+                announce = announce,
+                updateAlways = updateAlways,
+                fallbackUrl = fallbackUrl,
+            ) }
+        }
         override suspend fun markAttempt(id: Long, attemptAt: Long, error: String?) {
             attemptCalls++
             lastAttemptError = error
@@ -91,6 +127,9 @@ class SubscriptionRepositoryTest {
         override suspend fun get(id: String) = nodes[id]
         override suspend fun upsertAll(new: List<NodeEntity>) {
             new.forEach { nodes[it.id] = it }
+        }
+        override suspend fun upsert(node: NodeEntity) {
+            nodes[node.id] = node
         }
         override suspend fun deleteForSubscription(subscriptionId: Long) {
             nodes.values.removeAll { it.subscriptionId == subscriptionId }
@@ -260,6 +299,7 @@ class SubscriptionRepositoryTest {
             scheduler = scheduler,
             settings = settings,
             expiryNotifier = expiryNotifier,
+            uriListParser = uriParser,
         )
     }
 
@@ -337,6 +377,16 @@ class SubscriptionRepositoryTest {
 
         assertTrue(repository.refresh(1).isSuccess)
         assertEquals(old.id, settings.selected.value)
+    }
+
+    @Test
+    fun `auto selection is not treated as a vanished node`() = runTest {
+        seedSubscription()
+        settings.selected.value = NodeSelection.AUTO_ID
+        server.enqueue(MockResponse().setBody(uri("b.example.com", "B")))
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(NodeSelection.AUTO_ID, settings.selected.value)
     }
 
     @Test
@@ -621,5 +671,239 @@ class SubscriptionRepositoryTest {
         // Second scan — already alerted, stays quiet.
         repository.checkPersistedExpiryAlerts()
         assertEquals(1, expiryNotifier.calls.size)
+    }
+
+    // ---- share-link import (manual sentinel row) ----
+
+    private suspend fun manualSubId(): Long =
+        subscriptionDao.findIdByUrl(SubscriptionRepository.MANUAL_SUBSCRIPTION_URL)!!
+
+    @Test
+    fun `importShareLink creates the manual row and stores the node`() = runTest {
+        val result = repository.importShareLink(uri("a.example.com", "A"))
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, subscriptionDao.subs.size)
+        val sub = subscriptionDao.subs.values.single()
+        assertEquals(SubscriptionRepository.MANUAL_SUBSCRIPTION_URL, sub.url)
+        assertEquals("Manual servers", sub.name)
+        assertTrue(sub.enabled)
+        assertEquals(1, nodeDao.forSubscription(sub.id).size)
+        // Never a fetch, never a scheduled job.
+        assertEquals(0, server.requestCount)
+        assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `importShareLink appends to the existing manual row`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        repository.importShareLink(uri("b.example.com", "B"))
+
+        assertEquals(1, subscriptionDao.subs.size)
+        val nodes = nodeDao.forSubscription(manualSubId())
+        assertEquals(2, nodes.size)
+        // Appended, not replaced — positions bump monotonically.
+        assertEquals(listOf(0, 1), nodes.sortedBy { it.position }.map { it.position })
+    }
+
+    @Test
+    fun `importShareLink is idempotent on node id`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        repository.importShareLink(uri("a.example.com", "A"))
+
+        assertEquals(1, nodeDao.forSubscription(manualSubId()).size)
+    }
+
+    @Test
+    fun `importShareLink typed-fails on garbage and writes nothing`() = runTest {
+        val result = repository.importShareLink("definitely not a share link")
+
+        assertTrue(result.isFailure)
+        // The sentinel row IS created before the parse (node identity is
+        // salted with it) — but no node rows and no fetch happened.
+        assertTrue(nodeDao.nodes.isEmpty())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `refresh fails fast on the manual sentinel row`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val id = manualSubId()
+
+        val result = repository.refresh(id)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is SubscriptionError.NotFound)
+        assertEquals(0, server.requestCount)
+        assertTrue(scheduler.scheduled.isEmpty())
+    }
+
+    @Test
+    fun `remove is refused on the manual sentinel row`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val id = manualSubId()
+
+        repository.remove(id)
+
+        assertEquals(1, subscriptionDao.subs.size)
+        assertEquals(1, nodeDao.forSubscription(id).size)
+        assertTrue(scheduler.cancelled.isEmpty())
+    }
+
+    // ---- enable/disable ----
+
+    @Test
+    fun `setEnabled false flips the flag and cancels the job`() = runTest {
+        seedSubscription()
+        nodeDao.nodes["n1"] = nodeEntity(uri("a.example.com", "A"), 1)
+        settings.autoRefresh.value = 60
+
+        repository.setEnabled(1, false)
+
+        assertFalse(subscriptionDao.subs[1]!!.enabled)
+        val call = scheduler.scheduled.single()
+        assertEquals(1L, call.id)
+        assertFalse(call.enabled)
+    }
+
+    @Test
+    fun `setEnabled true re-registers the job`() = runTest {
+        seedSubscription()
+        repository.setEnabled(1, false)
+
+        repository.setEnabled(1, true)
+
+        assertTrue(subscriptionDao.subs[1]!!.enabled)
+        assertTrue(scheduler.scheduled.last().enabled)
+    }
+
+    @Test
+    fun `disabling clears the selection when it owns the selected node`() = runTest {
+        seedSubscription()
+        val node = nodeEntity(uri("a.example.com", "A"), 1)
+        nodeDao.nodes[node.id] = node
+        settings.selected.value = node.id
+
+        repository.setEnabled(1, false)
+
+        assertNull(settings.selected.value)
+    }
+
+    @Test
+    fun `disabling keeps a selection owned by another subscription`() = runTest {
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        val other = nodeEntity(uri("other.example.com", "B"), 2)
+        nodeDao.nodes[other.id] = other
+        settings.selected.value = other.id
+
+        repository.setEnabled(1, false)
+
+        assertEquals(other.id, settings.selected.value)
+    }
+
+    // ---- rename ----
+
+    @Test
+    fun `rename stores the trimmed name`() = runTest {
+        seedSubscription()
+        repository.rename(1, "  My VPN  ")
+        assertEquals("My VPN", subscriptionDao.subs[1]!!.name)
+    }
+
+    @Test
+    fun `rename ignores blank input`() = runTest {
+        seedSubscription()
+        repository.rename(1, "   ")
+        assertEquals("sub", subscriptionDao.subs[1]!!.name)
+    }
+
+    // ---- editUrl ----
+
+    @Test
+    fun `editUrl repoints the row and swaps nodes atomically`() = runTest {
+        seedSubscription()
+        val newServer = MockWebServer()
+        try {
+            newServer.start()
+            val old = nodeEntity(uri("old.example.com", "Old"), 1)
+            nodeDao.nodes[old.id] = old
+            newServer.enqueue(MockResponse().setBody(uri("new.example.com", "New")))
+
+            val result = repository.editUrl(1, newServer.url("/sub").toString())
+
+            assertTrue(result.isSuccess)
+            assertEquals(newServer.url("/sub").toString(), subscriptionDao.subs[1]!!.url)
+            assertEquals(1, subscriptionDao.urlSuccessCalls)
+            assertEquals(
+                listOf("new.example.com"),
+                nodeDao.forSubscription(1).map { it.server },
+            )
+            // The markSuccess path was not used — the URL must land in the
+            // same write as the node swap.
+            assertEquals(0, subscriptionDao.successCalls)
+        } finally {
+            newServer.shutdown()
+        }
+    }
+
+    @Test
+    fun `editUrl failure keeps the stored URL and nodes`() = runTest {
+        seedSubscription()
+        val old = nodeEntity(uri("old.example.com", "Old"), 1)
+        nodeDao.nodes[old.id] = old
+        val originalUrl = subscriptionDao.subs[1]!!.url
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        val result = repository.editUrl(1, server.url("/broken").toString())
+
+        assertTrue(result.isFailure)
+        assertEquals(originalUrl, subscriptionDao.subs[1]!!.url)
+        assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
+        assertEquals(0, subscriptionDao.urlSuccessCalls)
+    }
+
+    @Test
+    fun `editUrl rejects a cleartext url without the opt-in`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] = subscriptionDao.subs[1]!!.copy(allowInsecureHttp = false)
+        val originalUrl = subscriptionDao.subs[1]!!.url
+
+        val result = repository.editUrl(1, "http://cleartext.example.com/sub")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is SubscriptionError.InsecureTransport)
+        assertEquals(originalUrl, subscriptionDao.subs[1]!!.url)
+        assertEquals(0, subscriptionDao.urlSuccessCalls)
+    }
+
+    @Test
+    fun `editUrl with an unchanged url just refreshes`() = runTest {
+        seedSubscription()
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        val result = repository.editUrl(1, subscriptionDao.subs[1]!!.url)
+
+        assertTrue(result.isSuccess)
+        // Same-URL edit delegates to refresh — markSuccess, not the URL write.
+        assertEquals(0, subscriptionDao.urlSuccessCalls)
+        assertEquals(1, subscriptionDao.successCalls)
+    }
+
+    @Test
+    fun `editUrl on a validation failure preserves nodes and url`() = runTest {
+        seedSubscription()
+        val old = nodeEntity(uri("old.example.com", "Old"), 1)
+        nodeDao.nodes[old.id] = old
+        val originalUrl = subscriptionDao.subs[1]!!.url
+        validator.failure = EngineError.InvalidConfig("rejected")
+        server.enqueue(MockResponse().setBody(uri("bad.example.com", "B")))
+
+        val result = repository.editUrl(1, server.url("/other").toString())
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is SubscriptionError.ConfigRejected)
+        assertEquals(originalUrl, subscriptionDao.subs[1]!!.url)
+        assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
     }
 }
