@@ -413,7 +413,13 @@ class SubscriptionsViewModelTest {
                     "?security=none&type=tcp#A",
                 null,
             )
-            advanceUntilIdle()
+            // The import parses on Dispatchers.Default — advanceUntilIdle()
+            // alone doesn't wait for that pool, so pump until it lands.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (nodeDao.nodes.isEmpty() && System.currentTimeMillis() < deadline) {
+                advanceUntilIdle()
+                Thread.sleep(20)
+            }
 
             // No error surfaced; the node landed under the manual sentinel row.
             assertNull(viewModel.uiState.value.pendingMessage)
