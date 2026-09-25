@@ -56,6 +56,11 @@ object Routes {
     const val CONNECTIONS = "connections"
 }
 
+/** savedStateHandle flag: the SUBSCRIPTIONS entry should open its add
+ *  dialog. Posted by cross-tab entry points (e.g. the Servers empty
+ *  state) — same handoff mechanism QR results use. */
+private const val ADD_DIALOG_OPEN_KEY = "open_add_dialog"
+
 private data class TopLevelDestination(
     val route: String,
     @StringRes val labelRes: Int,
@@ -154,10 +159,43 @@ fun VpnApp(
                 composable(Routes.HOME) {
                     HomeScreen(
                         onOpenConnections = { navController.navigate(Routes.CONNECTIONS) },
+                        // Same cross-tab add funnel the Servers empty state
+                        // uses — see the comment there.
+                        onAddServer = {
+                            navController.navigate(Routes.SUBSCRIPTIONS) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                            }
+                            navController.currentBackStackEntry
+                                ?.savedStateHandle
+                                ?.set(ADD_DIALOG_OPEN_KEY, true)
+                        },
                     )
                 }
-                composable(Routes.SERVERS) {
-                    ServersScreen()
+                composable(Routes.SERVERS) { entry ->
+                    // Cross-tab add funnel: navigating here from the empty
+                    // state's button lands on SUBSCRIPTIONS and posts the
+                    // "open add dialog" signal into that entry's
+                    // savedStateHandle — same slot the QR/deep-link funnel
+                    // uses, no VM indirection.
+                    ServersScreen(
+                        onAddServer = {
+                            navController.navigate(Routes.SUBSCRIPTIONS) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                            }
+                            // Set after navigate(): savedStateHandle is
+                            // fetched from the now-top entry — get() before
+                            // the navigate would target the wrong entry.
+                            navController.currentBackStackEntry
+                                ?.savedStateHandle
+                                ?.set(ADD_DIALOG_OPEN_KEY, true)
+                        },
+                    )
                 }
                 composable(Routes.SUBSCRIPTIONS) { entry ->
                     // A QR result arrives via the back-stack entry's
@@ -166,9 +204,18 @@ fun VpnApp(
                     val qrResult by entry.savedStateHandle
                         .getStateFlow<String?>(QR_RESULT_KEY, null)
                         .collectAsStateWithLifecycle()
+                    // "Open the add dialog" signal posted by cross-tab entry
+                    // points (Servers empty state) — consumed below.
+                    val openAddDialog by entry.savedStateHandle
+                        .getStateFlow(ADD_DIALOG_OPEN_KEY, false)
+                        .collectAsStateWithLifecycle()
                     SubscriptionsScreen(
                         snackbarHostState = snackbarHostState,
                         import = pendingImport ?: qrResult?.let { ExtractedImport(it, null) },
+                        openAddDialog = openAddDialog,
+                        onAddDialogSignalConsumed = {
+                            entry.savedStateHandle.remove<Boolean>(ADD_DIALOG_OPEN_KEY)
+                        },
                         onImportConsumed = {
                             if (pendingImport != null) onImportConsumed()
                             // Always drop a stale scan result too — it would

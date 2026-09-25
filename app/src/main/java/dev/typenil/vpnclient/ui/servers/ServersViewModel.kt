@@ -5,12 +5,13 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.LatencyProbe
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
+import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.settings.SettingsRepository
-import javax.inject.Inject
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /** Nodes of one subscription, under its display name. */
 data class ServerGroup(
@@ -27,9 +29,19 @@ data class ServerGroup(
     val nodes: List<NodeEntity>,
 )
 
+/** A selectable subscription filter — id + display name. */
+data class SubscriptionFilterOption(
+    val id: Long,
+    val name: String,
+)
+
+enum class ServerSortMode { Default, Latency, Name }
+
 data class ServersUiState(
     val groups: List<ServerGroup> = emptyList(),
     val selectedNodeId: String? = null,
+    /** The persisted pick is the "Auto / Fastest" urltest group, not a node. */
+    val autoSelected: Boolean = false,
     /** Outbound tag → last measured delay; feeds the latency badges. */
     val delays: Map<String, Int> = emptyMap(),
     /** Tags a latency run has covered — distinguishes "timeout" from
@@ -39,6 +51,23 @@ data class ServersUiState(
      *  proxy); disconnected → direct TCP-connect probe. Names the
      *  measurement so the UI doesn't imply one means the other. */
     val connected: Boolean = false,
+    // ---- search / sort / filters ----
+    val query: String = "",
+    val sortMode: ServerSortMode = ServerSortMode.Default,
+    val subscriptionFilter: Long? = null,
+    val protocolFilter: String? = null,
+    /** Every enabled subscription with nodes — drives the sub filter row. */
+    val subscriptionOptions: List<SubscriptionFilterOption> = emptyList(),
+    /** Protocols present in the (search-filtered) node set — drives the
+     *  protocol filter row. ProtocolType.name values, not labels. */
+    val protocolOptions: List<String> = emptyList(),
+    /** False when any filter/search is active — the screen keeps the flat
+     *  "filtered" look instead of per-subscription headers. */
+    val showHeaders: Boolean = true,
+    /** True when the raw node set is empty (no subscriptions) — the screen
+     *  shows the "add a subscription" prompt; false when filters merely
+     *  excluded everything. */
+    val noSubscriptions: Boolean = true,
 )
 
 /** Engine-reported surface: connection state + per-outbound delays. */
@@ -56,135 +85,315 @@ private data class ProbeSurface(
     val urlTested: Set<String> = emptySet(),
 )
 
+/** The raw inputs filtering/sorting operate on — bundled so the filter
+ *  combine stays under the 5-flow arity limit. */
+private data class NodeSurface(
+    val nodes: List<NodeEntity>,
+    val subscriptionNames: Map<Long, String>,
+)
+
+/** User-controlled list transforms — each is a Flow input to combine. */
+private data class ListControls(
+    val query: String,
+    val sortMode: ServerSortMode,
+    val subscriptionFilter: Long?,
+    val protocolFilter: String?,
+)
+
 @HiltViewModel
-class ServersViewModel @Inject constructor(
-    private val settings: SettingsRepository,
-    private val connectionManager: ConnectionManager,
-    private val nodeDao: NodeDao,
-    private val latencyProbe: LatencyProbe,
-    subscriptions: SubscriptionRepository,
-) : ViewModel() {
+class ServersViewModel
+    @Inject
+    constructor(
+        private val settings: SettingsRepository,
+        private val connectionManager: ConnectionManager,
+        private val nodeDao: NodeDao,
+        private val latencyProbe: LatencyProbe,
+        subscriptions: SubscriptionRepository,
+    ) : ViewModel() {
+        /** Direct TCP probe results — populated when testing while disconnected. */
+        private val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
 
-    /** Direct TCP probe results — populated when testing while disconnected. */
-    private val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
+        // Search text — a substring match over name/server, case-insensitive.
+        private val query = MutableStateFlow("")
+        private val sortMode = MutableStateFlow(ServerSortMode.Default)
 
-    private val engineSurface: StateFlow<EngineSurface> = combine(
-        connectionManager.state,
-        connectionManager.groups,
-    ) { state, groups ->
-        EngineSurface(
-            connected = state is VpnConnectionState.Connected,
-            delays = groups
-                .flatMap { it.items }
-                .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
-                .toMap(),
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = EngineSurface(connected = false, delays = emptyMap()),
-    )
+        /** Null = all enabled subscriptions. */
+        private val subscriptionFilter = MutableStateFlow<Long?>(null)
 
-    val uiState: StateFlow<ServersUiState> = combine(
-        nodeDao.observeEnabled(),
-        subscriptions.profiles,
-        settings.selectedNodeId,
-        engineSurface,
-        probeSurface,
-    ) { nodes, profiles, selectedId, engine, probe ->
-        val names = profiles.associate { it.id to it.name }
-        val serverGroups = nodes
-            .groupBy { it.subscriptionId }
-            .map { (subId, groupNodes) ->
-                ServerGroup(
-                    subscriptionId = subId,
-                    subscriptionName = names[subId] ?: "Subscription $subId",
-                    nodes = groupNodes,
+        /** ProtocolType.name value; null = all protocols. */
+        private val protocolFilter = MutableStateFlow<String?>(null)
+
+        private val controls: StateFlow<ListControls> =
+            combine(
+                query,
+                sortMode,
+                subscriptionFilter,
+                protocolFilter,
+            ) { q, sort, sub, proto ->
+                ListControls(query = q, sortMode = sort, subscriptionFilter = sub, protocolFilter = proto)
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = ListControls("", ServerSortMode.Default, null, null),
+            )
+
+        private val engineSurface: StateFlow<EngineSurface> =
+            combine(
+                connectionManager.state,
+                connectionManager.groups,
+            ) { state, groups ->
+                EngineSurface(
+                    connected = state is VpnConnectionState.Connected,
+                    delays =
+                        groups
+                            .flatMap { it.items }
+                            .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
+                            .toMap(),
                 )
-            }
-        ServersUiState(
-            groups = serverGroups,
-            selectedNodeId = selectedId,
-            // Connected: only engine urltest numbers — a stale direct-probe
-            // value must not be presented as a "via proxy" measurement.
-            // Disconnected: direct TCP probes are the only source.
-            delays = if (engine.connected) engine.delays else probe.delays,
-            testedNodeIds = if (engine.connected) probe.urlTested else probe.tested,
-            connected = engine.connected,
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = ServersUiState(),
-    )
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = EngineSurface(connected = false, delays = emptyMap()),
+            )
 
-    /**
-     * Persist the pick — ConnectionManager reconciles the live engine with
-     * it (live selector switch, or a reconnect when the engine can't apply
-     * it). Nothing else to do here.
-     */
-    fun select(nodeId: String) {
-        viewModelScope.launch { settings.setSelectedNodeId(nodeId) }
-    }
+        private val nodeSurface: StateFlow<NodeSurface> =
+            combine(
+                nodeDao.observeEnabled(),
+                subscriptions.profiles,
+            ) { nodes, profiles ->
+                NodeSurface(
+                    nodes = nodes,
+                    subscriptionNames = profiles.associate { it.id to it.name },
+                )
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = NodeSurface(emptyList(), emptyMap()),
+            )
 
-    /**
-     * Latency probe. Connected: the engine's urltest measures each node
-     * through its own outbound over the real underlay (our sockets never
-     * enter the TUN). Disconnected: a direct TCP-connect probe per node —
-     * same underlay, without needing a running core.
-     */
-    fun testLatency() {
-        if (_testing.value) return
-        viewModelScope.launch {
-            _testing.value = true
-            try {
-                if (connectionManager.state.value is VpnConnectionState.Connected) {
-                    val groups = connectionManager.groups.value
-                    groups.forEach { connectionManager.urlTest(it.tag) }
-                    val covered = groups.flatMap { g -> g.items.map { item -> item.tag } }
-                    // Mark covered tags now — a node that stays without a
-                    // delay after the run shows "timeout" instead of "—".
-                    // Drop their stale direct-probe delays too: the badge
-                    probeSurface.update {
-                        it.copy(
-                            delays = it.delays - covered,
-                            tested = it.tested + covered,
-                            urlTested = it.urlTested + covered,
-                        )
+        val uiState: StateFlow<ServersUiState> =
+            combine(
+                nodeSurface,
+                settings.selectedNodeId,
+                engineSurface,
+                probeSurface,
+                controls,
+            ) { surface, selectedId, engine, probe, ctl ->
+                val names = surface.subscriptionNames
+                // Connected: only engine urltest numbers — a stale direct-probe
+                // value must not be presented as a "via proxy" measurement.
+                // Disconnected: direct TCP probes are the only source.
+                val delays = if (engine.connected) engine.delays else probe.delays
+                val testedIds = if (engine.connected) probe.urlTested else probe.tested
+
+                val trimmedQuery = ctl.query.trim()
+                val searching = trimmedQuery.isNotEmpty()
+                val filtered =
+                    surface.nodes
+                        .asSequence()
+                        .filter { node ->
+                            ctl.subscriptionFilter == null || node.subscriptionId == ctl.subscriptionFilter
+                        }.filter { node ->
+                            !searching ||
+                                node.name.contains(trimmedQuery, ignoreCase = true) ||
+                                node.server.contains(trimmedQuery, ignoreCase = true)
+                        }.toList()
+
+                // Protocol options come from the (sub-filtered) set so a stale
+                // selection can't silently hide everything — the chip for the
+                // active protocol always exists while it still has nodes.
+                val protocolOptions =
+                    filtered
+                        .map { it.protocol }
+                        .distinct()
+                        .sortedBy { protocolLabel(it) }
+                val effectiveProtocol =
+                    if (ctl.protocolFilter != null && ctl.protocolFilter in protocolOptions) {
+                        ctl.protocolFilter
+                    } else {
+                        null
                     }
-                } else {
-                    val nodes = nodeDao.getEnabled()
-                    coroutineScope {
-                        nodes.forEach { node ->
-                            launch {
-                                val delay = latencyProbe.measure(node.server, node.port)
-                                // A connect that landed mid-probe must not
-                                // publish a direct result into the
-                                // connected-mode surface.
-                                if (connectionManager.state.value is VpnConnectionState.Connected) {
-                                    return@launch
-                                }
-                                probeSurface.update { surface ->
-                                    surface.copy(
-                                        delays = if (delay != null) {
-                                            surface.delays + (node.id to delay)
-                                        } else {
-                                            surface.delays - node.id
-                                        },
-                                        tested = surface.tested + node.id,
-                                    )
+                val afterProtocol =
+                    filtered.filter {
+                        effectiveProtocol == null || it.protocol == effectiveProtocol
+                    }
+
+                val sorted =
+                    when (ctl.sortMode) {
+                        // DB order: subscriptionId, position — already the "default".
+                        ServerSortMode.Default -> {
+                            afterProtocol
+                        }
+
+                        // Known delay ascending; untested/unmeasurable nodes last.
+                        ServerSortMode.Latency -> {
+                            afterProtocol.sortedBy { node ->
+                                delays[node.id] ?: Int.MAX_VALUE
+                            }
+                        }
+
+                        ServerSortMode.Name -> {
+                            afterProtocol.sortedBy { it.name.lowercase() }
+                        }
+                    }
+
+                // Group headers only make sense in the default unfiltered view —
+                // searching, a single-subscription filter, or a non-default sort
+                // present one flat result list instead.
+                val flat =
+                    searching || ctl.subscriptionFilter != null ||
+                        ctl.sortMode != ServerSortMode.Default
+                val groups =
+                    if (flat) {
+                        listOfNotNull(
+                            if (sorted.isNotEmpty()) {
+                                ServerGroup(
+                                    subscriptionId = -1L,
+                                    subscriptionName = "",
+                                    nodes = sorted,
+                                )
+                            } else {
+                                null
+                            },
+                        )
+                    } else {
+                        sorted
+                            .groupBy { it.subscriptionId }
+                            .map { (subId, groupNodes) ->
+                                ServerGroup(
+                                    subscriptionId = subId,
+                                    subscriptionName = names[subId] ?: "Subscription $subId",
+                                    nodes = groupNodes,
+                                )
+                            }
+                    }
+
+                ServersUiState(
+                    groups = groups,
+                    selectedNodeId = selectedId,
+                    autoSelected = selectedId == NodeSelection.AUTO_ID,
+                    delays = delays,
+                    testedNodeIds = testedIds,
+                    connected = engine.connected,
+                    query = ctl.query,
+                    sortMode = ctl.sortMode,
+                    subscriptionFilter = ctl.subscriptionFilter,
+                    protocolFilter = effectiveProtocol,
+                    subscriptionOptions =
+                        surface.nodes
+                            .map { it.subscriptionId }
+                            .distinct()
+                            .map { subId ->
+                                SubscriptionFilterOption(
+                                    id = subId,
+                                    name = names[subId] ?: "Subscription $subId",
+                                )
+                            },
+                    protocolOptions = protocolOptions,
+                    showHeaders = !flat,
+                    noSubscriptions = surface.nodes.isEmpty(),
+                )
+            }.stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = ServersUiState(),
+            )
+
+        fun setQuery(value: String) {
+            query.value = value
+        }
+
+        fun setSortMode(mode: ServerSortMode) {
+            sortMode.value = mode
+        }
+
+        /** Toggle semantics: tapping the active chip clears the filter. */
+        fun setSubscriptionFilter(id: Long?) {
+            subscriptionFilter.value = id
+        }
+
+        fun setProtocolFilter(protocol: String?) {
+            protocolFilter.value = protocol
+        }
+
+        /**
+         * Persist a node pick — ConnectionManager reconciles the live engine
+         * with it (live selector switch, or a reconnect when the engine can't
+         * apply it). Nothing else to do here.
+         */
+        fun selectNode(nodeId: String) {
+            viewModelScope.launch { settings.setSelectedNodeId(nodeId) }
+        }
+
+        /** Persist the "Auto / Fastest" pick — stored as the [NodeSelection.AUTO_ID]
+         *  sentinel; the compiler/live reconciler route it to the urltest group. */
+        fun selectAuto() {
+            viewModelScope.launch { settings.setSelectedNodeId(NodeSelection.AUTO_ID) }
+        }
+
+        /**
+         * Latency probe. Connected: the engine's urltest measures each node
+         * through its own outbound over the real underlay (our sockets never
+         * enter the TUN). Disconnected: a direct TCP-connect probe per node —
+         * same underlay, without needing a running core.
+         */
+        fun testLatency() {
+            if (_testing.value) return
+            viewModelScope.launch {
+                _testing.value = true
+                try {
+                    if (connectionManager.state.value is VpnConnectionState.Connected) {
+                        val groups = connectionManager.groups.value
+                        groups.forEach { connectionManager.urlTest(it.tag) }
+                        val covered = groups.flatMap { g -> g.items.map { item -> item.tag } }
+                        // Mark covered tags now — a node that stays without a
+                        // delay after the run shows "timeout" instead of "—".
+                        // Drop their stale direct-probe delays too: the badge
+                        probeSurface.update {
+                            it.copy(
+                                delays = it.delays - covered,
+                                tested = it.tested + covered,
+                                urlTested = it.urlTested + covered,
+                            )
+                        }
+                    } else {
+                        val nodes = nodeDao.getEnabled()
+                        coroutineScope {
+                            nodes.forEach { node ->
+                                launch {
+                                    val delay = latencyProbe.measure(node.server, node.port)
+                                    // A connect that landed mid-probe must not
+                                    // publish a direct result into the
+                                    // connected-mode surface.
+                                    if (connectionManager.state.value is VpnConnectionState.Connected) {
+                                        return@launch
+                                    }
+                                    probeSurface.update { surface ->
+                                        surface.copy(
+                                            delays =
+                                                if (delay != null) {
+                                                    surface.delays + (node.id to delay)
+                                                } else {
+                                                    surface.delays - node.id
+                                                },
+                                            tested = surface.tested + node.id,
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
+                } finally {
+                    _testing.value = false
                 }
-            } finally {
-                _testing.value = false
             }
         }
+
+        private val _testing = MutableStateFlow(false)
+
+        /** True while a latency probe is in flight — drives the button spinner. */
+        val testing: StateFlow<Boolean> = _testing
     }
 
-    private val _testing = MutableStateFlow(false)
-    /** True while a latency probe is in flight — drives the button spinner. */
-    val testing: StateFlow<Boolean> = _testing
-}
+/** Display label for a stored protocol tag — raw value as fallback. */
+internal fun protocolLabel(protocol: String): String = runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol

@@ -302,7 +302,8 @@ class ClientVpnService : VpnService(), EnginePlatform {
                     when (state) {
                         is VpnConnectionState.Connected -> NotificationSpec(
                             title = getString(R.string.notification_connected),
-                            text = state.node.name,
+                            text = listOfNotNull(state.node.name, rateText(state.stats))
+                                .joinToString(" · "),
                             showDisconnect = true,
                         )
                         is VpnConnectionState.Reconnecting -> NotificationSpec(
@@ -1118,6 +1119,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 connectivity.getNetworkCapabilities(network)
                     ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
             } ?: usable.firstOrNull()
+        // Report the transport on every evaluation — caps changes (wifi
+        // hand-off without a Network change) keep the label honest.
+        connectionManager.reportUnderlyingTransport(
+            active?.let { transportLabel(connectivity.getNetworkCapabilities(it)) }
+                ?: UnderlyingTransport.UNKNOWN,
+        )
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -1131,6 +1138,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
             connectionManager.onUnderlyingNetworkAvailable()
         }
         if (reconnectOnChange) notifyEngineNetworkChanged()
+    }
+
+    /** Coarse display label for the underlay — wifi/cell/other, never the
+     *  VPN transport itself (vpn caps are rejected before this runs). */
+    private fun transportLabel(caps: NetworkCapabilities?): UnderlyingTransport = when {
+        caps == null -> UnderlyingTransport.UNKNOWN
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> UnderlyingTransport.WIFI
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> UnderlyingTransport.CELLULAR
+        else -> UnderlyingTransport.OTHER
     }
 
     /**

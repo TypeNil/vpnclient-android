@@ -52,9 +52,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.core.engine.RouteMode
-
-/** Pinned in gradle/libs.versions.toml (`vpnCore`). */
-private const val CORE_VERSION = "sing-box libbox 1.14.1"
+import dev.typenil.vpnclient.ui.common.CORE_VERSION
 
 @Composable
 fun SettingsScreen(
@@ -127,30 +125,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    // Apps can't enable lockdown themselves — the system VPN
-                    // settings screen is the only supported path.
-                    runCatching {
-                        context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
-                    }.onFailure {
-                        context.startActivity(Intent(Settings.ACTION_SETTINGS))
-                    }
-                }
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Always-on & kill switch", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "Open system VPN settings to enable",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        AlwaysOnRow()
         SwitchRow(
             title = "Auto-refresh subscriptions",
             subtitle = if (ui.autoRefreshEnabled) {
@@ -337,6 +312,68 @@ private fun AutoRefreshIntervalRow(
                 .fillMaxWidth()
                 .onFocusChanged { focused = it.isFocused },
         )
+    }
+}
+
+/**
+ * Real always-on/kill-switch status (VpnService.isAlwaysOn /
+ * isLockdownEnabled on API 29+), refreshed whenever the screen resumes —
+ * the user configures it in system VPN settings, so returning from that
+ * activity must show the new value. Click still opens the system screen;
+ * apps can't toggle these flags themselves.
+ */
+@Composable
+private fun AlwaysOnRow() {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf(readVpnSystemStatus(context)) }
+
+    // Re-read when returning from the system VPN settings screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                status = readVpnSystemStatus(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val subtitle = when {
+        !status.available -> "Configure in system VPN settings"
+        else -> buildString {
+            append("Always-on: ")
+            append(if (status.alwaysOn == true) "enabled" else "disabled")
+            append(" · Kill switch: ")
+            // Lockdown is only meaningful when always-on is set — the system
+            // reports its raw flag, so surface what it actually says.
+            append(if (status.lockdownEnabled == true) "enabled" else "disabled")
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                // Apps can't enable lockdown themselves — the system VPN
+                // settings screen is the only supported path.
+                runCatching {
+                    context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                }.onFailure {
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Always-on & kill switch", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

@@ -14,8 +14,10 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,17 +31,23 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
+import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.core.vpn.VpnError
+import dev.typenil.vpnclient.ui.common.CORE_VERSION
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
+import java.time.Duration
+import java.time.Instant
 
 @Composable
 fun HomeScreen(
     modifier: Modifier = Modifier,
     onOpenConnections: () -> Unit = {},
+    onAddServer: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -74,7 +82,23 @@ fun HomeScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        NodeCard(ui = ui)
+        var showPicker by remember { mutableStateOf(false) }
+        NodeCard(
+            ui = ui,
+            onAddServer = onAddServer,
+            onPick = { showPicker = true },
+        )
+        if (showPicker) {
+            ServerPickerSheet(
+                options = ui.serverOptions,
+                selectedId = ui.selectedOptionId,
+                onPick = {
+                    showPicker = false
+                    viewModel.selectServer(it)
+                },
+                onDismiss = { showPicker = false },
+            )
+        }
 
         if (ui.restartGuardTripped) {
             Spacer(Modifier.height(12.dp))
@@ -87,9 +111,21 @@ fun HomeScreen(
         }
 
         if (connection is VpnConnectionState.Connected) {
+            var showDetails by remember { mutableStateOf(false) }
             connection.stats?.let { stats ->
                 Spacer(Modifier.height(12.dp))
-                StatsCard(stats, onOpenConnections)
+                StatsCard(
+                    stats = stats,
+                    onOpenConnections = onOpenConnections,
+                    onOpenDetails = { showDetails = true },
+                )
+            }
+            if (showDetails) {
+                SessionDetailsSheet(
+                    state = connection,
+                    details = ui.sessionDetails,
+                    onDismiss = { showDetails = false },
+                )
             }
         }
 
@@ -127,8 +163,14 @@ private fun errorText(error: VpnError): String = when (error) {
 private fun protocolLabel(protocol: String): String =
     runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol
 
+/** Tap opens the quick-pick sheet — but only when there is something to
+ *  pick: with no nodes the card is an add prompt, not a picker. */
 @Composable
-private fun NodeCard(ui: HomeUiState) {
+private fun NodeCard(
+    ui: HomeUiState,
+    onAddServer: () -> Unit,
+    onPick: () -> Unit,
+) {
     val state = ui.connection
     // While a connection is (being) established, show the node it uses;
     // otherwise show the currently selected node.
@@ -169,19 +211,108 @@ private fun NodeCard(ui: HomeUiState) {
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    val pickable = ui.serverOptions.isNotEmpty()
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (pickable) Modifier.clickable(onClick = onPick) else Modifier,
+            ),
+    ) {
         Column(Modifier.padding(16.dp)) {
-            Text(
-                text = name ?: "No server selected",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            if (protocol != null || server != null) {
+            // First-run context: no node rows at all — a "No server
+            // selected" label would be a dead end, so offer the add
+            // action instead. Only when the card has no node to show
+            // (idle/error with nothing selected).
+            if (name == null && ui.noNodesAtAll) {
+                Text(
+                    text = "No servers yet",
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = listOfNotNull(protocol, server).joinToString(" · "),
+                    text = "Add a subscription or paste a share link to get started.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onAddServer) {
+                    Text("Add subscription or share link")
+                }
+            } else {
+                Text(
+                    text = name ?: "No server selected",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                if (protocol != null || server != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = listOfNotNull(protocol, server).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (pickable) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Tap to change",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Quick-pick bottom sheet: Auto + every enabled node. Picking persists
+ *  `selected_node_id` — ConnectionManager live-switches or reconnects. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ServerPickerSheet(
+    options: List<ServerOption>,
+    selectedId: String?,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 32.dp)) {
+            Text(
+                text = "Server",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            options.forEach { option ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(option.id) }
+                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = option.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                        )
+                        option.subtitle?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    if (option.id == selectedId) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Selected",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
         }
     }
@@ -244,7 +375,11 @@ private fun RestartGuardCard(onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun StatsCard(stats: TrafficStats, onOpenConnections: () -> Unit) {
+private fun StatsCard(
+    stats: TrafficStats,
+    onOpenConnections: () -> Unit,
+    onOpenDetails: () -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             StatRow("Download", "${formatRate(stats.downlinkBytesPerSec)}  (${formatBytes(stats.downlinkTotalBytes)} total)")
@@ -264,7 +399,109 @@ private fun StatsCard(stats: TrafficStats, onOpenConnections: () -> Unit) {
                     )
                 },
             )
+            StatRow(
+                label = "Session details",
+                value = "",
+                modifier = Modifier
+                    .clickable(onClick = onOpenDetails)
+                    .padding(vertical = 4.dp),
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+            )
         }
+    }
+}
+
+private fun routeModeSummary(mode: RouteMode): String = when (mode) {
+    RouteMode.ALL -> "Proxy everything"
+    RouteMode.BYPASS_RU -> "Bypass Russian resources"
+    RouteMode.PROXY_BLOCKED -> "Only blocked services"
+}
+
+private fun perAppSummary(mode: PerAppMode, count: Int): String = when (mode) {
+    PerAppMode.ALL -> "All apps"
+    PerAppMode.INCLUDE -> "Include $count app${if (count == 1) "" else "s"}"
+    PerAppMode.EXCLUDE -> "Exclude $count app${if (count == 1) "" else "s"}"
+}
+
+/** Elapsed since Connected — whole units, no fake precision. */
+private fun uptimeText(since: Instant, now: Instant = Instant.now()): String {
+    val seconds = Duration.between(since, now).seconds.coerceAtLeast(0)
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return when {
+        h > 0 -> "${h}h ${m}m ${s}s"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
+}
+
+/**
+ * Real session details: engine-reported outbound, persisted routing/per-app
+ * settings, the service's underlay transport, and stats from the live
+ * Connected payload. Nothing is invented — absent values render as "—".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionDetailsSheet(
+    state: VpnConnectionState.Connected,
+    details: SessionDetails?,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "Session details",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            DetailRow("Node", state.node.name)
+            // The selector group's pick is what actually egresses — can
+            // diverge from the session node after a live outbound switch.
+            DetailRow("Outbound", details?.activeOutbound ?: "—")
+            DetailRow("Routing mode", details?.let { routeModeSummary(it.routeMode) } ?: "—")
+            DetailRow(
+                "Per-app VPN",
+                details?.let { perAppSummary(it.perAppMode, it.perAppPackageCount) } ?: "—",
+            )
+            DetailRow("Underlying network", details?.underlay?.label ?: "—")
+            DetailRow("Uptime", uptimeText(state.since))
+            state.stats?.let { stats ->
+                DetailRow(
+                    "Data used",
+                    "↓ ${formatBytes(stats.downlinkTotalBytes)} · ↑ ${formatBytes(stats.uplinkTotalBytes)}",
+                )
+            }
+            DetailRow("VPN core", CORE_VERSION)
+            // Most recent Error seen this process — historical context, not
+            // live state, so it renders even when the session is healthy.
+            details?.lastError?.let { DetailRow("Last error", it) }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(text = value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
