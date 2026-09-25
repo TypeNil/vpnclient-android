@@ -214,6 +214,28 @@ class ClientVpnService : VpnService(), EnginePlatform {
      *  clear the desire flag, publish an error, or stop the service under a
      *  connect() the user just made. */
     private val startGuard = StartAttemptGuard()
+
+    /** Finishes a failed attempt; owns the re-checks around its suspensions. */
+    private val startFailure by lazy {
+        StartFailureHandler(
+            guard = startGuard,
+            sessionPending = { connectionManager.pendingSession != null },
+            readDesire = {
+                // A failed read keeps the previous behaviour (report the
+                // failure) — swallowing it would be worse than a stale error.
+                runCatching { settings.desiredVpnRunning.first() }.getOrDefault(true)
+            },
+            writeDesire = { wanted ->
+                persistSetting { settings.setDesiredVpnRunning(wanted) }
+            },
+            stopping = { stopRequested || destroyed },
+            report = { error -> connectionManager.onSessionlessStartFailed(error) },
+            converge = {
+                cleanup()
+                stopSelf()
+            },
+        )
+    }
     /** A queued rebuild must recompile the config, not just re-establish the
      *  TUN — set when the change that requested it altered the node set.
      *  Sticky until the rebuild that consumes it. */
@@ -410,7 +432,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 autoStartJob?.cancel()
                 // ...and invalidates a restore attempt that is still compiling:
                 // its failure path must not act on this session's behalf.
-                startGuard.onUserIntent()
+                startGuard.onUserIntent(StartIntent.Connect)
                 // User asked for the tunnel — remember it across process
                 // death. The explicit tap also clears the restart guard: a
                 // tripped guard is about *automatic* starts, not the user
@@ -428,7 +450,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
                 // A restore compiling right now must not answer this stop with
                 // a stale error, nor stop the service out from under a newer
                 // intent.
-                startGuard.onUserIntent()
+                startGuard.onUserIntent(StartIntent.Disconnect)
                 scope.launch {
                     // Flag write serialized before the stop: a crash between
                     // them must not leave desiredVpnRunning=true pointing at
@@ -650,6 +672,15 @@ class ClientVpnService : VpnService(), EnginePlatform {
             connectionManager.onServiceStopped(-1L)
             cleanup()
             stopSelf()
+            return
+        }
+        // The config is in hand, but an intent that arrived while it compiled
+        // owns the service now: a disconnect must not be answered with a
+        // started engine, and a queued connect is drained by this attempt's
+        // completion instead. The session this attempt is starting is not
+        // "someone else's" — only a newer one counts.
+        if (!stillOwns(attempt, ownGeneration = effective?.generation)) {
+            SecureLog.i(TAG, "start superseded before the engine launch — not starting it")
             return
         }
         var generation = effective?.generation
@@ -967,42 +998,22 @@ class ClientVpnService : VpnService(), EnginePlatform {
      * [ConnectionManager.onSessionlessStartFailed].
      */
     private suspend fun failStart(error: VpnError, attempt: Long) {
-        // Checked at every step below: each one follows a suspension point the
-        // user can act inside. A connect() that arrived meanwhile owns the
-        // service — its session is queued behind this attempt (its
-        // ACTION_CONNECT was rejected by the single-flight guard), so the
-        // attempt's job drains it and must not touch anything here.
-        if (startGuard.superseded(attempt, sessionPending = false)) {
-            SecureLog.i(TAG, "stale start failure — handing over to the newer intent")
-            return
-        }
-        // A failed read keeps the previous behaviour (report the failure) —
-        // silently swallowing it would be worse than a stale error.
-        val stillWanted =
-            runCatching { settings.desiredVpnRunning.first() }.getOrDefault(true)
-        if (stopRequested || destroyed || !stillWanted) {
-            SecureLog.i(TAG, "start failed after a stop request — converging quietly")
-            cleanup()
-            stopSelf()
-            return
-        }
-        if (startGuard.superseded(attempt, connectionManager.pendingSession != null)) {
-            SecureLog.i(TAG, "stale start failure — handing over to the newer intent")
-            return
-        }
-        SecureLog.w(TAG, "service start failed: ${error.javaClass.simpleName}")
-        // Not a transient failure: don't let a boot / always-on restore loop.
-        persistSetting { settings.setDesiredVpnRunning(false) }
-        if (startGuard.superseded(attempt, connectionManager.pendingSession != null)) {
-            // The write above suspends — a connect() that landed inside it owns
-            // the desire flag now, so the stale clear is undone.
-            persistSetting { settings.setDesiredVpnRunning(true) }
-            SecureLog.i(TAG, "start failure raced a newer connect — desire restored")
-            return
-        }
-        connectionManager.onSessionlessStartFailed(error)
-        cleanup()
-        stopSelf()
+        // The sequencing (re-check ownership between the settings read and the
+        // settings write) lives in StartFailureHandler so the windows it closes
+        // are unit-tested instead of only reasoned about.
+        startFailure.finish(error, attempt)
+    }
+
+    /**
+     * True while [attempt] still owns the service. [ownGeneration] is the
+     * session this attempt is starting — null for a service-driven restore —
+     * so a pending session that is merely its own doesn't read as a newer
+     * owner.
+     */
+    private fun stillOwns(attempt: Long, ownGeneration: Long? = null): Boolean {
+        val pending = connectionManager.pendingSession
+        val foreignSession = pending != null && pending.generation != ownGeneration
+        return startGuard.owner(attempt, sessionPending = foreignSession) == StartOwner.ThisAttempt
     }
 
     private fun stopTunnel() {

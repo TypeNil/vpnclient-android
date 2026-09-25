@@ -1,24 +1,30 @@
 package dev.typenil.vpnclient.core.vpn
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Ownership rules for a start attempt. The regression this locks down: a
- * restore that is still compiling when the user taps Connect must not clear
- * the desire flag, publish an error, or stop the service — its
- * `ACTION_CONNECT` is rejected by the single-flight guard, so nothing else
- * would start that session.
+ * Ownership rules for a start attempt. The regressions this locks down:
+ * a restore still compiling when the user acts must not stop the service
+ * under a queued connect, must not start an engine after a disconnect, and
+ * must not resurrect the desire flag for a disconnect — the counter alone
+ * can't tell the two intents apart, and they demand opposite handling.
  */
 class StartAttemptGuardTest {
     private val guard = StartAttemptGuard()
+
+    private fun owner(
+        attempt: Long,
+        sessionPending: Boolean = false,
+    ) = guard.owner(attempt, sessionPending)
 
     @Test
     fun `an attempt nobody interrupted still owns the service`() {
         val attempt = guard.begin()
 
-        assertFalse(guard.superseded(attempt, sessionPending = false))
+        assertEquals(StartOwner.ThisAttempt, owner(attempt))
     }
 
     @Test
@@ -28,10 +34,10 @@ class StartAttemptGuardTest {
         // The compile failed and the failure path suspended on settings; the
         // user tapped Connect, whose ACTION_CONNECT the single-flight guard
         // rejected, leaving its session queued behind this attempt.
-        guard.onUserIntent()
+        guard.onUserIntent(StartIntent.Connect)
         guard.onStartQueued()
 
-        assertTrue(guard.superseded(attempt, sessionPending = true))
+        assertEquals(StartOwner.Connect, owner(attempt, sessionPending = true))
         // The finishing attempt drains the queued start instead of stopping.
         assertTrue(guard.consumeQueuedStart())
         assertFalse(guard.consumeQueuedStart())
@@ -43,33 +49,56 @@ class StartAttemptGuardTest {
 
         // The intent reaches the service before ConnectionManager's pending
         // session is observable — the token alone must already invalidate it.
-        guard.onUserIntent()
+        guard.onUserIntent(StartIntent.Connect)
 
-        assertTrue(guard.superseded(attempt, sessionPending = false))
+        assertEquals(StartOwner.Connect, owner(attempt))
     }
 
     @Test
-    fun `a disconnect supersedes an attempt`() {
+    fun `a disconnect supersedes an attempt and is not a connect`() {
         val attempt = guard.begin()
 
-        guard.onUserIntent()
+        guard.onUserIntent(StartIntent.Disconnect)
 
-        assertTrue(guard.superseded(attempt, sessionPending = false))
+        // Distinct from Connect: the failure path must not compensate by
+        // restoring the desire flag, nor start an engine.
+        assertEquals(StartOwner.Disconnect, owner(attempt))
     }
 
     @Test
-    fun `a session waiting for an engine supersedes an attempt`() {
+    fun `a disconnect after a connect is still a disconnect`() {
         val attempt = guard.begin()
 
-        assertTrue(guard.superseded(attempt, sessionPending = true))
+        guard.onUserIntent(StartIntent.Connect)
+        guard.onUserIntent(StartIntent.Disconnect)
+
+        assertEquals(StartOwner.Disconnect, owner(attempt))
+    }
+
+    @Test
+    fun `a connect after a disconnect is a connect again`() {
+        val attempt = guard.begin()
+
+        guard.onUserIntent(StartIntent.Disconnect)
+        guard.onUserIntent(StartIntent.Connect)
+
+        assertEquals(StartOwner.Connect, owner(attempt))
+    }
+
+    @Test
+    fun `a session waiting for an engine belongs to a connect`() {
+        val attempt = guard.begin()
+
+        // No intent bump at all: the pending session alone is the newer owner.
+        assertEquals(StartOwner.Connect, owner(attempt, sessionPending = true))
     }
 
     @Test
     fun `an attempt started after the intent owns the service again`() {
-        guard.onUserIntent()
+        guard.onUserIntent(StartIntent.Connect)
         val attempt = guard.begin()
 
-        assertFalse(guard.superseded(attempt, sessionPending = false))
+        assertEquals(StartOwner.ThisAttempt, owner(attempt))
     }
 
     @Test
