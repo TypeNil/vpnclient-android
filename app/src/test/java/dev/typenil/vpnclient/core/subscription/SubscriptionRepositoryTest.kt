@@ -846,15 +846,22 @@ class SubscriptionRepositoryTest {
     @Test
     fun `a cancelled import keeps the existing manual row and its nodes`() = runTest {
         repository.importShareLink(uri("a.example.com", "A"))
+        // Counted before this run: the earlier import already entered
+        // validation, so waiting on `calls == 0` would prove nothing about
+        // where THIS one was cancelled.
+        val callsBefore = validator.calls
         val gate = CompletableDeferred<Unit>()
         validator.gate = gate
 
         val job = launch { repository.importShareLink(uri("b.example.com", "B")) }
         val deadline = System.currentTimeMillis() + 5_000
-        while (validator.calls == 0 && System.currentTimeMillis() < deadline) {
+        while (validator.calls == callsBefore && System.currentTimeMillis() < deadline) {
             advanceUntilIdle()
             Thread.sleep(20)
         }
+        // Cancelled from inside validation — past the row lookup and the parse.
+        assertEquals(callsBefore + 1, validator.calls)
+
         job.cancelAndJoin()
 
         assertEquals(1, subscriptionDao.subs.size)
