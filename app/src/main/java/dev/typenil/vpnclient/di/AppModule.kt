@@ -18,6 +18,8 @@ import dev.typenil.vpnclient.core.vpn.AndroidServiceControl
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.core.vpn.ServiceControl
+import dev.typenil.vpnclient.core.vpn.TunProvider
+import dev.typenil.vpnclient.core.vpn.VpnTunProvider
 import dev.typenil.vpnclient.data.CandidateValidatorImpl
 import dev.typenil.vpnclient.data.ExpiryAlertNotifier
 import dev.typenil.vpnclient.data.NodeConfigProviderImpl
@@ -95,12 +97,8 @@ object AppModule {
 }
 
 @Module
-@InstallIn(SingletonComponent::class)
-abstract class AppBindsModule {
-
-    @Binds
-    @Singleton
-    abstract fun bindServiceControl(impl: AndroidServiceControl): ServiceControl
+    @InstallIn(SingletonComponent::class)
+    abstract class AppBindsModule {
 
     @Binds
     @Singleton
@@ -128,11 +126,46 @@ abstract class AppBindsModule {
     @Singleton
     abstract fun bindSubscriptionSettings(impl: SettingsRepository): SubscriptionSettings
 
-    @Binds
-    @Singleton
-    abstract fun bindNodeConfigProvider(impl: NodeConfigProviderImpl): NodeConfigProvider
+}
 
+/**
+ * VPN-path bindings kept in their own modules so instrumented tests can
+ * replace exactly one of them with `@TestInstallIn(replaces = …)` — the
+ * lifecycle harness substitutes a fake engine factory, a fake consent/TUN
+ * provider, and a fixed node config without touching the rest of the graph.
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class EngineFactoryModule {
     @Binds
     @Singleton
     abstract fun bindVpnEngineFactory(impl: SingBoxEngineFactory): VpnEngineFactory
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class TunProviderModule {
+    @Binds
+    @Singleton
+    abstract fun bindTunProvider(impl: VpnTunProvider): TunProvider
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class NodeConfigProviderModule {
+    @Binds
+    @Singleton
+    abstract fun bindNodeConfigProvider(impl: NodeConfigProviderImpl): NodeConfigProvider
+}
+
+/** `ServiceControl` is the manager's `VpnService.prepare` + start/stop bridge;
+ *  in its own module so the lifecycle harness can substitute a consent-granted
+ *  fake (the real `prepareVpn` surfaces a consent dialog the test can't show).
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class ServiceControlModule {
+    @Binds
+    @Singleton
+    abstract fun bindServiceControl(impl: AndroidServiceControl): ServiceControl
 }

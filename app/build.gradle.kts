@@ -22,7 +22,10 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Hilt tests need an Application annotated @HiltAndroidApp in the
+        // test APK — VpnTestRunner instantiates VpnTestApp instead of the
+        // production VpnClientApp so @TestInstallIn fakes can plug in.
+        testInstrumentationRunner = "dev.typenil.vpnclient.VpnTestRunner"
     }
 
     buildTypes {
@@ -175,6 +178,10 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.room.testing)
+    // @HiltAndroidTest + @BindValue for the VPN lifecycle harness — the
+    // generated test component swaps VpnEngineFactory/TunProvider for fakes.
+    androidTestImplementation(libs.hilt.android.testing)
+    kspAndroidTest(libs.hilt.android.compiler)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

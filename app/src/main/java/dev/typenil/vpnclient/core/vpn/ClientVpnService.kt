@@ -139,6 +139,12 @@ class ClientVpnService : VpnService(), EnginePlatform {
     @Inject
     lateinit var socketProtector: VpnSocketProtector
 
+    /** Consent-gated TUN primitives (prepare + establish). Behind an
+     *  interface so instrumented tests can supply an fd without a real VPN
+     *  permission grant; production uses [VpnTunProvider]. */
+    @Inject
+    lateinit var tunProvider: TunProvider
+
     /** Process-wide scope for fire-and-forget teardown in onDestroy —
      *  the service's own scope is cancelled on destroy. */
     @Inject
@@ -1171,7 +1177,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
     // region EnginePlatform
 
     override fun openTun(request: TunRequest): Int {
-        if (prepare(this) != null) error("android: missing vpn permission")
+        if (tunProvider.prepare(this) != null) error("android: missing vpn permission")
 
         val builder = Builder()
             .setSession(getString(R.string.app_name))
@@ -1296,7 +1302,7 @@ class ClientVpnService : VpnService(), EnginePlatform {
             }
         }
 
-        val pfd = builder.establish()
+        val pfd = tunProvider.establish(builder)
             ?: error("android: vpn interface not established (not prepared or revoked)")
         tunFd = pfd
         return pfd.fd
@@ -1430,15 +1436,11 @@ class ClientVpnService : VpnService(), EnginePlatform {
         showDisconnect: Boolean,
     ) {
         val n = notification.build(title, text, showDisconnect)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                VpnNotification.NOTIFICATION_ID,
-                n,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
-            )
-        } else {
-            startForeground(VpnNotification.NOTIFICATION_ID, n)
-        }
+        // The foreground promotion goes through TunProvider: the real
+        // startForeground(systemExempted) needs the activate_vpn appop,
+        // which only a platform-granted VPN interface produces — a harness
+        // with a fake TUN fd substitutes a no-op promotion instead.
+        tunProvider.startForeground(this, VpnNotification.NOTIFICATION_ID, n)
     }
 }
 
