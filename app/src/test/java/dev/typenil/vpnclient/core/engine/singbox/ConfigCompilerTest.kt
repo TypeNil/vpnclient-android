@@ -467,12 +467,13 @@ class ConfigCompilerTest {
     }
 
     @Test
-    fun `user rules emit before the mode rules and map to outbound or reject`() {
+    fun `user rules emit before private fallback and map to outbound or reject`() {
         val rules =
             listOf(
                 RoutingRule(RoutingRule.Kind.DOMAIN, "example.com", RoutingRule.Action.DIRECT),
                 RoutingRule(RoutingRule.Kind.IP_CIDR, "10.0.0.0/8", RoutingRule.Action.BLOCK),
                 RoutingRule(RoutingRule.Kind.PORT, "443", RoutingRule.Action.PROXY),
+                RoutingRule(RoutingRule.Kind.PORT, "8000:8080", RoutingRule.Action.DIRECT),
             )
         val config = compiler.build(
             listOf(node("n1")), "n1", true, RouteMode.BYPASS_RU,
@@ -482,26 +483,35 @@ class ConfigCompilerTest {
         val routeRules = json.parseToJsonElement(config.configJson)
             .jsonObject["route"]!!.jsonObject["rules"]!!.jsonArray
             .map { it.jsonObject }
-        // sniff(0) hijack-dns(1) private(2) then the three user rules, then
-        // the BYPASS_RU rule-set — user entries precede the geosite so a
-        // specific pick isn't swallowed by the broad list.
-        val domain = routeRules[3]
+        // sniff(0) hijack-dns(1) then the four user rules, then
+        // ip_is_private fallback, then the BYPASS_RU rule-set — user entries
+        // precede both so a private-CIDR block can't be swallowed by the
+        // fallback and a specific pick isn't swallowed by the geosite.
+        val domain = routeRules[2]
         assertEquals(
             listOf("example.com"),
             domain["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content },
         )
         assertEquals("direct", domain["outbound"]!!.jsonPrimitive.content)
-        val ip = routeRules[4]
+        val ip = routeRules[3]
         assertEquals(
             listOf("10.0.0.0/8"),
             ip["ip_cidr"]!!.jsonArray.map { it.jsonPrimitive.content },
         )
         assertEquals("reject", ip["action"]!!.jsonPrimitive.content)
-        val port = routeRules[5]
-        assertEquals(listOf("443"), port["port"]!!.jsonArray.map { it.jsonPrimitive.content })
+        // Port: numeric array, not a string — checkConfig rejects "443".
+        val port = routeRules[4]
+        assertEquals(listOf(443), port["port"]!!.jsonArray.map { it.jsonPrimitive.int })
         assertEquals("proxy", port["outbound"]!!.jsonPrimitive.content)
-        // The mode's own rule-set rule follows the user rules.
-        assertTrue(routeRules[6].containsKey("rule_set"))
+        // Port ranges use port_range as a string.
+        val range = routeRules[5]
+        assertEquals(
+            listOf("8000:8080"),
+            range["port_range"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals("direct", range["outbound"]!!.jsonPrimitive.content)
+        assertEquals(true, routeRules[6]["ip_is_private"]!!.jsonPrimitive.boolean)
+        assertTrue(routeRules[7].containsKey("rule_set"))
     }
 
     @Test

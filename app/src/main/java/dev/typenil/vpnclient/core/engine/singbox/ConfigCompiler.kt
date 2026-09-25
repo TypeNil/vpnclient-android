@@ -317,6 +317,43 @@ class ConfigCompiler
                                 put("protocol", "dns")
                                 put("action", "hijack-dns")
                             }
+                            // User rules sit ahead of every built-in
+                            // fallback — including ip_is_private: blocking or
+                            // proxying a private range is a legitimate pick
+                            // the fallback must not shadow. (With bypassLan
+                            // on, excluded LAN prefixes never reach sing-box
+                            // at all — rules on them are inert, which the
+                            // bypass switch already implies.)
+                            userRules.forEach { rule ->
+                                addJsonObject {
+                                    when (rule.kind) {
+                                        // sing-box wants numeric ports and a
+                                        // string port_range — a bare "443"
+                                        // string would fail checkConfig.
+                                        RoutingRule.Kind.PORT -> {
+                                            if (':' in rule.pattern) {
+                                                putJsonArray("port_range") {
+                                                    add(rule.pattern)
+                                                }
+                                            } else {
+                                                putJsonArray("port") {
+                                                    add(rule.pattern.toInt())
+                                                }
+                                            }
+                                        }
+
+                                        else -> {
+                                            putJsonArray(rule.matchField) {
+                                                add(rule.pattern)
+                                            }
+                                        }
+                                    }
+                                    when (rule.action) {
+                                        RoutingRule.Action.BLOCK -> put("action", "reject")
+                                        else -> put("outbound", rule.outboundTag)
+                                    }
+                                }
+                            }
                             addJsonObject {
                                 put("ip_is_private", true)
                                 put("outbound", "direct")
@@ -328,20 +365,6 @@ class ConfigCompiler
                                 addJsonObject {
                                     put("ip_version", 6)
                                     put("outbound", SELECTOR_TAG)
-                                }
-                            }
-                            // User rules sit ahead of the mode's broad
-                            // rule-sets: a domain/IP the user picked is a
-                            // precise override, not a candidate the geosite
-                            // should swallow first. Top-down order matches
-                            // the list the user sees.
-                            userRules.forEach { rule ->
-                                addJsonObject {
-                                    putJsonArray(rule.matchField) { add(rule.pattern) }
-                                    when (rule.action) {
-                                        RoutingRule.Action.BLOCK -> put("action", "reject")
-                                        else -> put("outbound", rule.outboundTag)
-                                    }
                                 }
                             }
                             when (routeMode) {

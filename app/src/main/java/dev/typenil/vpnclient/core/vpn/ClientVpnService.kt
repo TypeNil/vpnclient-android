@@ -271,20 +271,19 @@ class ClientVpnService : VpnService(), EnginePlatform {
         // unrelated settings writes re-emit the DataStore flow with equal
         // values. debounce: a toggle burst collapses into one rebuild.
         // A rebuild triggered while a session is starting must not apply to
-        // the half-built TUN — the filter drops emissions that arrive before
-        // Connected is published (e.g. the onStart migration read landing
-        // mid-launch); rebuildPending only parks *user* policy changes that
-        // arrive while already Connected→Reconnecting.
+        // the half-built TUN — requestTunnelRebuild ignores anything that
+        // lands before Connected is published (e.g. the onStart migration
+        // read landing mid-launch); rebuildPending parks a *user* change
+        // that arrives while already Connected→Reconnecting.
         scope.launch {
             settings.perAppPolicy
                 .drop(1)
                 .distinctUntilChanged()
-                // The onStart migration edit re-emits an identical snapshot
-                // on every service start — before Connected exists, it's a
-                // startup echo, not a user policy change. rebuildPending
-                // only parks a *user* change that lands while Connected →
-                // Reconnecting, so gating on Connected keeps that semantic.
-                .filter { connectionManager.state.value is VpnConnectionState.Connected }
+                // Don't gate on Connected: a change landing during
+                // network-loss Reconnecting must still reach
+                // requestTunnelRebuild, which parks it in rebuildPending
+                // until the session is Connected again. Dropping it here
+                // would strand the old plan on the rebuilt TUN.
                 .debounce(PER_APP_REBUILD_DEBOUNCE_MS)
                 .collect { requestTunnelRebuild() }
         }
@@ -864,8 +863,13 @@ class ClientVpnService : VpnService(), EnginePlatform {
         }
         if (connectionManager.state.value !is VpnConnectionState.Connected) {
             // Session alive but not Connected (network-loss Reconnecting):
-            // the live TUN would keep the stale plan — park the change.
-            if (activeGeneration >= 0) rebuildPending = true
+            // the live TUN would keep the stale plan — park the change. The
+            // sticky flag survives even if the policy lands again before
+            // Connected returns; the state collector replays it once.
+            if (activeGeneration >= 0) {
+                rebuildPending = true
+                if (recompileConfig) rebuildRecompile = true
+            }
             return
         }
         rebuildJob = scope.launch {
