@@ -1457,11 +1457,14 @@ class ClientVpnService :
                 // IPv6 posture is read off LinkProperties (global v6
                 // address + ::/0 route) — they change on their own channel,
                 // so a caps-only subscription would miss an RA/route flip.
+                // The callback's `props` are the ordered snapshot — pass them
+                // through instead of re-querying (a mid-callback re-read can
+                // observe stale state).
                 override fun onLinkPropertiesChanged(
                     network: Network,
                     props: LinkProperties,
                 ) {
-                    updateUnderlyingNetworks()
+                    updateUnderlyingNetworks(eventNetwork = network, eventProps = props)
                 }
 
                 override fun onLost(network: Network) {
@@ -1512,7 +1515,10 @@ class ClientVpnService :
         )
     }
 
-    private fun updateUnderlyingNetworks() {
+    private fun updateUnderlyingNetworks(
+        eventNetwork: Network? = null,
+        eventProps: LinkProperties? = null,
+    ) {
         // activeNetwork can be the VPN interface itself, or capabilities can
         // temporarily be unavailable during teardown. Only choose a network
         // with known INTERNET + NOT_VPN evidence; otherwise fall back to any
@@ -1541,7 +1547,17 @@ class ClientVpnService :
         // it costs nothing when the underlay is gone.
         // reportUnderlay also marks the value authoritative so the first
         // compile falls back to a physical probe only until this lands.
-        val underlayHasIpv6 = active?.let { networkHasGlobalIpv6(it) } ?: true
+        val underlayHasIpv6 =
+            active?.let { network ->
+                // Prefer the callback's ordered snapshot when the event is
+                // about the network we just picked — getLinkProperties() can
+                // return a stale read inside a NetworkCallback.
+                if (network == eventNetwork && eventProps != null) {
+                    linkPropertiesHasGlobalIpv6(eventProps)
+                } else {
+                    networkHasGlobalIpv6(network)
+                }
+            } ?: true
         configProvider.reportUnderlay(underlayHasIpv6)
         // A posture flip must recompile even when the Network object is
         // unchanged (caps/routes change in place) — so this runs before the
@@ -1571,6 +1587,10 @@ class ClientVpnService :
      *  dead dial. Mirrors the compile-time check this replaces. */
     private fun networkHasGlobalIpv6(network: Network): Boolean {
         val link = connectivity.getLinkProperties(network) ?: return false
+        return linkPropertiesHasGlobalIpv6(link)
+    }
+
+    private fun linkPropertiesHasGlobalIpv6(link: LinkProperties): Boolean {
         val hasDefaultV6Route =
             link.routes.any { route ->
                 route.destination.address is java.net.Inet6Address &&
