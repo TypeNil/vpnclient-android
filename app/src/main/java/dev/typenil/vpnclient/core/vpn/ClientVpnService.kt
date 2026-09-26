@@ -167,6 +167,11 @@ class ClientVpnService :
      *  into the next session's first compile. */
     private var underlayEpoch: Long = -1L
     private var lastUnderlyingNetwork: Network? = null
+
+    /** Flags an underlay IPv6 flip that must recompile the routing — the
+     *  compiled config bakes the ip_version:6 decision in. Main-thread
+     *  confined, like the other callback state. */
+    private val underlayIpv6Tracker = UnderlayIpv6Tracker()
     private var dozeReceiverRegistered = false
 
     /** Cached settings flags — network callbacks can't suspend to read them. */
@@ -1477,6 +1482,7 @@ class ClientVpnService :
         }
         underlyingCallback = null
         lastUnderlyingNetwork = null
+        underlayIpv6Tracker.reset()
         // Drop the snapshot this epoch pushed — the next session's first
         // compile must re-probe the physical network (it may have changed
         // while the tunnel was down), not trust our cached value. The
@@ -1522,12 +1528,18 @@ class ClientVpnService :
         // interface once a session is live and flip the ip_version:6 rule.
         // UNKNOWN/no network → true: v6-via-proxy still works, and preferring
         // it costs nothing when the underlay is gone.
-        // Feed the compile path the *physical* underlay's IPv6 posture — a
-        // direct ConnectivityManager read there would resolve our own VPN
-        // interface once a session is live and flip the ip_version:6 rule.
         // reportUnderlay also marks the value authoritative so the first
         // compile falls back to a physical probe only until this lands.
-        configProvider.reportUnderlay(active?.let { networkHasGlobalIpv6(it) } ?: true)
+        val underlayHasIpv6 = active?.let { networkHasGlobalIpv6(it) } ?: true
+        configProvider.reportUnderlay(underlayHasIpv6)
+        // A posture flip must recompile even when the Network object is
+        // unchanged (caps/routes change in place) — so this runs before the
+        // lastUnderlyingNetwork short-circuit. The first report only sets the
+        // baseline; the start compile reads the live value anyway.
+        if (underlayIpv6Tracker.report(underlayHasIpv6)) {
+            SecureLog.i(TAG, "underlay IPv6 posture changed — recompiling routing")
+            requestTunnelRebuild(recompileConfig = true)
+        }
         if (active == lastUnderlyingNetwork) return
         lastUnderlyingNetwork = active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
