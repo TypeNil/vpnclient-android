@@ -30,6 +30,9 @@ jobs:
       - name: Release APK
         run: ./gradlew assembleRelease --stacktrace
 
+      - name: Release AAB
+        run: ./gradlew bundleRelease --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
@@ -41,3 +44,9 @@ jobs:
           name: app-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error

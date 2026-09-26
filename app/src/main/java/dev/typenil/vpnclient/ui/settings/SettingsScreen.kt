@@ -68,14 +68,16 @@ fun SettingsScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val reconnectMessage = stringResource(R.string.settings_snackbar_reconnect_message)
+    val reconnectAction = stringResource(R.string.settings_snackbar_reconnect_action)
     // Pending-state prompt: shows once per recommendation, re-shows after a
     // process/config change only if the flag flips back to true.
-    LaunchedEffect(ui.reconnectRecommended) {
+    LaunchedEffect(ui.reconnectRecommended, reconnectMessage, reconnectAction) {
         if (ui.reconnectRecommended) {
             val result =
                 snackbarHostState.showSnackbar(
-                    message = context.getString(R.string.settings_snackbar_reconnect_message),
-                    actionLabel = context.getString(R.string.settings_snackbar_reconnect_action),
+                    message = reconnectMessage,
+                    actionLabel = reconnectAction,
                 )
             if (result == SnackbarResult.ActionPerformed) viewModel.reconnect()
         }

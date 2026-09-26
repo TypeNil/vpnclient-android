@@ -62,6 +62,7 @@ fun DiagnosticsScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val shareChooserTitle = stringResource(R.string.diag_share_chooser)
     // Injected into the composable — the VM stays Context-free.
     val exporter = rememberLogExporter()
 
@@ -173,7 +174,7 @@ fun DiagnosticsScreen(
                         context.startActivity(
                             Intent.createChooser(
                                 intent,
-                                context.getString(R.string.diag_share_chooser),
+                                shareChooserTitle,
                             ),
                         )
                     } else {

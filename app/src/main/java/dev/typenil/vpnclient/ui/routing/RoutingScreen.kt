@@ -19,12 +19,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,12 +66,14 @@ fun RoutingScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    LaunchedEffect(ui.reconnectRecommended) {
+    val reconnectMessage = stringResource(R.string.settings_snackbar_reconnect_message)
+    val reconnectAction = stringResource(R.string.settings_snackbar_reconnect_action)
+    LaunchedEffect(ui.reconnectRecommended, reconnectMessage, reconnectAction) {
         if (ui.reconnectRecommended) {
             val result =
                 snackbarHostState.showSnackbar(
-                    message = context.getString(R.string.settings_snackbar_reconnect_message),
-                    actionLabel = context.getString(R.string.settings_snackbar_reconnect_action),
+                    message = reconnectMessage,
+                    actionLabel = reconnectAction,
                 )
             if (result == SnackbarResult.ActionPerformed) viewModel.reconnect()
         }
