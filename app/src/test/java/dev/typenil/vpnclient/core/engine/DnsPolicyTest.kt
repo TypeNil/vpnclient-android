@@ -141,5 +141,13 @@ class DnsPolicyTest {
         assertNull(DnsUpstream.parseCustom("https://[2001:db8::853]x/dns-query"))
         assertNull(DnsUpstream.parseCustom("tls://[2001:db8::853]:bogus"))
         assertNull(DnsUpstream.parseCustom("udp://[2001:db8::53]:99999"))
+        // tls/quic must reject trailing garbage after ']' too (P3 follow-up)
+        assertNull(DnsUpstream.parseCustom("tls://[2001:db8::53]garbage"))
+        assertNull(DnsUpstream.parseCustom("quic://[2001:db8::53]garbage"))
+        assertNull(DnsUpstream.parseCustom("tls://[2001:db8::53]extra:853"))
+        // But clean tls/quic hosts still parse — literals, hostnames, v6
+        assertEquals("tls://1.1.1.1", DnsUpstream.parseCustom("tls://1.1.1.1")?.spec)
+        assertEquals("tls://one.one.one.one", DnsUpstream.parseCustom("tls://one.one.one.one")?.spec)
+        assertEquals("tls://[2001:db8::853]", DnsUpstream.parseCustom("tls://[2001:db8::853]")?.spec)
     }
 }

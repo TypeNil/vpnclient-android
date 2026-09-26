@@ -137,9 +137,29 @@ sealed class DnsUpstream {
                     val (host, port) = splitHostPort(rest)
                     if (host.isBlank() || host.any { it.isWhitespace() }) return null
                     if (port != null && port.toIntOrNull() !in 1..65535) return null
+                    // Reject anything that isn't a clean hostname or a valid
+                    // IP literal — '[v6]garbage' must not slip through just
+                    // because it isn't blank (splitHostPort returns the whole
+                    // bad authority as host on malformed brackets).
+                    val bare = host.removePrefix("[").removeSuffix("]")
+                    val isValidHost =
+                        if (isIpLiteral(bare)) {
+                            true // v4 or v6 literal (bare v6 gets bracketed below)
+                        } else {
+                            // Hostname: no brackets, no stray chars, sane.
+                            '[' !in host && ']' !in host &&
+                                host.all { c -> c.isLetterOrDigit() || c == '.' || c == '-' }
+                        }
+                    if (!isValidHost) return null
                     // A bare multi-colon IPv6 must be bracketed in the
                     // canonical spec so the compiler's split stays exact.
-                    Custom(if ('[' !in host && host.count { it == ':' } >= 2) "${s.substringBefore("://")}://[$host]" else s)
+                    Custom(
+                        if ('[' !in host && host.count { it == ':' } >= 2) {
+                            "${s.substringBefore("://")}://[$host]"
+                        } else {
+                            s
+                        },
+                    )
                 }
 
                 s.startsWith("udp://") -> {
