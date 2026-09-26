@@ -66,29 +66,36 @@ device scenarios above.
 
 `connectedDebugAndroidTest` — `ClientVpnServiceLifecycleTest`: 8/8 pass.
 
-Real-traffic run with a LAN `socks://192.168.1.96:1080` node (dependency-free
-SOCKS5 on the dev machine, real forwarding to the internet):
+Device runs used a user-provided remote subscription (subscription URL and
+node credentials intentionally excluded from this repository):
 
-- Deep-link `clash://install-config?url=` + `http(s)` sub URL both import;
-  insecure HTTP is correctly gated behind an opt-in checkbox.
-- Connect → `tun0` up at `172.18.0.1/30` + `fdfe:dcba:9877::1/126`,
-  `default dev tun0`, `Libbox.checkConfig` accepted.
-- Live stats tick; `curl` through shell exits the tunnel at the SOCKS
-  egress (`203.17.244.189`); server log records `CONNECT <dst>:443`.
-- VPN `DnsAddresses` = `172.18.0.2`/`fdfe:..:2` — the tun's own resolver,
-  not ISP `192.168.1.1` (no observed leak; not packet-captured).
-- Disconnect clean: `tun0` gone, no crash. Reconnect re-establishes (new
-  ifindex). `run-as ... kill -9` (real process death) → new PID + fresh
-  `tun0`, tunnel restored, traffic resumes — START_STICKY verified.
-- Wi-Fi→LTE: the LTE underlay is **IPv6-only** on this carrier
-  (`rmnet_data3` has no v4 addr); a v4-only LAN upstream can't serve it,
-  so end-to-end over LTE wasn't provable with this rig. The tunnel stayed
-  up and recovered on Wi-Fi return (`UnderlyingNetworks=[779]`).
-  Exit-IP masking to a remote node still needs a real dual-stack upstream.
+- Subscription refresh returned 3 usable nodes; the selected remote Trojan
+  node connected over Wi-Fi. Native `Libbox.checkConfig` accepted the config.
+- `tun0` UP at `172.18.0.1/30` + `fdfe:dcba:9877::1/126`, with
+  `default dev tun0`. Live stats updated. HTTPS IP-check egress differed from
+  the direct-network baseline; `example.com` DNS+TLS returned HTTP 200.
+- VPN `DnsAddresses` were `172.18.0.2`/`fdfe:..:2`, the TUN resolver.
+  No packet capture was done, so DNS leak freedom is not claimed.
+- Disconnect removed `tun0` cleanly; reconnect created a fresh TUN. A real
+  `run-as ... kill -9` process death restored the service under a new PID,
+  rebuilt `tun0`, and resumed traffic (START_STICKY verified).
+- Live handover with the remote node: Wi-Fi → LTE → Wi-Fi. On LTE,
+  `UnderlyingNetworks` changed to the cellular network, `tun0` stayed UP,
+  `example.com` returned HTTP 200, and the IP-check egress remained different
+  from the direct LTE baseline. Return to Wi-Fi also kept the tunnel working.
+- Correction to the earlier observation: mobile data was initially disabled.
+  The previously seen IPv6-only `rmnet_data3` was IMS-only, not the active
+  internet underlay. With mobile data temporarily enabled for the test, the
+  active LTE interface had both a private IPv4 address and a global IPv6
+  address (dual-stack). Mobile data was returned to its original disabled
+  state after the test; Wi-Fi is on and the VPN remains connected.
 
-**Outstanding network-compat scenario (not a blocker for the pushed work):**
-real traffic through a remote node over an IPv6-only cellular underlay with
-a dual-stack upstream — required before claiming full network-mode compat.
+**Still outstanding before full network-compat sign-off:** real traffic over
+an IPv6-only LTE internet underlay through a dual-stack remote upstream. The
+actual LTE underlay available during this run was dual-stack, and the selected
+subscription node used an IPv4 address, so this specific IPv6-only case was
+not established. This is not a blocker for the pushed integration work.
 
-The ad-hoc LAN `socks://` node + local subscription HTTP server used for this
-run were torn down after validation; they're not committed.
+The temporary LAN SOCKS5/subscription servers used in the earlier run were
+stopped after testing. No subscription URLs, tokens, UUIDs, or node configs
+are recorded here.
