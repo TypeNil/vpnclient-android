@@ -61,3 +61,27 @@ the airplane-mode rerun. DNS leak freedom was not packet-captured.
 A real connection additionally needs a working subscription/server — unit tests
 cover everything up to `VpnService.prepare`; TUN and lifecycle paths need the
 device scenarios above.
+
+## 2026-09-26 — physical device `CPH2449` (Android 16, API 36)
+
+`connectedDebugAndroidTest` — `ClientVpnServiceLifecycleTest`: 8/8 pass.
+
+Real-traffic run with a LAN `socks://192.168.1.96:1080` node (dependency-free
+SOCKS5 on the dev machine, real forwarding to the internet):
+
+- Deep-link `clash://install-config?url=` + `http(s)` sub URL both import;
+  insecure HTTP is correctly gated behind an opt-in checkbox.
+- Connect → `tun0` up at `172.18.0.1/30` + `fdfe:dcba:9877::1/126`,
+  `default dev tun0`, `Libbox.checkConfig` accepted.
+- Live stats tick; `curl` through shell exits the tunnel at the SOCKS
+  egress (`203.17.244.189`); server log records `CONNECT <dst>:443`.
+- VPN `DnsAddresses` = `172.18.0.2`/`fdfe:..:2` — the tun's own resolver,
+  not ISP `192.168.1.1` (no observed leak; not packet-captured).
+- Disconnect clean: `tun0` gone, no crash. Reconnect re-establishes (new
+  ifindex). `run-as ... kill -9` (real process death) → new PID + fresh
+  `tun0`, tunnel restored, traffic resumes — START_STICKY verified.
+- Wi-Fi→LTE: the LTE underlay is **IPv6-only** on this carrier
+  (`rmnet_data3` has no v4 addr); a v4-only LAN upstream can't serve it,
+  so end-to-end over LTE wasn't provable with this rig. The tunnel stayed
+  up and recovered on Wi-Fi return (`UnderlyingNetworks=[779]`).
+  Exit-IP masking to a remote node still needs a real dual-stack upstream.
