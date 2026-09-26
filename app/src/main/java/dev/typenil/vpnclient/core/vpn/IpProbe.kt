@@ -74,19 +74,27 @@ class IpProbe
                                 error = "http ${response.code}",
                             )
                         }
-                        // Bounded read (~256 bytes): echo endpoints return a
-                        // short address line, so there is no reason to buffer
-                        // a hostile/unbounded body into memory. One read is
-                        // enough for ipify-style responses; MAX_IP_LEN trims
-                        // any trailing garbage afterwards. (minSdk 26 — no
-                        // readNBytes without desugaring.) The response's use
-                        // block closes the body; closing the stream again is
-                        // a no-op.
-                        val bytes = response.body?.byteStream()?.use { stream ->
-                            val buf = ByteArray(256)
-                            val n = stream.read(buf)
-                            if (n < 0) ByteArray(0) else buf.copyOf(n)
-                        }
+                        // Bounded read (256 bytes max): echo endpoints return
+                        // a short address line, so there is no reason to buffer
+                        // a hostile/unbounded body into memory. A single read()
+                        // may return a partial chunk, so loop until EOF or the
+                        // cap; MAX_IP_LEN trims any trailing garbage afterwards.
+                        // (minSdk 26 — no readNBytes without desugaring.) The
+                        // response's use block closes the body; closing the
+                        // stream again is a no-op.
+                        val bytes =
+                            response.body?.byteStream()?.use { stream ->
+                                val out = java.io.ByteArrayOutputStream(MAX_READ_BYTES)
+                                val buf = ByteArray(256)
+                                var remaining = MAX_READ_BYTES
+                                while (remaining > 0) {
+                                    val n = stream.read(buf, 0, minOf(buf.size, remaining))
+                                    if (n < 0) break
+                                    out.write(buf, 0, n)
+                                    remaining -= n
+                                }
+                                out.toByteArray()
+                            }
                         val body = bytes?.let { String(it, Charsets.UTF_8) }.orEmpty().trim()
                         val ip = body.takeIf { isPlausibleIp(it) }
                         IpCheckResult(
@@ -112,6 +120,7 @@ class IpProbe
             const val DEFAULT_ENDPOINT = "https://api.ipify.org"
             const val DEFAULT_TIMEOUT_MS = 8_000L
             private const val MAX_IP_LEN = 45 // longest textual IPv6
+            private const val MAX_READ_BYTES = 256
             private val IP_REGEX = Regex("[0-9a-fA-F.:]+")
         }
     }

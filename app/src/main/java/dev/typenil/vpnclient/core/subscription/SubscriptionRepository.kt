@@ -83,6 +83,23 @@ class SubscriptionRepository
         /** Per-subscription commit locks — see the class kdoc for the scheme. */
         private val subLocks = ConcurrentHashMap<Long, Mutex>()
 
+        /** Monotonic refresh-sequence per subscription id. Every [refresh]
+         *  takes its ticket at call time; [commitRefresh] and [failRefresh]
+         *  compare it under the row's lock, so a slow earlier attempt can
+         *  never overwrite a newer success/failure for the same URL — the
+         *  fetchedUrl check alone can't tell two same-URL refreshes apart. */
+        private val refreshSeq = ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong>()
+
+        private fun nextRefreshSeq(id: Long): Long =
+            refreshSeq.computeIfAbsent(id) { java.util.concurrent.atomic.AtomicLong() }
+                .incrementAndGet()
+
+        private fun isStaleAttempt(
+            id: Long,
+            seq: Long,
+        ): Boolean =
+            (refreshSeq[id]?.get() ?: seq) != seq
+
         private val prefsMutex = Mutex()
         private val expiryMutex = Mutex()
         private val manualMutex = Mutex()
@@ -164,6 +181,7 @@ class SubscriptionRepository
          */
         suspend fun refresh(id: Long): Result<RefreshOutcome> {
             val attemptAt = Instant.now().toEpochMilli()
+            val seq = nextRefreshSeq(id)
             // Phase 1 — no lock held. The fetch is cancellable (OkHttp call
             // cancellation propagates), so a cancelled caller frees nothing
             // because it never held anything.
@@ -173,12 +191,32 @@ class SubscriptionRepository
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    return Result.failure(failRefresh(id, attemptAt, e))
+                    // Stale attempt: a newer refresh already ran — don't
+                    // overwrite its lastError with this one's late failure.
+                    return if (isStaleAttempt(id, seq)) {
+                        Result.failure(e as? SubscriptionError
+                            ?: SubscriptionError.ParseFailed(e.javaClass.simpleName))
+                    } else {
+                        lockFor(id).withLock {
+                            if (isStaleAttempt(id, seq)) {
+                                Result.failure(e as? SubscriptionError
+                                    ?: SubscriptionError.ParseFailed(e.javaClass.simpleName))
+                            } else {
+                                Result.failure(failRefresh(id, attemptAt, e))
+                            }
+                        }
+                    }
                 }
             // Phase 2 — commit under this subscription's own lock. The catch
             // keeps the Result contract: a DB failure must surface as a typed
             // failure, not escape as an exception.
             return lockFor(id).withLock {
+                if (isStaleAttempt(id, seq)) {
+                    // A newer refresh is in flight (or already committed) —
+                    // this candidate must not overwrite its node set.
+                    SecureLog.i(TAG, "dropping stale refresh result sub=$id")
+                    return@withLock Result.failure(SubscriptionError.NotFound)
+                }
                 try {
                     commitRefresh(id, prepared)
                 } catch (e: CancellationException) {

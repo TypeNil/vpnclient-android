@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,6 +51,7 @@ import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.RoutingRule
 import dev.typenil.vpnclient.data.db.RoutingRuleEntity
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Routing policy screen: RouteMode + per-app entry + LAN bypass. Everything
@@ -154,7 +157,10 @@ fun RoutingScreen(
             RulesSection(
                 rules = ui.rules,
                 ruleError = ui.ruleError,
+                ruleValidating = ui.ruleValidating,
+                ruleSaved = viewModel.ruleSaved,
                 onClearError = viewModel::clearRuleError,
+                onConsumeSaved = viewModel::consumeRuleSaved,
                 onAdd = viewModel::addRule,
                 onToggle = viewModel::setRuleEnabled,
                 onDelete = viewModel::deleteRule,
@@ -562,7 +568,10 @@ private fun dnsUpstreamLabel(upstream: DnsUpstream): String =
 private fun RulesSection(
     rules: List<RoutingRuleEntity>,
     ruleError: Boolean,
+    ruleValidating: Boolean,
+    ruleSaved: StateFlow<Boolean>,
     onClearError: () -> Unit,
+    onConsumeSaved: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onToggle: (RoutingRuleEntity, Boolean) -> Unit,
     onDelete: (Long) -> Unit,
@@ -629,7 +638,10 @@ private fun RulesSection(
     if (showAdd) {
         AddRuleDialog(
             ruleError = ruleError,
+            ruleValidating = ruleValidating,
+            ruleSaved = ruleSaved,
             onClearError = onClearError,
+            onConsumeSaved = onConsumeSaved,
             onAdd = onAdd,
             onAdded = { showAdd = false },
             onDismiss = { showAdd = false },
@@ -666,7 +678,10 @@ private fun ruleActionLabel(actionKey: String): String =
 @Composable
 private fun AddRuleDialog(
     ruleError: Boolean,
+    ruleValidating: Boolean,
+    ruleSaved: StateFlow<Boolean>,
     onClearError: () -> Unit,
+    onConsumeSaved: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onAdded: () -> Unit,
     onDismiss: () -> Unit,
@@ -678,6 +693,17 @@ private fun AddRuleDialog(
     // Engine rejection lands in the ViewModel flow after the dialog's own
     // synchronous check passed — merge the two so the indicator covers both.
     val showError = error || ruleError
+
+    // The dialog closes only when the engine check committed the row — an
+    // async rejection keeps it open with the error visible where it was
+    // entered. Dismiss stays allowed during validation (cancel wins).
+    val saved by ruleSaved.collectAsStateWithLifecycle()
+    LaunchedEffect(saved) {
+        if (saved) {
+            onConsumeSaved()
+            onAdded()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -766,13 +792,22 @@ private fun AddRuleDialog(
             TextButton(
                 onClick = {
                     if (onAdd(kind, pattern, action)) {
-                        onAdded()
+                        // Engine check runs async — onAdded() fires from
+                        // the ruleSaved LaunchedEffect once it commits.
                     } else {
                         error = true
                     }
                 },
+                enabled = !ruleValidating,
             ) {
-                Text(stringResource(R.string.routing_rules_add))
+                if (ruleValidating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text(stringResource(R.string.routing_rules_add))
+                }
             }
         },
         dismissButton = {

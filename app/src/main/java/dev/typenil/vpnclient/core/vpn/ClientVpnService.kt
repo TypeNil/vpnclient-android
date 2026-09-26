@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -1449,6 +1450,16 @@ class ClientVpnService :
                 override fun onCapabilitiesChanged(
                     network: Network,
                     caps: NetworkCapabilities,
+                ) {
+                    updateUnderlyingNetworks()
+                }
+
+                // IPv6 posture is read off LinkProperties (global v6
+                // address + ::/0 route) — they change on their own channel,
+                // so a caps-only subscription would miss an RA/route flip.
+                override fun onLinkPropertiesChanged(
+                    network: Network,
+                    props: LinkProperties,
                 ) {
                     updateUnderlyingNetworks()
                 }

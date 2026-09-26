@@ -40,6 +40,8 @@ data class RoutingUiState(
     val rules: List<RoutingRuleEntity> = emptyList(),
     /** The pending add failed — bad pattern or engine rejection. */
     val ruleError: Boolean = false,
+    /** An add's engine check is still running — the dialog must stay open. */
+    val ruleValidating: Boolean = false,
     /** A compiled-in setting changed while a session is alive. */
     val reconnectRecommended: Boolean = false,
     val sessionActive: Boolean = false,
@@ -57,6 +59,13 @@ class RoutingViewModel
         private val reconnectRecommended = MutableStateFlow(false)
         /** The pending add was rejected (bad pattern or engine check). */
         private val ruleError = MutableStateFlow(false)
+        /** True while a candidate rule is inside the engine check — the
+         *  dialog stays open so a rejection is seen where it was entered. */
+        private val ruleValidating = MutableStateFlow(false)
+        /** Signals the dialog that the pending add committed — it can close
+         *  only now. A StateFlow (not a one-shot event) so a dismissal on a
+         *  stale compose frame can't swallow the success. */
+        val ruleSaved = MutableStateFlow(false)
 
         val uiState: StateFlow<RoutingUiState> =
             combine(
@@ -68,6 +77,7 @@ class RoutingViewModel
                 reconnectRecommended,
                 routingRuleDao.observeAll(),
                 ruleError,
+                ruleValidating,
             ) { values ->
                 val routeMode = values[0] as RouteMode
                 val bypassLan = values[1] as Boolean
@@ -90,6 +100,7 @@ class RoutingViewModel
                     appliedDnsSummary = applied?.dnsProfileSummary,
                     rules = rules,
                     ruleError = values[7] as Boolean,
+                    ruleValidating = values[8] as Boolean,
                     reconnectRecommended = recommended,
                     sessionActive = state.hasLiveConfig(),
                 )
@@ -153,30 +164,37 @@ class RoutingViewModel
         ): Boolean {
             val canonical = RoutingRuleValidator.validatePattern(kind, pattern) ?: return false
             ruleError.value = false
+            ruleSaved.value = false
+            ruleValidating.value = true
             viewModelScope.launch {
-                val engineOk =
-                    ruleSetValidator.validateRules(
-                        listOf(
-                            RoutingRule(
-                                kind = kind,
-                                pattern = canonical,
-                                action = action,
+                try {
+                    val engineOk =
+                        ruleSetValidator.validateRules(
+                            listOf(
+                                RoutingRule(
+                                    kind = kind,
+                                    pattern = canonical,
+                                    action = action,
+                                ),
                             ),
+                        )
+                    if (!engineOk) {
+                        ruleError.value = true
+                        return@launch
+                    }
+                    routingRuleDao.insert(
+                        RoutingRuleEntity(
+                            kind = kind.key,
+                            pattern = canonical,
+                            action = action.key,
+                            orderIndex = routingRuleDao.nextOrderIndex(),
                         ),
                     )
-                if (!engineOk) {
-                    ruleError.value = true
-                    return@launch
+                    ruleSaved.value = true
+                    recommendReconnectIfSessionActive()
+                } finally {
+                    ruleValidating.value = false
                 }
-                routingRuleDao.insert(
-                    RoutingRuleEntity(
-                        kind = kind.key,
-                        pattern = canonical,
-                        action = action.key,
-                        orderIndex = routingRuleDao.nextOrderIndex(),
-                    ),
-                )
-                recommendReconnectIfSessionActive()
             }
             return true
         }
@@ -192,6 +210,12 @@ class RoutingViewModel
          *  and an engine rejection, cleared on the next input or success. */
         fun clearRuleError() {
             ruleError.value = false
+        }
+
+        /** Acknowledge [ruleSaved] after the dialog has closed — re-arms the
+         *  signal so the next add starts clean. */
+        fun consumeRuleSaved() {
+            ruleSaved.value = false
         }
 
         fun deleteRule(id: Long) {

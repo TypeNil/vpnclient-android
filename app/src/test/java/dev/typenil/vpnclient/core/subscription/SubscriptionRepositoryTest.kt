@@ -1235,4 +1235,83 @@ class SubscriptionRepositoryTest {
         assertTrue(nodeDao.nodes.isEmpty())
         assertTrue(subscriptionDao.subs.isEmpty())
     }
+
+    // ---- stale-result guard: two refreshes of the SAME subscription ----
+
+    @Test
+    fun `older success cannot overwrite a newer refresh's node set`() = runTest {
+        seedSubscription()
+        // A (seq 1) parks in validation; B (seq 2) completes first — the
+        // same URL, so the fetchedUrl check cannot tell them apart. Only the
+        // attempt sequence can: A's late candidate must be dropped.
+        server.enqueue(MockResponse().setBody(uri("stale.example.com", "Old")))
+        server.enqueue(MockResponse().setBody(uri("fresh.example.com", "New")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var outcomeA: Result<RefreshOutcome>? = null
+        var outcomeB: Result<RefreshOutcome>? = null
+        val jobA = launch { outcomeA = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // Swap in a fresh deferred for B before it reaches validate().
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        val jobB = launch { outcomeB = repository.refresh(1) }
+        parkInValidate(expectedCalls = 2)
+
+        // Finish B first — it commits the newer node set.
+        gateB.complete(Unit)
+        jobB.join()
+        assertTrue(outcomeB!!.isSuccess)
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+
+        // A completes later; its stale candidate must NOT overwrite B's.
+        gateA.complete(Unit)
+        jobA.join()
+
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(1, subscriptionDao.successCalls)
+        assertTrue(outcomeA!!.isFailure)
+    }
+
+    @Test
+    fun `older failure cannot overwrite a newer refresh's success`() = runTest {
+        seedSubscription()
+        // A (seq 1) parks in validation and is then made to fail; B (seq 2)
+        // commits first. A's markAttempt must not write lastError over B's
+        // markSuccess.
+        server.enqueue(MockResponse().setBody(uri("stale.example.com", "Old")))
+        server.enqueue(MockResponse().setBody(uri("fresh.example.com", "New")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var outcomeA: Result<RefreshOutcome>? = null
+        var outcomeB: Result<RefreshOutcome>? = null
+        val jobA = launch { outcomeA = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        val jobB = launch { outcomeB = repository.refresh(1) }
+        parkInValidate(expectedCalls = 2)
+
+        gateB.complete(Unit)
+        jobB.join()
+        assertTrue(outcomeB!!.isSuccess)
+        assertNull(subscriptionDao.subs[1]!!.lastError)
+
+        // A's parked validation now fails — a late error from an older
+        // attempt must not overwrite the newer success's lastError=NULL.
+        validator.failure = EngineError.InvalidConfig("stale")
+        gateA.complete(Unit)
+        jobA.join()
+
+        assertTrue(outcomeA!!.isFailure)
+        assertNull(subscriptionDao.subs[1]!!.lastError)
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(1, subscriptionDao.successCalls)
+        // The stale attempt was dropped before any markAttempt write.
+        assertEquals(0, subscriptionDao.attemptCalls)
+    }
 }
