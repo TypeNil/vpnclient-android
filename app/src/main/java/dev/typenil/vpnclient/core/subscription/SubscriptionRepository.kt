@@ -193,14 +193,14 @@ class SubscriptionRepository
                 } catch (e: Exception) {
                     // Stale attempt: a newer refresh already ran — don't
                     // overwrite its lastError with this one's late failure.
+                    // Superseded (not NotFound): the periodic worker must
+                    // treat this as a skipped run, never as a deleted row.
                     return if (isStaleAttempt(id, seq)) {
-                        Result.failure(e as? SubscriptionError
-                            ?: SubscriptionError.ParseFailed(e.javaClass.simpleName))
+                        Result.failure(SubscriptionError.Superseded)
                     } else {
                         lockFor(id).withLock {
                             if (isStaleAttempt(id, seq)) {
-                                Result.failure(e as? SubscriptionError
-                                    ?: SubscriptionError.ParseFailed(e.javaClass.simpleName))
+                                Result.failure(SubscriptionError.Superseded)
                             } else {
                                 Result.failure(failRefresh(id, attemptAt, e))
                             }
@@ -215,7 +215,7 @@ class SubscriptionRepository
                     // A newer refresh is in flight (or already committed) —
                     // this candidate must not overwrite its node set.
                     SecureLog.i(TAG, "dropping stale refresh result sub=$id")
-                    return@withLock Result.failure(SubscriptionError.NotFound)
+                    return@withLock Result.failure(SubscriptionError.Superseded)
                 }
                 try {
                     commitRefresh(id, prepared)
@@ -234,6 +234,13 @@ class SubscriptionRepository
          */
         private suspend fun refreshLocked(id: Long): Result<RefreshOutcome> {
             val attemptAt = Instant.now().toEpochMilli()
+            // Take the same generation ticket refresh() takes: a caller that
+            // reached here through the stale re-pass already proved the URL
+            // match, but an even-newer refresh may have ticketed meanwhile.
+            val seq = nextRefreshSeq(id)
+            if (isStaleAttempt(id, seq)) {
+                return Result.failure(SubscriptionError.Superseded)
+            }
             return try {
                 commitRefresh(id, prepareRefresh(id, attemptAt))
             } catch (e: CancellationException) {
@@ -995,6 +1002,7 @@ class SubscriptionRepository
                 is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"
                 is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
                 is SubscriptionError.NotFound -> "subscription removed"
+                is SubscriptionError.Superseded -> "superseded"
             }
 
         private fun SubscriptionEntity.toDomain(): SubscriptionProfile =

@@ -14,6 +14,7 @@ import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.RoutingRuleSetValidator
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -66,6 +67,9 @@ class RoutingViewModel
          *  only now. A StateFlow (not a one-shot event) so a dismissal on a
          *  stale compose frame can't swallow the success. */
         val ruleSaved = MutableStateFlow(false)
+        /** The in-flight add coroutine — dismiss cancels it so a completed
+         *  engine check can't insert a rule the user already cancelled. */
+        private var pendingAddJob: Job? = null
 
         val uiState: StateFlow<RoutingUiState> =
             combine(
@@ -166,7 +170,9 @@ class RoutingViewModel
             ruleError.value = false
             ruleSaved.value = false
             ruleValidating.value = true
-            viewModelScope.launch {
+            pendingAddJob?.cancel()
+            pendingAddJob =
+                viewModelScope.launch {
                 try {
                     val engineOk =
                         ruleSetValidator.validateRules(
@@ -199,6 +205,16 @@ class RoutingViewModel
             return true
         }
 
+        /** Cancel the pending add — the dialog was dismissed mid-check, so
+         *  a late engine verdict must not insert a rule the user abandoned. */
+        fun cancelRuleAdd() {
+            pendingAddJob?.cancel()
+            pendingAddJob = null
+            ruleValidating.value = false
+            ruleError.value = false
+            ruleSaved.value = false
+        }
+
         fun updateRule(rule: RoutingRuleEntity) {
             viewModelScope.launch {
                 routingRuleDao.update(rule)
@@ -216,6 +232,7 @@ class RoutingViewModel
          *  signal so the next add starts clean. */
         fun consumeRuleSaved() {
             ruleSaved.value = false
+            pendingAddJob = null
         }
 
         fun deleteRule(id: Long) {

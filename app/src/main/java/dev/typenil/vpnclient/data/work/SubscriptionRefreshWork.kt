@@ -84,6 +84,11 @@ class SubscriptionRefreshWorker(
                 .cancelUniqueWork(WORK_NAME_PREFIX + id)
             return Result.success()
         }
+        if (error is SubscriptionError.Superseded) {
+            // A newer in-flight refresh owns this row — nothing was written
+            // and nothing is wrong: skip this run, keep the periodic job.
+            return Result.success()
+        }
         val transient = error is SubscriptionError.Network ||
             error is SubscriptionError.Timeout
         return if (transient && runAttemptCount < MAX_ATTEMPTS - 1) {

@@ -87,4 +87,9 @@ sealed class SubscriptionError : Exception() {
     data object NotFound : SubscriptionError() {
         override val message = "subscription no longer exists"
     }
+    /** A newer refresh of the same subscription superseded this attempt —
+     *  not an error: nothing was written, the row and its schedule live on. */
+    data object Superseded : SubscriptionError() {
+        override val message = "superseded by a newer refresh"
+    }
 }

@@ -1314,4 +1314,75 @@ class SubscriptionRepositoryTest {
         // The stale attempt was dropped before any markAttempt write.
         assertEquals(0, subscriptionDao.attemptCalls)
     }
+
+    @Test
+    fun `superseded refresh does not look like a deleted subscription`() = runTest {
+        // Regression: a dropped stale result used to surface as NotFound —
+        // the periodic Worker would read that as "row deleted" and cancel
+        // the subscription's recurring job. Superseded must be distinct.
+        seedSubscription()
+        server.enqueue(MockResponse().setBody(uri("stale.example.com", "Old")))
+        server.enqueue(MockResponse().setBody(uri("fresh.example.com", "New")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var outcomeA: Result<RefreshOutcome>? = null
+        var outcomeB: Result<RefreshOutcome>? = null
+        val jobA = launch { outcomeA = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        val jobB = launch { outcomeB = repository.refresh(1) }
+        parkInValidate(expectedCalls = 2)
+        gateB.complete(Unit)
+        jobB.join()
+        assertTrue(outcomeB!!.isSuccess)
+
+        gateA.complete(Unit)
+        jobA.join()
+
+        assertTrue(outcomeA!!.isFailure)
+        // The stale result must not be NotFound — that error means "row
+        // deleted" and the WorkManager consumer cancels the periodic job.
+        assertEquals(SubscriptionError.Superseded, outcomeA!!.exceptionOrNull())
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+    }
+
+    @Test
+    fun `same-url editUrl supersedes an in-flight refresh`() = runTest {
+        // A refresh tickets seq=1 and parks in validation; an editUrl to the
+        // same URL delegates to refreshLocked which must also ticket — the
+        // parked refresh then sees a newer seq and drops its candidate.
+        seedSubscription()
+        server.enqueue(MockResponse().setBody(uri("stale.example.com", "Old")))
+        server.enqueue(MockResponse().setBody(uri("fresh.example.com", "New")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var outcomeA: Result<RefreshOutcome>? = null
+        var outcomeB: Result<RefreshOutcome>? = null
+        val jobA = launch { outcomeA = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // same-URL editUrl: goes through refreshLocked — before the fix it
+        // took no ticket, so A's late commit would overwrite its node set.
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        val jobB = launch { outcomeB = repository.editUrl(1, subscriptionDao.subs[1]!!.url) }
+        parkInValidate(expectedCalls = 2)
+
+        gateB.complete(Unit)
+        jobB.join()
+        assertTrue(outcomeB!!.isSuccess)
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+
+        gateA.complete(Unit)
+        jobA.join()
+        assertTrue(outcomeA!!.isFailure)
+        assertEquals(SubscriptionError.Superseded, outcomeA!!.exceptionOrNull())
+        assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
+        // A's late failure after editUrl's success must not write lastError.
+        assertNull(subscriptionDao.subs[1]!!.lastError)
+    }
 }

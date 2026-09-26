@@ -160,6 +160,7 @@ fun RoutingScreen(
                 ruleValidating = ui.ruleValidating,
                 ruleSaved = viewModel.ruleSaved,
                 onClearError = viewModel::clearRuleError,
+                onCancelAdd = viewModel::cancelRuleAdd,
                 onConsumeSaved = viewModel::consumeRuleSaved,
                 onAdd = viewModel::addRule,
                 onToggle = viewModel::setRuleEnabled,
@@ -571,6 +572,7 @@ private fun RulesSection(
     ruleValidating: Boolean,
     ruleSaved: StateFlow<Boolean>,
     onClearError: () -> Unit,
+    onCancelAdd: () -> Unit,
     onConsumeSaved: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onToggle: (RoutingRuleEntity, Boolean) -> Unit,
@@ -636,11 +638,12 @@ private fun RulesSection(
         }
     }
     if (showAdd) {
-        AddRuleDialog(
+            AddRuleDialog(
             ruleError = ruleError,
             ruleValidating = ruleValidating,
             ruleSaved = ruleSaved,
             onClearError = onClearError,
+            onCancelAdd = onCancelAdd,
             onConsumeSaved = onConsumeSaved,
             onAdd = onAdd,
             onAdded = { showAdd = false },
@@ -681,6 +684,7 @@ private fun AddRuleDialog(
     ruleValidating: Boolean,
     ruleSaved: StateFlow<Boolean>,
     onClearError: () -> Unit,
+    onCancelAdd: () -> Unit,
     onConsumeSaved: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onAdded: () -> Unit,
@@ -706,7 +710,11 @@ private fun AddRuleDialog(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            onCancelAdd()
+            onClearError()
+            onDismiss()
+        },
         title = { Text(stringResource(R.string.routing_rules_add)) },
         text = {
             Column {
@@ -812,6 +820,11 @@ private fun AddRuleDialog(
         },
         dismissButton = {
             TextButton(onClick = {
+                // A dismissed dialog abandons the pending add: cancel the
+                // in-flight engine check so a late verdict can't insert the
+                // rule behind the user's back, and reset the error/saved
+                // flags so a reopened dialog starts clean.
+                onCancelAdd()
                 onClearError()
                 onDismiss()
             }) {
