@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.core.subscription
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.core.subscription.model.RefreshOutcome
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -1074,5 +1076,163 @@ class SubscriptionRepositoryTest {
         assertTrue(result.exceptionOrNull() is SubscriptionError.ConfigRejected)
         assertEquals(originalUrl, subscriptionDao.subs[1]!!.url)
         assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
+    }
+
+    // ---- lock granularity: the slow phase must not hold a global lock ----
+
+    /** Parks the current validate() call until completed — phase-1 work that
+     *  the old global mutex held for a whole refresh. */
+    private suspend fun TestScope.parkInValidate(expectedCalls: Int) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (validator.calls < expectedCalls && System.currentTimeMillis() < deadline) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+        }
+        assertEquals(expectedCalls, validator.calls)
+    }
+
+    @Test
+    fun `pref toggle completes while another subscription refresh is in flight`() = runTest {
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        val node2 = nodeEntity(uri("other.example.com", "B"), 2)
+        nodeDao.nodes[node2.id] = node2
+        nodePreferenceDao.liveNodeIds = setOf(node2.id)
+
+        validator.gate = CompletableDeferred()
+        var refreshOutcome: Result<RefreshOutcome>? = null
+        val refreshJob = launch { refreshOutcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // A pref toggle on the OTHER subscription's node must complete while
+        // sub 1's refresh is parked — the old global mutex blocked it here.
+        val toggle = launch { repository.setNodeFavorite(node2.id, true) }
+        val toggleDeadline = System.currentTimeMillis() + 2_000
+        while (toggle.isActive && System.currentTimeMillis() < toggleDeadline) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+        }
+        assertFalse("pref toggle blocked by another subscription's refresh", toggle.isActive)
+        assertTrue(nodePreferenceDao.prefs[node2.id]?.isFavorite == true)
+
+        validator.gate!!.complete(Unit)
+        refreshJob.join()
+        assertTrue(refreshOutcome!!.isSuccess)
+        assertEquals(listOf("a.example.com"), nodeDao.forSubscription(1).map { it.server })
+        // The toggle's pref row survived the refresh's orphan pruning.
+        assertTrue(nodePreferenceDao.prefs[node2.id]?.isFavorite == true)
+    }
+
+    @Test
+    fun `concurrent refreshes of different subscriptions both commit`() = runTest {
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        // Identical bodies: MockWebServer dispatch order between the two
+        // in-flight requests is not deterministic, and node ids are salted
+        // per subscription anyway.
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        // Both refreshes must reach validation concurrently — under the old
+        // global mutex the second one could not even start fetching until
+        // the first one had fully committed.
+        validator.gate = CompletableDeferred()
+        var result1: Result<RefreshOutcome>? = null
+        var result2: Result<RefreshOutcome>? = null
+        val job1 = launch { result1 = repository.refresh(1) }
+        val job2 = launch { result2 = repository.refresh(2) }
+        parkInValidate(expectedCalls = 2)
+
+        validator.gate!!.complete(Unit)
+        job1.join()
+        job2.join()
+        assertTrue(result1!!.isSuccess)
+        assertTrue(result2!!.isSuccess)
+        assertEquals(listOf("a.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(listOf("a.example.com"), nodeDao.forSubscription(2).map { it.server })
+        assertEquals(2, subscriptionDao.successCalls)
+    }
+
+    @Test
+    fun `stale refresh refetches instead of committing after a url change`() = runTest {
+        seedSubscription()
+        // 1: the stale refresh's fetch (row still points at /sub),
+        // 2: editUrl's fetch of the new location,
+        // 3: the stale refresh's re-pass under the lock after it notices the
+        //    url changed mid-flight.
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        server.enqueue(MockResponse().setBody(uri("c.example.com", "C")))
+        server.enqueue(MockResponse().setBody(uri("c.example.com", "C")))
+
+        validator.gate = CompletableDeferred()
+        var staleOutcome: Result<RefreshOutcome>? = null
+        var editOutcome: Result<RefreshOutcome>? = null
+        val staleJob = launch { staleOutcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // editUrl takes the subscription lock and holds it across its own
+        // fetch + commit — the parked refresh's phase 2 can only run after
+        // the url has been repointed.
+        val editJob = launch { editOutcome = repository.editUrl(1, server.url("/sub2").toString()) }
+        parkInValidate(expectedCalls = 2)
+
+        validator.gate!!.complete(Unit)
+        editJob.join()
+        staleJob.join()
+
+        assertTrue(editOutcome!!.isSuccess)
+        assertTrue(staleOutcome!!.isSuccess)
+        // The stale candidate (a.example.com) never committed: the final node
+        // set comes from editUrl / the re-pass, both fetched from the new url.
+        assertEquals(listOf("c.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(server.url("/sub2").toString(), subscriptionDao.subs[1]!!.url)
+        // Exactly one markSuccess (the re-pass) and one URL write (editUrl).
+        assertEquals(1, subscriptionDao.successCalls)
+        assertEquals(1, subscriptionDao.urlSuccessCalls)
+        // Third validation call = the re-pass really ran.
+        assertEquals(3, validator.calls)
+    }
+
+    @Test
+    fun `remove during an in-flight refresh refuses the late commit`() = runTest {
+        seedSubscription()
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        val old = nodeEntity(uri("old.example.com", "Old"), 1)
+        nodeDao.nodes[old.id] = old
+
+        validator.gate = CompletableDeferred()
+        var refreshOutcome: Result<RefreshOutcome>? = null
+        val refreshJob = launch { refreshOutcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // remove() must not wait for the in-flight refresh — the old global
+        // mutex kept it blocked until the commit finished.
+        var removed = false
+        val removeJob = launch {
+            repository.remove(1)
+            removed = true
+        }
+        val removeDeadline = System.currentTimeMillis() + 2_000
+        while (!removed && System.currentTimeMillis() < removeDeadline) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+        }
+        assertTrue("remove blocked by an in-flight refresh", removed)
+        assertTrue(subscriptionDao.subs.isEmpty())
+        assertTrue(nodeDao.nodes.isEmpty())
+        assertEquals(listOf(1L), scheduler.cancelled)
+
+        // The parked refresh resumes into a world without its row: the
+        // phase-2 re-read reports NotFound and nothing is written — no node
+        // rows can be resurrected against the deleted (reusable) id.
+        validator.gate!!.complete(Unit)
+        refreshJob.join()
+        assertTrue(refreshOutcome!!.isFailure)
+        assertEquals(SubscriptionError.NotFound, refreshOutcome!!.exceptionOrNull())
+        assertEquals(0, subscriptionDao.successCalls)
+        assertEquals(0, nodeDao.replaceCalls)
+        assertTrue(nodeDao.nodes.isEmpty())
+        assertTrue(subscriptionDao.subs.isEmpty())
     }
 }
