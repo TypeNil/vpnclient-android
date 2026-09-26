@@ -85,3 +85,10 @@ SOCKS5 on the dev machine, real forwarding to the internet):
   so end-to-end over LTE wasn't provable with this rig. The tunnel stayed
   up and recovered on Wi-Fi return (`UnderlyingNetworks=[779]`).
   Exit-IP masking to a remote node still needs a real dual-stack upstream.
+
+**Outstanding network-compat scenario (not a blocker for the pushed work):**
+real traffic through a remote node over an IPv6-only cellular underlay with
+a dual-stack upstream — required before claiming full network-mode compat.
+
+The ad-hoc LAN `socks://` node + local subscription HTTP server used for this
+run were torn down after validation; they're not committed.
