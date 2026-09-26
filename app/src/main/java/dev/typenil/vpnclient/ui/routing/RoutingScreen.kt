@@ -153,6 +153,8 @@ fun RoutingScreen(
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             RulesSection(
                 rules = ui.rules,
+                ruleError = ui.ruleError,
+                onClearError = viewModel::clearRuleError,
                 onAdd = viewModel::addRule,
                 onToggle = viewModel::setRuleEnabled,
                 onDelete = viewModel::deleteRule,
@@ -559,6 +561,8 @@ private fun dnsUpstreamLabel(upstream: DnsUpstream): String =
 @Composable
 private fun RulesSection(
     rules: List<RoutingRuleEntity>,
+    ruleError: Boolean,
+    onClearError: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onToggle: (RoutingRuleEntity, Boolean) -> Unit,
     onDelete: (Long) -> Unit,
@@ -624,6 +628,8 @@ private fun RulesSection(
     }
     if (showAdd) {
         AddRuleDialog(
+            ruleError = ruleError,
+            onClearError = onClearError,
             onAdd = onAdd,
             onAdded = { showAdd = false },
             onDismiss = { showAdd = false },
@@ -654,9 +660,13 @@ private fun ruleActionLabel(actionKey: String): String =
     )
 
 /** Kind picker → validated pattern → action. The ViewModel's validate is the
- *  gate; an invalid input keeps the dialog open with an error. */
+ *  gate; an invalid input keeps the dialog open with an error. [ruleError]
+ *  also covers an engine rejection of the pending add — the dialog stays
+ *  open until the user fixes or cancels. */
 @Composable
 private fun AddRuleDialog(
+    ruleError: Boolean,
+    onClearError: () -> Unit,
     onAdd: (RoutingRule.Kind, String, RoutingRule.Action) -> Boolean,
     onAdded: () -> Unit,
     onDismiss: () -> Unit,
@@ -665,6 +675,9 @@ private fun AddRuleDialog(
     var action by remember { mutableStateOf(RoutingRule.Action.PROXY) }
     var pattern by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
+    // Engine rejection lands in the ViewModel flow after the dialog's own
+    // synchronous check passed — merge the two so the indicator covers both.
+    val showError = error || ruleError
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -683,7 +696,11 @@ private fun AddRuleDialog(
                                 Modifier
                                     .selectable(
                                         selected = k == kind,
-                                        onClick = { kind = k },
+                                        onClick = {
+                                            kind = k
+                                            error = false
+                                            onClearError()
+                                        },
                                         role = Role.RadioButton,
                                     ).padding(end = 8.dp),
                         ) {
@@ -697,6 +714,7 @@ private fun AddRuleDialog(
                     onValueChange = {
                         pattern = it
                         error = false
+                        onClearError()
                     },
                     placeholder = {
                         Text(
@@ -709,11 +727,11 @@ private fun AddRuleDialog(
                             ),
                         )
                     },
-                    isError = error,
+                    isError = showError,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (error) {
+                if (showError) {
                     Text(
                         stringResource(R.string.routing_rule_invalid),
                         style = MaterialTheme.typography.bodySmall,
@@ -758,7 +776,10 @@ private fun AddRuleDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = {
+                onClearError()
+                onDismiss()
+            }) {
                 Text(stringResource(R.string.common_cancel))
             }
         },

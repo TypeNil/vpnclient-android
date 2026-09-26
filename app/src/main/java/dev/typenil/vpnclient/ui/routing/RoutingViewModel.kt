@@ -7,10 +7,12 @@ import dev.typenil.vpnclient.core.engine.DnsMode
 import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.RoutingRule
+import dev.typenil.vpnclient.core.engine.RoutingRuleValidator
 import dev.typenil.vpnclient.data.db.RoutingRuleDao
 import dev.typenil.vpnclient.data.db.RoutingRuleEntity
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
+import dev.typenil.vpnclient.data.RoutingRuleSetValidator
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,6 +38,8 @@ data class RoutingUiState(
     val appliedDnsSummary: String? = null,
     /** User routing rules in order — compiled in ahead of the mode rules. */
     val rules: List<RoutingRuleEntity> = emptyList(),
+    /** The pending add failed — bad pattern or engine rejection. */
+    val ruleError: Boolean = false,
     /** A compiled-in setting changed while a session is alive. */
     val reconnectRecommended: Boolean = false,
     val sessionActive: Boolean = false,
@@ -48,8 +52,11 @@ class RoutingViewModel
         private val settings: SettingsRepository,
         private val connectionManager: ConnectionManager,
         private val routingRuleDao: RoutingRuleDao,
+        private val ruleSetValidator: RoutingRuleSetValidator,
     ) : ViewModel() {
         private val reconnectRecommended = MutableStateFlow(false)
+        /** The pending add was rejected (bad pattern or engine check). */
+        private val ruleError = MutableStateFlow(false)
 
         val uiState: StateFlow<RoutingUiState> =
             combine(
@@ -60,6 +67,7 @@ class RoutingViewModel
                 connectionManager.state,
                 reconnectRecommended,
                 routingRuleDao.observeAll(),
+                ruleError,
             ) { values ->
                 val routeMode = values[0] as RouteMode
                 val bypassLan = values[1] as Boolean
@@ -81,6 +89,7 @@ class RoutingViewModel
                     appliedBypassLan = applied?.bypassLan,
                     appliedDnsSummary = applied?.dnsProfileSummary,
                     rules = rules,
+                    ruleError = values[7] as Boolean,
                     reconnectRecommended = recommended,
                     sessionActive = state.hasLiveConfig(),
                 )
@@ -130,18 +139,39 @@ class RoutingViewModel
         // ---- user routing rules -------------------------------------------
 
         /** Append a validated rule at the end of the list — a compile-in
-         *  change, so a live session gets the reconnect hint. */
+         *  change, so a live session gets the reconnect hint.
+         *
+         *  The pattern is validated synchronously; the engine check runs in
+         *  a coroutine and the row is inserted only after it passes, so a
+         *  rejected rule never reaches Room. [ruleError] (same indicator as
+         *  a bad pattern) is raised on failure and cleared on the next
+         *  attempt or success. */
         fun addRule(
             kind: RoutingRule.Kind,
             pattern: String,
             action: RoutingRule.Action,
         ): Boolean {
-            val p = validatePattern(kind, pattern) ?: return false
+            val canonical = RoutingRuleValidator.validatePattern(kind, pattern) ?: return false
+            ruleError.value = false
             viewModelScope.launch {
+                val engineOk =
+                    ruleSetValidator.validateRules(
+                        listOf(
+                            RoutingRule(
+                                kind = kind,
+                                pattern = canonical,
+                                action = action,
+                            ),
+                        ),
+                    )
+                if (!engineOk) {
+                    ruleError.value = true
+                    return@launch
+                }
                 routingRuleDao.insert(
                     RoutingRuleEntity(
                         kind = kind.key,
-                        pattern = p,
+                        pattern = canonical,
                         action = action.key,
                         orderIndex = routingRuleDao.nextOrderIndex(),
                     ),
@@ -158,6 +188,12 @@ class RoutingViewModel
             }
         }
 
+        /** The add dialog's error indicator — same signal for a bad pattern
+         *  and an engine rejection, cleared on the next input or success. */
+        fun clearRuleError() {
+            ruleError.value = false
+        }
+
         fun deleteRule(id: Long) {
             viewModelScope.launch {
                 routingRuleDao.delete(id)
@@ -170,56 +206,6 @@ class RoutingViewModel
             enabled: Boolean,
         ) {
             updateRule(rule.copy(isEnabled = enabled))
-        }
-
-        /** Reject anything that isn't a compilable matcher — the value is
-         *  stored verbatim and read back into the engine config, so a bad
-         *  spec would fail the next connect inside checkConfig. Returns the
-         *  canonical pattern or null. */
-        private fun validatePattern(
-            kind: RoutingRule.Kind,
-            raw: String,
-        ): String? {
-            val s = raw.trim().lowercase()
-            if (s.isEmpty()) return null
-            return when (kind) {
-                // domain_suffix: a literal domain or leading-dot suffix. Strip
-                // a leading "*." so "*.example.com" stores as "example.com".
-                RoutingRule.Kind.DOMAIN -> {
-                    val host = s.removePrefix("*.").removeSuffix(".")
-                    val valid = host.isNotEmpty() && host.length <= 253 &&
-                        host.split('.').all { label ->
-                            label.isNotEmpty() && label.length <= 63 &&
-                                label.all { it.isLetterOrDigit() || it == '-' } &&
-                                !label.startsWith('-') && !label.endsWith('-')
-                        }
-                    host.takeIf { valid && it.contains('.') }
-                }
-                // CIDR notation only — a bare IP gets its /32 (v4) or /128
-                // (v6) appended so the user can type either.
-                RoutingRule.Kind.IP_CIDR -> {
-                    val withPrefix =
-                        if ('/' in s) {
-                            s
-                        } else {
-                            s + if (':' in s) "/128" else "/32"
-                        }
-                    val host = withPrefix.substringBefore('/')
-                    val bits = withPrefix.substringAfter('/').toIntOrNull() ?: return null
-                    val max = if (':' in host) 128 else 32
-                    val validIp = runCatching {
-                        java.net.InetAddress.getByName(host)
-                    }.getOrNull() != null && host.all { it.isDigit() || it == '.' || it == ':' }
-                    withPrefix.takeIf { validIp && bits in 0..max }
-                }
-                // A single port or a range "8000:8080".
-                RoutingRule.Kind.PORT -> {
-                    val parts = s.split(':')
-                    val ok = parts.isNotEmpty() && parts.size <= 2 &&
-                        parts.all { it.toIntOrNull() in 1..65535 }
-                    s.takeIf { ok }
-                }
-            }
         }
 
         /** Baked into the tun inbound's route table at compile/openTun time. */
