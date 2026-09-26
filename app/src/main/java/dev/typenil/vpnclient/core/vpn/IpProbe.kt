@@ -74,11 +74,20 @@ class IpProbe
                                 error = "http ${response.code}",
                             )
                         }
-                        val body =
-                            response.body
-                                ?.string()
-                                .orEmpty()
-                                .trim()
+                        // Bounded read (~256 bytes): echo endpoints return a
+                        // short address line, so there is no reason to buffer
+                        // a hostile/unbounded body into memory. One read is
+                        // enough for ipify-style responses; MAX_IP_LEN trims
+                        // any trailing garbage afterwards. (minSdk 26 — no
+                        // readNBytes without desugaring.) The response's use
+                        // block closes the body; closing the stream again is
+                        // a no-op.
+                        val bytes = response.body?.byteStream()?.use { stream ->
+                            val buf = ByteArray(256)
+                            val n = stream.read(buf)
+                            if (n < 0) ByteArray(0) else buf.copyOf(n)
+                        }
+                        val body = bytes?.let { String(it, Charsets.UTF_8) }.orEmpty().trim()
                         val ip = body.takeIf { isPlausibleIp(it) }
                         IpCheckResult(
                             ip = ip,
