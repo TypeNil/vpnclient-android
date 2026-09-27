@@ -276,10 +276,10 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
             .padding(start = 76.dp, end = 18.dp, top = 14.dp, bottom = 14.dp)) {
             Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Black, fontSize = 20.sp,
                 letterSpacing = 0.5.sp)
-            subtitle?.let {
-                Text(it, color = colors.onActionSurface.copy(alpha = .7f), fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 2.dp))
-            }
+            // NBSP placeholder keeps the line height so the card doesn't
+            // jump when the subtitle appears/disappears between states.
+            Text(subtitle ?: "\u00A0", color = colors.onActionSurface.copy(alpha = .7f), fontSize = 12.sp,
+                modifier = Modifier.padding(top = 2.dp))
         }
         // Companion perches on the button's top-left edge, overlapping upward.
         Image(painterResource(companion), contentDescription = null,
