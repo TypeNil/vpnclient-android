@@ -1,11 +1,7 @@
-# VPN lifecycle smoke test — connect → live telemetry → disconnect.
+# VPN lifecycle smoke test (EN locale) — connect → live telemetry → disconnect.
 # Requires: a device with at least one subscription, a selected node,
 # VPN consent already granted, and the VPN DISCONNECTED at launch.
 # Run: maestro test maestro/smoke.yaml
-# Selector note: labels nest as substrings ("Connect" ⊂ "Connected" ⊂
-# "Disconnected" ⊂ "Disconnecting…"), so waits must anchor on strings that
-# exist in exactly one state — "Download" (stats live only when Connected)
-# and "Disconnected" (the Idle status text itself).
 appId: dev.typenil.vpnclient
 name: VPN connect/disconnect smoke test
 tags:
@@ -13,8 +9,8 @@ tags:
   - android
 ---
 - launchApp
-- assertVisible: "Disconnected"
-- tapOn: "Connect"
+- assertVisible: "Start connection"
+- tapOn: "Start connection"
 # "Download" only exists once Connected with live stats — waiting on it
 # covers the tunnel handshake AND first telemetry in one step.
 - extendedWaitUntil:
@@ -24,5 +20,5 @@ tags:
 - assertVisible: "Connections"
 - tapOn: "Disconnect"
 - extendedWaitUntil:
-    visible: "Disconnected"
+    visible: "Start connection"
     timeout: 15000
