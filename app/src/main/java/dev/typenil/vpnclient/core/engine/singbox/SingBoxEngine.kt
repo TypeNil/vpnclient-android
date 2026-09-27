@@ -71,6 +71,22 @@ import kotlinx.coroutines.withContext
  * TUN fd provisioning flows back through [EnginePlatform] (implemented by the
  * VpnService) when the core calls [PlatformInterface.openTun].
  */
+internal class TrafficReadiness {
+    private val ready = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Latches per session: once the core reports traffic available, later
+     *  statuses stay valid even when the flag drops (idle/resume windows) —
+     *  dropping them would blank the chart and flash "unavailable". */
+    fun accept(available: Boolean): Boolean {
+        if (available) ready.set(true)
+        return ready.get()
+    }
+
+    fun reset() {
+        ready.set(false)
+    }
+}
+
 class SingBoxEngine(
     private val context: Context,
     private val platform: EnginePlatform,
@@ -109,6 +125,7 @@ class SingBoxEngine(
     /** One-shot latch for [PlatformBridge.autoDetectInterfaceControl] — the
      *  first protect() failure fails the session; later ones stay quiet. */
     private val protectFailureReported = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val trafficReadiness = TrafficReadiness()
 
     private val _stats = MutableSharedFlow<TrafficStats>(replay = 1)
     private val _events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 64)
@@ -141,6 +158,7 @@ class SingBoxEngine(
             try {
                 closing = false
                 protectFailureReported.set(false)
+                trafficReadiness.reset()
                 networkMonitor.start()
                 val overrides = OverrideOptions().apply {
                     if (config.includedPackages.isNotEmpty()) {
@@ -435,9 +453,11 @@ class SingBoxEngine(
         }
 
         override fun writeStatus(message: StatusMessage) {
-            // Counters are meaningless until the core says they're
-            // available — emitting them anyway shows fake "0 B/s" on Home.
-            if (!message.trafficAvailable) return
+            // trafficAvailable is a readiness flag, not per-message validity:
+            // pre-readiness zeros are hidden, but once the core has reported
+            // traffic this session, every later status keeps the chart fed —
+            // dropping idle/resume snapshots blanks it for the 10s window.
+            if (!trafficReadiness.accept(message.trafficAvailable)) return
             _stats.tryEmit(
                 TrafficStats(
                     uplinkBytesPerSec = message.uplink,

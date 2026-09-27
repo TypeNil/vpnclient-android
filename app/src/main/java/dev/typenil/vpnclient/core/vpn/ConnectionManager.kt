@@ -493,7 +493,7 @@ class ConnectionManager
                         // evidence that a session is alive.
                         val current = _state.value
                         if (current is VpnConnectionState.Connected) {
-                            _state.value = current.copy(stats = stats)
+                            _state.value = current.copy(stats = stats, statsReceivedAtNanos = System.nanoTime())
                         }
                     }
                 }

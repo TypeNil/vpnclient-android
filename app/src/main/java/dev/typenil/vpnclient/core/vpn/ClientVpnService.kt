@@ -320,8 +320,8 @@ class ClientVpnService :
         // that arrives while already Connected→Reconnecting.
         scope.launch {
             settings.perAppPolicy
-                .drop(1)
                 .distinctUntilChanged()
+                .drop(1)
                 // Don't gate on Connected: a change landing during
                 // network-loss Reconnecting must still reach
                 // requestTunnelRebuild, which parks it in rebuildPending

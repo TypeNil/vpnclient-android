@@ -278,6 +278,22 @@ class ConnectionManagerTest {
         }
 
     @Test
+    fun `identical status arrivals refresh receipt time`() =
+        testScope.runTest {
+            connectToRunning()
+            val idle = stats(0)
+            engine.statsFlow.emit(idle)
+            runCurrent()
+            val first = manager.state.value as VpnConnectionState.Connected
+            assertTrue(first.statsReceivedAtNanos > 0L)
+            engine.statsFlow.emit(idle)
+            runCurrent()
+            val second = manager.state.value as VpnConnectionState.Connected
+            assertEquals(first.stats, second.stats)
+            assertTrue(second.statsReceivedAtNanos > first.statsReceivedAtNanos)
+        }
+
+    @Test
     fun `late stats after Error do not resurrect Connected`() =
         testScope.runTest {
             val generation = connectToRunning()

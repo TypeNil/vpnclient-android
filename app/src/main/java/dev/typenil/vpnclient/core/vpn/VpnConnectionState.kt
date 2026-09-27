@@ -28,6 +28,8 @@ sealed interface VpnConnectionState {
         val node: NodeSummary,
         val since: Instant,
         val stats: TrafficStats?,
+        /** Monotonic receipt time of the last accepted status snapshot; zero until one arrives. */
+        val statsReceivedAtNanos: Long = 0L,
     ) : VpnConnectionState
 
     /** Tunnel dropped or a recoverable change happened — reconnecting. */
