@@ -19,9 +19,9 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
-/** A structurally valid .srs payload: the "SSR\x01" magic plus body. */
+/** A structurally valid .srs payload: the "SRS\x01" magic plus body. */
 private fun validSrsBytes(): ByteArray =
-    byteArrayOf(0x53, 0x53, 0x52, 0x01) + "srs-bytes".toByteArray()
+    byteArrayOf(0x53, 0x52, 0x53, 0x01) + "srs-bytes".toByteArray()
 
 /**
  * JVM coverage for the store's freshness/serialization contract. The
@@ -234,7 +234,7 @@ class RuleSetStoreTest {
         // must be re-fetched, not served as fresh or stale.
         RouteMode.BYPASS_RU.ruleSetTags.forEach {
             File(ruleDir, "$it.srs").apply {
-                writeBytes(byteArrayOf(0x53, 0x53))
+                writeBytes(byteArrayOf(0x53, 0x52))
                 setLastModified(0L)
             }
         }

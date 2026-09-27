@@ -31,7 +31,7 @@ import okhttp3.Request
  *
  * Integrity: upstream publishes no checksums, so the guarantees are a
  * bundled baseline in `assets/rule_sets/` (seeds a missing file, so a
- * fresh install connects offline), a size cap + `SSR\x01` magic check on
+ * fresh install connects offline), a size cap + `SRS\x01` magic check on
  * every downloaded and stored file (a captive-portal 200 or a truncated
  * copy can't poison the store), atomic installs (a partial file never
  * reaches the final name), and last-known-good fallback — a failed
@@ -172,7 +172,7 @@ class RuleSetStore @Inject constructor(
                     }
                 }
                 if (tmp.length() == 0L) throw IOException("empty rule set")
-                // Cheap integrity gate: .srs files start with "SSR\x01".
+                // Cheap integrity gate: .srs files start with "SRS\x01".
                 // A poisoned 200 (captive portal, truncated mirror) must not
                 // replace a working copy — the old file survives untouched.
                 if (!hasValidMagic(tmp)) throw IOException("not a binary rule set")
@@ -200,8 +200,8 @@ class RuleSetStore @Inject constructor(
          *  max; anything bigger is a hostile or broken endpoint. */
         const val MAX_RULE_SET_BYTES = 32L * 1024 * 1024
 
-        /** sing-box binary rule-set magic ("SSR\x01"). */
-        val SRS_MAGIC = byteArrayOf(0x53, 0x53, 0x52, 0x01)
+        /** sing-box binary rule-set magic ("SRS\x01"). */
+        val SRS_MAGIC = byteArrayOf(0x53, 0x52, 0x53, 0x01)
         // SagerNet rule-set branches (binary .srs format). Tag == basename.
         const val GEOIP_RS_BASE =
             "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
