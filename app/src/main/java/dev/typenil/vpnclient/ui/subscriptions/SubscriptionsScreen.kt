@@ -23,10 +23,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
+import dev.typenil.vpnclient.ui.theme.AfterglowCheckbox as Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -34,10 +34,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
+import dev.typenil.vpnclient.ui.theme.AfterglowSheet
+import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
+import dev.typenil.vpnclient.ui.theme.AfterglowSwitch as Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,6 +68,8 @@ import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatDate
 import dev.typenil.vpnclient.ui.common.formatRelativeTime
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
@@ -178,6 +180,9 @@ fun SubscriptionsScreen(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
+            shape = AfterglowTokens.cardShape,
+            containerColor = AfterglowTheme.colors.ink,
+            contentColor = AfterglowTheme.colors.paper,
         ) {
             Icon(
                 Icons.Default.Add,
@@ -545,7 +550,7 @@ private fun SubscriptionDetailSheet(
     var urlField by rememberSaveable(profile.id) { mutableStateOf("") }
     val manual = SubscriptionRepository.isManualSubscription(profile.url)
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    AfterglowSheet(onDismiss = onDismiss) {
         // Scrollable: a long manual-node list (or a big announcement) must
         // not push the actions out of the sheet.
         Column(

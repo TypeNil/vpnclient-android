@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.servers
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,17 +27,18 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.AlertDialog
+import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
+import dev.typenil.vpnclient.ui.theme.AfterglowChip as FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,6 +57,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 
 @Composable
 fun ServersScreen(
@@ -350,9 +354,14 @@ private fun AutoCard(
     delayMs: Int?,
     onClick: () -> Unit,
 ) {
+    val colors = AfterglowTheme.colors
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
+        shape = AfterglowTokens.cardShape,
+        border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
+        colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -392,9 +401,14 @@ private fun ServerCard(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    val colors = AfterglowTheme.colors
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
+        shape = AfterglowTokens.cardShape,
+        border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
+        colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -603,15 +617,13 @@ private fun LatencyBadge(
 
 @Composable
 private fun ProtocolBadge(protocol: String) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.small,
-    ) {
+    val colors = AfterglowTheme.colors
+    Surface(color = colors.ink, shape = AfterglowTokens.chipShape) {
         Text(
             text = protocolLabel(protocol),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            color = colors.paper,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
 }

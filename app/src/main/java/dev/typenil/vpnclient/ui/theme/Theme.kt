@@ -3,35 +3,59 @@ package dev.typenil.vpnclient.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 import dev.typenil.vpnclient.core.common.ThemeMode
 
-private val DarkColorScheme =
-    darkColorScheme(
-        primary = Purple80,
-        secondary = PurpleGrey80,
-        tertiary = Pink80,
-    )
+object AfterglowTheme {
+    val colors: AfterglowPalette
+        @Composable get() = LocalAfterglowPalette.current
+}
 
-private val LightColorScheme =
-    lightColorScheme(
-        primary = Purple40,
-        secondary = PurpleGrey40,
-        tertiary = Pink40,
-        /* Other default colors to override
-        background = Color(0xFFFFFBFE),
-        surface = Color(0xFFFFFBFE),
-        onPrimary = Color.White,
-        onSecondary = Color.White,
-        onTertiary = Color.White,
-        onBackground = Color(0xFF1C1B1F),
-        onSurface = Color(0xFF1C1B1F),
-         */
+private fun scheme(colors: AfterglowPalette, dark: Boolean, personalizedInverse: androidx.compose.ui.graphics.Color) =
+    (if (dark) darkColorScheme() else lightColorScheme()).copy(
+        primary = colors.coral,
+        onPrimary = colors.onInk,
+        secondary = colors.ink,
+        onSecondary = colors.paper,
+        primaryContainer = colors.errorSurface,
+        onPrimaryContainer = colors.ink,
+        secondaryContainer = colors.paperSecondary,
+        onSecondaryContainer = colors.ink,
+        tertiary = colors.jade,
+        onTertiary = colors.onInk,
+        tertiaryContainer = colors.paperSecondary,
+        onTertiaryContainer = colors.ink,
+        inversePrimary = personalizedInverse,
+        background = colors.paper,
+        onBackground = colors.ink,
+        surface = colors.paper,
+        onSurface = colors.ink,
+        surfaceVariant = colors.paperSecondary,
+        onSurfaceVariant = colors.muted,
+        surfaceContainer = colors.paperSecondary,
+        surfaceContainerLow = colors.paper,
+        surfaceContainerHigh = colors.surfaceElevated,
+        surfaceContainerHighest = colors.surfaceElevated,
+        surfaceContainerLowest = colors.paper,
+        surfaceBright = colors.paper,
+        surfaceDim = colors.paperSecondary,
+        surfaceTint = colors.coral,
+        outline = colors.border,
+        outlineVariant = colors.border,
+        error = colors.error,
+        onError = colors.onInk,
+        errorContainer = colors.errorSurface,
+        onErrorContainer = colors.ink,
+        inverseSurface = colors.ink,
+        inverseOnSurface = colors.paper,
+        scrim = androidx.compose.ui.graphics.Color.Black,
     )
 
 @Composable
@@ -48,25 +72,19 @@ fun VPNClientTheme(
             ThemeMode.Light -> false
             ThemeMode.Dark -> true
         }
-    val colorScheme =
-        when {
-            dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-                val context = LocalContext.current
-                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            }
-
-            darkTheme -> {
-                DarkColorScheme
-            }
-
-            else -> {
-                LightColorScheme
-            }
-        }
-
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content,
-    )
+    val colors = if (darkTheme) DarkAfterglow else LightAfterglow
+    // Dynamic color can personalize the tertiary accent, never the brand or semantic surfaces.
+    val adaptive = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val context = LocalContext.current
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else null
+    CompositionLocalProvider(LocalAfterglowPalette provides colors) {
+        MaterialTheme(
+            colorScheme = scheme(colors, darkTheme, adaptive?.primary ?: colors.coral),
+            typography = Typography,
+            shapes = Shapes(small = AfterglowTokens.inputShape, medium = AfterglowTokens.cardShape,
+                large = AfterglowTokens.dialogShape),
+            content = content,
+        )
+    }
 }
