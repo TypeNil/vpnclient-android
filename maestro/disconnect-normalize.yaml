@@ -1,0 +1,7 @@
+# Helper flow: tear down an active VPN session back to Idle.
+appId: dev.typenil.vpnclient
+---
+- tapOn: "Отключить"
+- extendedWaitUntil:
+    visible: "VPN выключен"
+    timeout: 10000

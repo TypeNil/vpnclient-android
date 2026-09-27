@@ -1,0 +1,7 @@
+# Helper flow: grant the system VPN consent dialog.
+appId: dev.typenil.vpnclient
+---
+- tapOn: "Разрешить"
+- extendedWaitUntil:
+    visible: "Загрузка"
+    timeout: 30000

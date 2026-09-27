@@ -1,0 +1,22 @@
+# Helper flow: add a subscription by URL via the Subscriptions tab dialog.
+# Expects SUB_URL env var (pass --env SUB_URL=... on the CLI).
+appId: dev.typenil.vpnclient
+---
+- tapOn: "Подписки"
+- extendedWaitUntil:
+    visible: "Добавить подписку"
+    timeout: 8000
+- tapOn:
+    text: "Добавить подписку"
+    # the FAB carries the string as its content description
+- extendedWaitUntil:
+    visible: "URL подписки или ссылка на сервер"
+    timeout: 5000
+- tapOn: "URL подписки или ссылка на сервер"
+- inputText: ${SUB_URL}
+- tapOn: "Добавить"
+# Fetch + parse can take a few seconds over real network. The card shows
+# "N серверов" once the subscription lands.
+- extendedWaitUntil:
+    visible: "серверов"
+    timeout: 30000

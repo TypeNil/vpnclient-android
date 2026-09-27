@@ -1,0 +1,48 @@
+# RU smoke: select a real subscription node -> connect -> live -> disconnect.
+# Uses the StealthSurf subscription already imported on-device.
+appId: dev.typenil.vpnclient
+name: VPN lifecycle smoke (ru, real subscription)
+tags:
+  - smoke
+  - android
+---
+- launchApp
+# Normalize to Idle: tear down any leftover Connected session first.
+- runFlow:
+    when:
+      visible: "Отключить"
+    file: disconnect-normalize.yaml
+- extendedWaitUntil:
+    visible: "VPN выключен"
+    timeout: 10000
+- assertVisible: "VPN выключен"
+- tapOn: "Серверы"
+- extendedWaitUntil:
+    visible: "StealthSurf VPN"
+    timeout: 8000
+- tapOn: "StealthSurf VPN"
+- extendedWaitUntil:
+    visible: "trojan"
+    timeout: 5000
+# node row isn't a plain TextView target — tap the substring match
+- tapOn:
+    text: "trojan"
+- tapOn: "Главная"
+- assertVisible: "VPN выключен"
+- tapOn: "Подключиться"
+# System consent dialog — shown once per app until granted. Tolerates
+# being absent on reruns after a previous grant.
+- runFlow:
+    when:
+      visible: "Разрешить"
+    file: grant-consent.yaml
+# RU stats label — rendered only once Connected with live telemetry.
+- extendedWaitUntil:
+    visible: "Загрузка"
+    timeout: 30000
+- assertVisible: "Отправка"
+- assertVisible: "Статистика"
+- tapOn: "Отключить"
+- extendedWaitUntil:
+    visible: "VPN выключен"
+    timeout: 15000
