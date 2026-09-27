@@ -150,9 +150,14 @@
     <string name="afterglow_please_wait">ПОДОЖДИТЕ</string>
     <string name="afterglow_no_servers_headline">Нет серверов</string>
     <string name="afterglow_auto_select">Автовыбор</string>
+    <string name="afterglow_auto_candidate">Лучший по задержке: %1$s</string>
+    <string name="afterglow_latency_not_measured">Задержка не измерена</string>
     <string name="afterglow_current_outbound">Текущий сервер: %1$s</string>
     <string name="afterglow_no_usable_servers">Нет доступных серверов. Проверьте подписки или фильтры серверов.</string>
     <string name="afterglow_permission_explanation">Для подключения требуется разрешение Android на использование VPN. Подтвердите системный запрос.</string>
+    <string name="afterglow_quick_access">БЫСТРЫЙ ДОСТУП</string>
+    <string name="afterglow_servers_available">Доступно: %1$d</string>
+    <string name="afterglow_subscriptions_enabled">Включено: %1$d</string>
     <string name="afterglow_statistics">Статистика</string>
     <string name="afterglow_session_elapsed">Время · %1$s</string>
     <string name="afterglow_routing_title">Маршрутизация</string>
@@ -185,7 +190,7 @@
     <string name="home_stat_download">Загрузка</string>
     <string name="home_stat_upload">Отправка</string>
     <string name="home_stat_connections">Соединения</string>
-    <string name="home_stat_connections_value">%1$d вх. / %2$d исх.</string>
+    <string name="home_stat_connections_value">\u2193 %1$d  \u2191 %2$d</string>
     <string name="home_stat_total_suffix">всего %1$s</string>
     <string name="home_details_title">Сведения о сеансе</string>
     <string name="home_details_node">Сервер</string>

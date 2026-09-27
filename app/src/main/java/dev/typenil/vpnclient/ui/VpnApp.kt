@@ -4,24 +4,24 @@ import android.app.Activity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.StringRes
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Snackbar
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -31,15 +31,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -59,7 +57,6 @@ import dev.typenil.vpnclient.ui.routing.RoutingScreen
 import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
 import dev.typenil.vpnclient.ui.subscriptions.SubscriptionsScreen
-import dev.typenil.vpnclient.ui.theme.AfterglowNavigation
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.DarkAfterglow
@@ -78,46 +75,11 @@ object Routes {
     const val DIAGNOSTICS = "diagnostics"
 }
 
-/** savedStateHandle flag: the SUBSCRIPTIONS entry should open its add
- *  dialog. Posted by cross-tab entry points (e.g. the Servers empty
- *  state) — same handoff mechanism QR results use. */
+/** savedStateHandle flag for the Subscriptions add dialog, posted by entry points. */
 private const val ADD_DIALOG_OPEN_KEY = "open_add_dialog"
 
-private data class TopLevelDestination(
-    val route: String,
-    @StringRes val labelRes: Int,
-    val icon: ImageVector,
-)
-
-private val serverRackIcon = ImageVector.Builder("Server rack", 24.dp, 24.dp, 24f, 24f).apply {
-    path(fill = SolidColor(Color.Black)) {
-        listOf(3f, 10f, 17f).forEach { top ->
-            moveTo(3f, top); lineTo(21f, top); lineTo(21f, top + 5f)
-            lineTo(3f, top + 5f); close()
-        }
-    }
-}.build()
-
-private val articleIcon = ImageVector.Builder("Article", 24.dp, 24.dp, 24f, 24f).apply {
-    path(stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f) {
-        moveTo(5f, 2f); lineTo(15f, 2f); lineTo(20f, 7f)
-        lineTo(20f, 22f); lineTo(5f, 22f); close()
-        moveTo(15f, 2f); lineTo(15f, 7f); lineTo(20f, 7f)
-        moveTo(8f, 12f); lineTo(17f, 12f)
-        moveTo(8f, 16f); lineTo(17f, 16f)
-    }
-}.build()
-
-private val topLevelDestinations =
-    listOf(
-        TopLevelDestination(Routes.HOME, R.string.nav_home, Icons.Default.Home),
-        TopLevelDestination(Routes.SERVERS, R.string.nav_servers, serverRackIcon),
-        TopLevelDestination(Routes.SUBSCRIPTIONS, R.string.nav_subscriptions, articleIcon),
-        TopLevelDestination(Routes.SETTINGS, R.string.nav_settings, Icons.Default.Settings),
-    )
-
 /**
- * Root composable: theme + bottom nav + NavHost.
+ * Root composable: theme + NavHost.
  *
  * The VPN consent launcher lives here so it fires from whichever screen is
  * visible when [ConnectionManager.prepareIntent] is posted.
@@ -145,13 +107,7 @@ fun VpnApp(
             if (pendingImport != null &&
                 navController.currentDestination?.route != Routes.SUBSCRIPTIONS
             ) {
-                // Same options as bottom nav.
-                navController.navigate(Routes.SUBSCRIPTIONS) {
-                    popUpTo(navController.graph.findStartDestination().id) {
-                        saveState = true
-                    }
-                    launchSingleTop = true
-                }
+                navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
             }
         }
 
@@ -166,28 +122,30 @@ fun VpnApp(
             prepareIntent?.let { vpnConsentLauncher.launch(it) }
         }
 
-        val backStackEntry by navController.currentBackStackEntryAsState()
-        val currentDestination = backStackEntry?.destination
+        val currentEntry by navController.currentBackStackEntryAsState()
+        val topLevelTitle = when (currentEntry?.destination?.route) {
+            Routes.SERVERS -> R.string.nav_servers
+            Routes.SUBSCRIPTIONS -> R.string.nav_subscriptions
+            Routes.SETTINGS -> R.string.nav_settings
+            else -> null
+        }
         val colors = AfterglowTheme.colors
         val darkAfterglow = colors == DarkAfterglow
         val activity = LocalActivity.current
         DisposableEffect(activity, colors) {
             val window = activity?.window
             val previousStatus = window?.statusBarColor
-            val previousNavigation = window?.navigationBarColor
             val controller = window?.let { WindowInsetsControllerCompat(it, it.decorView) }
             val previousLightStatus = controller?.isAppearanceLightStatusBars
             val previousLightNavigation = controller?.isAppearanceLightNavigationBars
             if (window != null) {
                 window.statusBarColor = colors.paper.toArgb()
-                window.navigationBarColor = colors.paperSecondary.toArgb()
                 controller?.isAppearanceLightStatusBars = !darkAfterglow
                 controller?.isAppearanceLightNavigationBars = !darkAfterglow
             }
             onDispose {
                 if (window != null) {
                     if (previousStatus != null) window.statusBarColor = previousStatus
-                    if (previousNavigation != null) window.navigationBarColor = previousNavigation
                     if (previousLightStatus != null) controller?.isAppearanceLightStatusBars = previousLightStatus
                     if (previousLightNavigation != null) controller?.isAppearanceLightNavigationBars = previousLightNavigation
                 }
@@ -196,50 +154,28 @@ fun VpnApp(
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = colors.paper,
+            // Home scrolls beneath gesture navigation; other screens keep their existing safe insets.
+            contentWindowInsets = if (currentEntry?.destination?.route == Routes.HOME)
+                WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            else ScaffoldDefaults.contentWindowInsets,
+            topBar = {
+                if (topLevelTitle != null) {
+                    Row(Modifier.fillMaxWidth().statusBarsPadding().heightIn(min = 56.dp).padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.common_back), tint = colors.ink)
+                        }
+                        Text(stringResource(topLevelTitle), color = colors.ink,
+                            fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+            },
             snackbarHost = {
                 SnackbarHost(snackbarHostState) { data ->
                     Snackbar(data, containerColor = colors.ink, contentColor = colors.paper,
                         actionColor = colors.coralLight, shape = AfterglowTokens.cardShape)
-                }
-            },
-            bottomBar = {
-                Column {
-                    HorizontalDivider(thickness = AfterglowTokens.border, color = colors.border)
-                    NavigationBar(containerColor = colors.paperSecondary, tonalElevation = 0.dp) {
-                    topLevelDestinations.forEach { destination ->
-                        NavigationBarItem(
-                            selected =
-                                currentDestination?.hierarchy?.any {
-                                    it.route == destination.route
-                                } == true,
-                            onClick = {
-                                navController.navigate(destination.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = {
-                                Icon(
-                                    destination.icon,
-                                    contentDescription = stringResource(destination.labelRes),
-                                    modifier = Modifier.size(23.dp),
-                                )
-                            },
-                            label = { Text(stringResource(destination.labelRes), style = AfterglowNavigation,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = colors.onActionSurface,
-                                selectedTextColor = colors.coral,
-                                unselectedIconColor = colors.muted,
-                                unselectedTextColor = colors.muted,
-                                indicatorColor = colors.actionSurface,
-                            ),
-                        )
-                    }
-                    }
                 }
             },
         ) { innerPadding ->
@@ -251,48 +187,24 @@ fun VpnApp(
                 composable(Routes.HOME) {
                     HomeScreen(
                         onOpenConnections = { navController.navigate(Routes.CONNECTIONS) },
+                        onOpenSubscriptions = { navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true } },
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                         onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                         onOpenRouting = { navController.navigate(Routes.ROUTING) },
-                        // The picker's "all servers" escape hatch — the
-                        // Servers tab owns filters, sorting and latency tests.
-                        onOpenServers = {
-                            navController.navigate(Routes.SERVERS) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        // Same cross-tab add funnel the Servers empty state
-                        // uses — see the comment there.
+                        // The full Servers screen owns filters, sorting and latency tests.
+                        onOpenServers = { navController.navigate(Routes.SERVERS) { launchSingleTop = true } },
                         onAddServer = {
-                            navController.navigate(Routes.SUBSCRIPTIONS) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                            }
+                            navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
                             navController.currentBackStackEntry
                                 ?.savedStateHandle
                                 ?.set(ADD_DIALOG_OPEN_KEY, true)
                         },
                     )
                 }
-                composable(Routes.SERVERS) { entry ->
-                    // Cross-tab add funnel: navigating here from the empty
-                    // state's button lands on SUBSCRIPTIONS and posts the
-                    // "open add dialog" signal into that entry's
-                    // savedStateHandle — same slot the QR/deep-link funnel
-                    // uses, no VM indirection.
+                composable(Routes.SERVERS) {
                     ServersScreen(
                         onAddServer = {
-                            navController.navigate(Routes.SUBSCRIPTIONS) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                            }
+                            navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
                             // Set after navigate(): savedStateHandle is
                             // fetched from the now-top entry — get() before
                             // the navigate would target the wrong entry.

@@ -13,10 +13,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +38,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,40 +86,90 @@ internal fun AfterglowHomeContent(
     onOpenDetails: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenRouting: () -> Unit,
+    onOpenServers: () -> Unit,
+    onOpenSubscriptions: () -> Unit,
+    onOpenSettings: () -> Unit,
     onDismissGuard: () -> Unit,
     errorMessage: String?,
 ) {
     val colors = AfterglowTheme.colors
     val state = ui.connection
     val noServers = ui.serverOptions.isEmpty() && (state is VpnConnectionState.Idle || state is VpnConnectionState.Error)
-    Column(
-        modifier.fillMaxSize().background(colors.paper).verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp).padding(bottom = 32.dp),
-    ) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("RUNE", fontSize = 31.sp, fontWeight = FontWeight.Black, letterSpacing = (-2).sp, color = colors.ink)
-            Text(".", fontSize = 31.sp, fontWeight = FontWeight.Black, color = colors.coral)
+    Box(modifier.fillMaxSize().background(colors.paper)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp).navigationBarsPadding().padding(bottom = 150.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 58.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("RUNE", fontSize = 31.sp, fontWeight = FontWeight.Black, letterSpacing = (-2).sp, color = colors.ink)
+                Text(".", fontSize = 31.sp, fontWeight = FontWeight.Black, color = colors.coral)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.nav_settings),
+                        tint = colors.ink)
+                }
+            }
+            ConnectionHero(state.visual(), noServers, ui.selectedDelayMs)
+            if (errorMessage != null) StatusNotice(errorMessage, onOpenDiagnostics, true)
+            if (state == VpnConnectionState.PermissionRequired) {
+                Text(stringResource(R.string.afterglow_permission_explanation), color = colors.muted,
+                    modifier = Modifier.padding(top = 12.dp), fontSize = 14.sp)
+            }
+            if (ui.restartGuardTripped) StatusNotice(stringResource(R.string.home_restart_guard_text), onDismissGuard, false)
+            Spacer(Modifier.height(18.dp))
+            SectionHeader(stringResource(R.string.afterglow_quick_access),
+                Modifier.padding(start = 2.dp, bottom = 8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ShortcutCard(R.string.nav_servers,
+                    stringResource(R.string.afterglow_servers_available,
+                        (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.weight(1f))
+                ShortcutCard(R.string.nav_subscriptions,
+                    stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
+                    false, onOpenSubscriptions, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(18.dp))
+            ServerAndRouting(ui, onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
+            if (state is VpnConnectionState.Connected) {
+                SessionStats(state, onOpenConnections, onOpenDetails)
+            }
         }
-        ConnectionHero(state.visual(), noServers)
-        // Keep the error explanation before Retry, without attaching the operation to the image.
-        if (errorMessage != null) StatusNotice(errorMessage, onOpenDiagnostics, true)
-        Spacer(Modifier.height(8.dp))
-        ConnectionAction(state.visual(), noServers, if (noServers) onAddServer else onConnect, onDisconnect)
-        if (state == VpnConnectionState.PermissionRequired) {
-            Text(stringResource(R.string.afterglow_permission_explanation), color = colors.muted,
-                modifier = Modifier.padding(top = 12.dp), fontSize = 14.sp)
+        ConnectionAction(state.visual(), noServers, if (noServers) {
+            if (ui.noNodesAtAll) onAddServer else onOpenServers
+        } else onConnect, onDisconnect,
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                .padding(horizontal = 16.dp),
+            hasNodes = !ui.noNodesAtAll)
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
+    Text(text.uppercase(), color = AfterglowTheme.colors.coral, fontWeight = FontWeight.Bold,
+        fontSize = 11.sp, letterSpacing = 1.sp, modifier = modifier)
+}
+
+@Composable
+private fun ShortcutCard(label: Int, caption: String, server: Boolean, onClick: () -> Unit,
+    modifier: Modifier = Modifier) {
+    val colors = AfterglowTheme.colors
+    Column(modifier.heightIn(min = 112.dp).clip(RoundedCornerShape(9.dp))
+        .border(1.dp, colors.border, RoundedCornerShape(9.dp))
+        .background(colors.paperSecondary)
+        .semantics { role = Role.Button }
+        .clickable(onClick = onClick)
+        .padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (server) ServerListBadge() else SubscriptionBadge()
+            CircledChevron()
         }
-        if (ui.restartGuardTripped) StatusNotice(stringResource(R.string.home_restart_guard_text), onDismissGuard, false)
-        Spacer(Modifier.height(20.dp))
-        ServerAndRouting(ui, onPick, onAddServer, onOpenRouting)
-        if (state is VpnConnectionState.Connected) {
-            SessionStats(state, onOpenConnections, onOpenDetails)
+        Column {
+            Text(stringResource(label), color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text(caption, color = colors.muted, fontSize = 11.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }
 
 @Composable
-private fun ConnectionHero(state: VisualState, noServers: Boolean) {
+private fun ConnectionHero(state: VisualState, noServers: Boolean, delayMs: Int? = null) {
     val colors = AfterglowTheme.colors
     val target = when (state) {
         VisualState.Connected -> colors.connectedHero
@@ -160,23 +213,27 @@ private fun ConnectionHero(state: VisualState, noServers: Boolean) {
             0f to base, .3f to base.copy(alpha = .92f), .7f to Color.Transparent)))
         val longHeadline = state == VisualState.Connecting || state == VisualState.Reconnecting ||
             state == VisualState.Preparing || state == VisualState.Permission || state == VisualState.Stopping
-        Text(headline, color = colors.onActionSurface, fontWeight = FontWeight.Black,
-            fontSize = if (largeFont) 24.sp else if (longHeadline) 26.sp else if (narrow) 32.sp else 36.sp,
-            lineHeight = if (largeFont || longHeadline) 32.sp else 39.sp,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(.62f).padding(start = 16.dp, end = 8.dp, top = 20.dp, bottom = 20.dp))
+        Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(.62f)
+            .padding(start = 16.dp, end = 8.dp, top = 20.dp, bottom = 20.dp)) {
+            Text(headline, color = colors.onActionSurface, fontWeight = FontWeight.Black,
+                fontSize = if (largeFont) 24.sp else if (longHeadline) 26.sp else if (narrow) 32.sp else 36.sp,
+                lineHeight = if (largeFont || longHeadline) 32.sp else 39.sp,
+                maxLines = 3, overflow = TextOverflow.Ellipsis)
+            HeroLatency(delayMs, Modifier.padding(top = 8.dp))
+        }
         Box(Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter)
             .background(if (state == VisualState.Connected) colors.jade else colors.coralLight))
     }
 }
 
 @Composable
-private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: () -> Unit, onDisconnect: () -> Unit) {
+private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: () -> Unit, onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier, hasNodes: Boolean = false) {
     val colors = AfterglowTheme.colors
     val active = state == VisualState.Connected || state == VisualState.Reconnecting
     val enabled = noServers || active || state == VisualState.Offline || state == VisualState.Error
     val label = when {
-        noServers -> stringResource(R.string.common_add_server_cta)
+        noServers -> stringResource(if (hasNodes) R.string.nav_servers else R.string.common_add_server_cta)
         active -> stringResource(R.string.action_disconnect)
         state == VisualState.Offline -> stringResource(R.string.afterglow_start)
         state == VisualState.Error -> stringResource(R.string.afterglow_retry)
@@ -185,25 +242,132 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
         state == VisualState.Preparing -> stringResource(R.string.home_status_preparing)
         else -> stringResource(R.string.home_status_connecting)
     }
-    Row(Modifier.fillMaxWidth().heightIn(min = 66.dp).background(colors.actionSurface)
-        .clickable(enabled = enabled, onClick = if (active && !noServers) onDisconnect else onConnect)
-        .padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(44.dp).clip(CircleShape).background(if (active) colors.jade else colors.coral),
-            contentAlignment = Alignment.Center) {
-            if (!noServers && !active && state != VisualState.Error) {
-                Canvas(Modifier.size(26.dp)) {
-                    drawArc(colors.actionSurface, -55f, 290f, false, style = Stroke(2.5.dp.toPx()))
-                    drawLine(colors.actionSurface, Offset(size.width / 2, 0f),
-                        Offset(size.width / 2, size.height * .55f), strokeWidth = 2.5.dp.toPx())
-                }
-            } else Icon(when {
-                noServers -> Icons.Default.Add
-                active -> Icons.Default.Close
-                else -> Icons.Default.Refresh
-            }, contentDescription = null, tint = colors.actionSurface, modifier = Modifier.size(26.dp))
+    val accent = when {
+        active -> colors.jade
+        state == VisualState.Error -> colors.coralLight
+        state == VisualState.Connecting || state == VisualState.Reconnecting ||
+            state == VisualState.Preparing || state == VisualState.Permission -> colors.amber
+        else -> colors.coral
+    }
+    // Companion face per state: idle=sad, connecting/transition=thinking,
+    // error=crossed-eyes, connected=happy. The peer mascot perches on the
+    // button's top edge (negative offset keeps it overlapping, not inside).
+    val companion = when {
+        noServers -> R.drawable.companion_idle
+        state == VisualState.Connected -> R.drawable.companion_connected
+        state == VisualState.Error -> R.drawable.companion_error
+        state == VisualState.Offline || state == VisualState.Stopping -> R.drawable.companion_idle
+        else -> R.drawable.companion_connecting
+    }
+    // Subtitle only for stable states; transitional states already name the
+    // action in the title, so a static "VPN OFF/ON" subtitle would misreport.
+    val subtitle = when {
+        noServers -> stringResource(R.string.afterglow_no_servers_headline)
+        active -> stringResource(R.string.afterglow_online)
+        state == VisualState.Offline -> stringResource(R.string.afterglow_offline)
+        else -> null
+    }
+    Box(modifier.fillMaxWidth().padding(top = 40.dp)) {
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(Brush.horizontalGradient(listOf(colors.actionSurface, colors.actionSurface, colors.actionSurface.copy(alpha = .0f))))
+            .border(1.dp, accent.copy(alpha = .5f), RoundedCornerShape(16.dp))
+            .semantics { role = Role.Button }
+            .clickable(enabled = enabled, onClick = if (active && !noServers) onDisconnect else onConnect)
+            .padding(start = 76.dp, end = 18.dp, top = 14.dp, bottom = 14.dp)) {
+            Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Black, fontSize = 20.sp,
+                letterSpacing = 0.5.sp)
+            subtitle?.let {
+                Text(it, color = colors.onActionSurface.copy(alpha = .7f), fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
         }
-        Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp,
-            modifier = Modifier.padding(start = 14.dp).weight(1f))
+        // Companion perches on the button's top-left edge, overlapping upward.
+        Image(painterResource(companion), contentDescription = null,
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp).offset(y = (-34).dp).height(64.dp))
+        // Status dot pinned to the button's trailing edge.
+        Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
+            .size(10.dp).background(accent, CircleShape))
+    }
+}
+
+@Composable
+private fun HeroLatency(delayMs: Int?, modifier: Modifier = Modifier) {
+    if (delayMs == null) return
+    val colors = AfterglowTheme.colors
+    // Match LatencyBadge semantics: <800 = healthy, >=800 = degraded. Use amber
+    // for degraded so the dot stays visible on the red transitional/error heroes.
+    val tone = if (delayMs < 800) colors.jade else colors.amber
+    Row(modifier.clip(RoundedCornerShape(20.dp))
+        .background(colors.onActionSurface.copy(alpha = .14f))
+        .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(6.dp).background(tone, CircleShape))
+        Text(stringResource(R.string.servers_latency_ms, delayMs),
+            color = colors.onActionSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 5.dp))
+    }
+}
+
+@Composable
+private fun SubscriptionBadge() {
+    val colors = AfterglowTheme.colors
+    Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(20.dp)) {
+            val stroke = Stroke(1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val outline = Path().apply {
+                moveTo(size.width * .2f, size.height * .1f)
+                lineTo(size.width * .68f, size.height * .1f)
+                lineTo(size.width * .82f, size.height * .26f)
+                lineTo(size.width * .82f, size.height * .9f)
+                lineTo(size.width * .2f, size.height * .9f)
+                close()
+            }
+            drawPath(outline, colors.coral, style = stroke)
+            drawLine(colors.coral, Offset(size.width * .32f, size.height * .52f),
+                Offset(size.width * .68f, size.height * .52f), strokeWidth = stroke.width)
+            drawLine(colors.coral, Offset(size.width * .32f, size.height * .7f),
+                Offset(size.width * .6f, size.height * .7f), strokeWidth = stroke.width)
+        }
+    }
+}
+
+@Composable
+private fun ServerListBadge() {
+    val colors = AfterglowTheme.colors
+    Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(20.dp)) {
+            // Stacked server rows — the list affordance for the Servers screen.
+            val stroke = 1.9.dp.toPx()
+            listOf(.28f, .5f, .72f).forEach { y ->
+                drawLine(colors.coral, Offset(size.width * .2f, size.height * y),
+                    Offset(size.width * .8f, size.height * y), strokeWidth = stroke,
+                    cap = StrokeCap.Round)
+                drawCircle(colors.coral, stroke * .8f, Offset(size.width * .2f, size.height * y))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerBadge(auto: Boolean, modifier: Modifier = Modifier) {
+    val colors = AfterglowTheme.colors
+    Box(modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center) {
+        if (auto) Icon(Icons.Default.Refresh, contentDescription = null,
+            tint = colors.coral, modifier = Modifier.size(22.dp))
+        else Canvas(Modifier.size(20.dp)) {
+            // Globe: outer circle + two meridians + equator. Distinct from the
+            // horizontal-stack "server list" glyph used on the shortcut card.
+            val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round)
+            val c = Offset(size.width / 2f, size.height / 2f)
+            val r = size.minDimension / 2f - stroke.width
+            drawCircle(colors.coral, r, c, style = stroke)
+            drawOval(colors.coral, topLeft = Offset(c.x - r * .45f, c.y - r),
+                size = androidx.compose.ui.geometry.Size(r * .9f, r * 2f), style = stroke)
+            drawLine(colors.coral, Offset(c.x - r, c.y), Offset(c.x + r, c.y), strokeWidth = stroke.width)
+        }
     }
 }
 
@@ -234,38 +398,38 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
         else -> ui.selectedNodeName ?: live?.name ?: ui.selectedNodeNameRes?.let { stringResource(it) }
             ?: stringResource(R.string.home_no_server_selected)
     }
-    val protocolLabel = (ui.activeServerProtocol ?: ui.selectedNodeProtocol ?: live?.protocol?.label)
+    val protocolLabel = (if (ui.autoSelected) ui.bestLatencyNodeProtocol else ui.selectedNodeProtocol ?: live?.protocol?.label)
         ?.takeIf { it.isNotBlank() && !it.equals("Other", ignoreCase = true) }
-    val autoSubtitle = when {
-        ui.bestLatencyNodeName != null && ui.bestLatencyMs != null ->
-            stringResource(R.string.afterglow_auto_best_latency, ui.bestLatencyNodeName, ui.bestLatencyMs)
-        ui.bestLatencyNodeName != null ->
-            stringResource(R.string.afterglow_auto_best_latency_noms, ui.bestLatencyNodeName)
-        else ->
-            stringResource(R.string.home_auto_subtitle)
-    }
+    // Latency already lives in the hero chip; don't echo a latency-derived
+    // subtitle here. For auto-select show which node the urltest picked.
     val subtitle = when {
         noServers -> stringResource(if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers)
-        ui.autoSelected -> listOfNotNull(ui.subscriptionName, autoSubtitle).filter { it.isNotBlank() }.joinToString(" · ")
-        else -> listOfNotNull(ui.subscriptionName, protocolLabel).filter { it.isNotBlank() }.joinToString(" · ")
+        ui.autoSelected -> ui.bestLatencyNodeName ?: stringResource(R.string.home_auto_subtitle)
+        else -> null
     }
-    Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
-        Text(stringResource(R.string.afterglow_selected_server), color = colors.muted,
-            fontSize = 11.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp))
-        Row(Modifier.fillMaxWidth().clickable(onClick = if (noServers) onAdd else onPick)
-            .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                    lineHeight = 25.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (subtitle.isNotEmpty()) Text(subtitle, color = colors.muted, fontSize = 13.sp,
-                    maxLines = if (noServers) 3 else 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 4.dp))
+    val metadata = listOfNotNull(ui.subscriptionName, protocolLabel).filter { it.isNotBlank() }.joinToString(" · ")
+    Column(Modifier.fillMaxWidth()) {
+        SectionHeader(stringResource(R.string.afterglow_selected_server),
+            Modifier.padding(start = 2.dp, bottom = 6.dp))
+        Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
+        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
+            .clickable(onClick = if (noServers) onAdd else onPick)
+            .heightIn(min = 68.dp).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            ServerBadge(ui.autoSelected && !noServers)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 17.sp,
+                    lineHeight = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle != null) Text(subtitle, color = colors.muted, fontSize = 13.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp))
+                if (!noServers && metadata.isNotEmpty()) Text(metadata, color = colors.muted, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
             }
             CircledChevron()
         }
         Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(colors.border))
-        Row(Modifier.fillMaxWidth().clickable(onClick = onRouting).heightIn(min = 58.dp)
+        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
+            .clickable(onClick = onRouting).heightIn(min = 58.dp)
             .padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             // Symmetrical rounded square badge matching the two-line text block height.
             Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
@@ -311,6 +475,7 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
             }
             CircledChevron()
         }
+        }
     }
 }
 
@@ -345,45 +510,48 @@ private fun SessionStats(
     val visibleSamples = samples.filter { it.atNanos in (displayNanos - TrafficHistory.WINDOW_NANOS)..displayNanos }
     Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text(stringResource(R.string.afterglow_statistics), color = colors.ink, fontSize = 20.sp,
-            fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        SectionHeader(stringResource(R.string.afterglow_statistics), Modifier.weight(1f))
         val elapsed = Duration.between(state.since, now).seconds.coerceAtLeast(0)
         Text(stringResource(R.string.afterglow_session_elapsed,
             String.format(Locale.ROOT, "%02d:%02d", elapsed / 60, elapsed % 60)),
             color = colors.muted, fontSize = 12.sp, maxLines = 1)
     }
+    val s = stats.takeIf { fresh }
     Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            SpeedMetric(stringResource(R.string.home_stat_download), if (fresh) formatRate(stats!!.downlinkBytesPerSec) else null,
+            SpeedMetric(stringResource(R.string.home_stat_download), s?.let { formatRate(it.downlinkBytesPerSec) },
+                s?.let { formatBytes(it.downlinkTotalBytes) },
                 visibleSamples, displayNanos, true, colors.jade, Modifier.weight(1f))
             Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
-            SpeedMetric(stringResource(R.string.home_stat_upload), if (fresh) formatRate(stats!!.uplinkBytesPerSec) else null,
+            SpeedMetric(stringResource(R.string.home_stat_upload), s?.let { formatRate(it.uplinkBytesPerSec) },
+                s?.let { formatBytes(it.uplinkTotalBytes) },
                 visibleSamples, displayNanos, false, colors.coral, Modifier.weight(1f))
         }
+        if (s == null) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+            Text(stringResource(R.string.afterglow_stats_unavailable), color = colors.muted,
+                modifier = Modifier.padding(16.dp))
+        }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
-        if (fresh) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween) {
-                Total(stringResource(R.string.afterglow_session_download), formatBytes(stats!!.downlinkTotalBytes))
-                Total(stringResource(R.string.afterglow_session_upload), formatBytes(stats.uplinkTotalBytes))
-            }
-        } else Text(stringResource(R.string.afterglow_stats_unavailable), color = colors.muted,
-            modifier = Modifier.padding(16.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
-        Row(Modifier.fillMaxWidth().clickable(onClick = onOpenConnections).heightIn(min = 48.dp)
+        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
+            .clickable(onClick = onOpenConnections).heightIn(min = 48.dp)
             .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.home_stat_connections), color = colors.ink,
                 fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            if (fresh) {
-                Text(stringResource(R.string.home_stat_connections_value, stats.connectionsIn, stats.connectionsOut),
-                    color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp))
+            if (s != null) Row(verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = 10.dp)) {
+                Text("↓", color = colors.jade, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(" ${s.connectionsIn}", color = colors.muted, fontSize = 13.sp)
+                Text("  ↑", color = colors.coral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(" ${s.connectionsOut}", color = colors.muted, fontSize = 13.sp)
             }
             CircledChevron()
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
-        Row(Modifier.fillMaxWidth().clickable(onClick = onOpenDetails).heightIn(min = 48.dp)
+        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
+            .clickable(onClick = onOpenDetails).heightIn(min = 48.dp)
             .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.home_details_title), color = colors.coral,
+            Text(stringResource(R.string.home_details_title), color = colors.ink,
                 fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             CircledChevron()
         }
@@ -391,15 +559,7 @@ private fun SessionStats(
 }
 
 @Composable
-private fun Total(label: String, value: String) {
-    Column {
-        Text(label, color = AfterglowTheme.colors.muted, fontSize = 12.sp)
-        Text(value, color = AfterglowTheme.colors.ink, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun SpeedMetric(label: String, value: String?, samples: List<TrafficHistory.Point>,
+private fun SpeedMetric(label: String, value: String?, total: String?, samples: List<TrafficHistory.Point>,
     nowNanos: Long, download: Boolean, lineColor: Color, modifier: Modifier) {
     val colors = AfterglowTheme.colors
     Column(modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
@@ -407,6 +567,9 @@ private fun SpeedMetric(label: String, value: String?, samples: List<TrafficHist
             Text(if (download) "↓" else "↑", color = lineColor, fontSize = 15.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 4.dp))
             Text(label, color = colors.muted, fontSize = 12.sp, maxLines = 1)
+            if (total != null) Text(total, color = colors.muted, fontSize = 11.sp, maxLines = 1,
+                modifier = Modifier.padding(start = 6.dp).weight(1f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
         Text(value ?: "—", color = colors.ink, fontSize = 21.sp, fontWeight = FontWeight.Bold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
@@ -457,6 +620,7 @@ private fun SpeedMetric(label: String, value: String?, samples: List<TrafficHist
 private fun StatusNotice(message: String, onClick: () -> Unit, error: Boolean) {
     val colors = AfterglowTheme.colors
     Column(Modifier.fillMaxWidth().background(if (error) colors.errorSurface else colors.paperSecondary)
+        .semantics { role = Role.Button }
         .clickable(onClick = onClick).padding(16.dp)) {
         Text(if (error) stringResource(R.string.home_status_failed) else stringResource(R.string.afterglow_restart_guard_title),
             color = colors.ink, fontWeight = FontWeight.Bold)

@@ -32,6 +32,9 @@ private fun PreviewHome(connection: VpnConnectionState, auto: Boolean = false, e
         onOpenDetails = {},
         onOpenDiagnostics = {},
         onOpenRouting = {},
+        onOpenServers = {},
+        onOpenSubscriptions = {},
+        onOpenSettings = {},
         onDismissGuard = {},
         errorMessage = if (connection is VpnConnectionState.Error) "Example connection failure" else null,
     )

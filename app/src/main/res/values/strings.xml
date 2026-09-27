@@ -150,9 +150,14 @@
     <string name="afterglow_please_wait">PLEASE WAIT</string>
     <string name="afterglow_no_servers_headline">NO SERVERS</string>
     <string name="afterglow_auto_select">Auto-select</string>
+    <string name="afterglow_auto_candidate">Best measured: %1$s</string>
+    <string name="afterglow_latency_not_measured">Latency not measured</string>
     <string name="afterglow_current_outbound">Current server: %1$s</string>
     <string name="afterglow_no_usable_servers">No usable servers. Check your subscriptions or server filters.</string>
     <string name="afterglow_permission_explanation">Android VPN permission is required to connect. Approve the system request to continue.</string>
+    <string name="afterglow_quick_access">QUICK ACCESS</string>
+    <string name="afterglow_servers_available">Available: %1$d</string>
+    <string name="afterglow_subscriptions_enabled">Enabled: %1$d</string>
     <string name="afterglow_statistics">Statistics</string>
     <string name="afterglow_session_elapsed">Uptime · %1$s</string>
     <string name="afterglow_routing_title">Routing</string>
@@ -185,7 +190,7 @@
     <string name="home_stat_download">Download</string>
     <string name="home_stat_upload">Upload</string>
     <string name="home_stat_connections">Connections</string>
-    <string name="home_stat_connections_value">%1$d in / %2$d out</string>
+    <string name="home_stat_connections_value">\u2193 %1$d  \u2191 %2$d</string>
     <string name="home_stat_total_suffix">%1$s total</string>
     <string name="home_details_title">Session details</string>
     <string name="home_details_node">Node</string>

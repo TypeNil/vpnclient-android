@@ -30,18 +30,18 @@ data class HomeUiState(
     val connection: VpnConnectionState = VpnConnectionState.Idle,
     val selectedNodeName: String? = null,
     val selectedNodeProtocol: String? = null,
-    val selectedNodeServer: String? = null,
     /** The persisted pick is "Auto / Fastest" — no concrete node exists. */
     val autoSelected: Boolean = false,
     /** Best measured latency node name from urltest (if tested). Does NOT claim
      *  to be the guaranteed active egress when tolerance is in effect. */
     val bestLatencyNodeName: String? = null,
-    val bestLatencyMs: Int? = null,
+    val bestLatencyNodeProtocol: String? = null,
+    /** Measured delay for the selected node, or Auto's best measured candidate. */
+    val selectedDelayMs: Int? = null,
     /** Resource for the persisted pick when no concrete node name exists
      *  (the Auto sentinel) — the screen resolves it to the localized label. */
     @param:StringRes val selectedNodeNameRes: Int? = null,
     val subscriptionName: String? = null,
-    val activeServerProtocol: String? = null,
     val routingMode: RouteMode? = RouteMode.ALL,
     val routingPending: Boolean = false,
     /** Restart guard disabled auto-start — persistent warning, survives a
@@ -52,9 +52,11 @@ data class HomeUiState(
      *  comes from a live source (engine groups, DataStore, the service's
      *  underlay tracker); null means "not reported", never a guess. */
     val sessionDetails: SessionDetails? = null,
-    /** No node rows exist at all — the NodeCard should offer the add
+    /** No node rows exist at all — the server row should offer the add
      *  prompt instead of "No server selected". */
     val noNodesAtAll: Boolean = true,
+    /** Enabled subscription sources, not nodes or live VPN connections. */
+    val enabledSubscriptionCount: Int = 0,
     /** Pickable entries for the server sheet: Auto first, then every
      *  enabled node. Empty when there are no nodes — the card then shows
      *  the add prompt instead of a picker. */
@@ -197,21 +199,13 @@ class HomeViewModel
                 val bestNode = bestItem?.let { item -> nodes.firstOrNull { it.id == item.tag } }
                 val bestLatencyNodeName = bestNode?.let {
                     prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() } ?: it.name
-                } ?: bestItem?.tag
-                val bestLatencyMs = bestItem?.urlTestDelayMs
-
-                val activeTag = groups.firstOrNull { it.selectable }?.selected?.takeIf { it.isNotBlank() }
-                val activeNode = activeTag?.let { tag -> nodes.firstOrNull { it.id == tag } }
-                val sessionNode = when (connection) {
-                    is VpnConnectionState.Connected -> connection.node
-                    is VpnConnectionState.Connecting -> connection.node
-                    is VpnConnectionState.Preparing -> connection.node
-                    is VpnConnectionState.Reconnecting -> connection.node
-                    else -> null
                 }
-                val shownNode = activeNode ?: sessionNode?.let { live ->
-                    nodes.firstOrNull { it.id == live.id }
-                } ?: selected
+                val bestLatencyMs = bestItem?.urlTestDelayMs
+                val selectedDelayMs = if (auto) bestLatencyMs else groups.asSequence()
+                    .flatMap { it.items.asSequence() }
+                    .firstOrNull { it.tag == selectedId }
+                    ?.urlTestDelayMs?.takeIf { it > 0 }
+
                 HomeUiState(
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
@@ -226,11 +220,14 @@ class HomeViewModel
                     selectedNodeNameRes =
                         if (!auto || selected != null) null else R.string.afterglow_auto_select,
                     selectedNodeProtocol = selected?.protocol,
-                    selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
                     autoSelected = auto,
                     bestLatencyNodeName = if (auto) bestLatencyNodeName else null,
-                    bestLatencyMs = if (auto) bestLatencyMs else null,
+                    bestLatencyNodeProtocol = if (auto) bestNode?.protocol else null,
+                    selectedDelayMs = selectedDelayMs,
                     noNodesAtAll = nodes.isEmpty(),
+                    enabledSubscriptionCount = profiles.count {
+                        it.enabled && !SubscriptionRepository.isManualSubscription(it.url)
+                    },
                     serverOptions =
                         if (nodes.isEmpty()) {
                             emptyList()
@@ -277,8 +274,7 @@ class HomeViewModel
                             }
                         },
                     selectedOptionId = selectedId,
-                    subscriptionName = shownNode?.let { subscriptionNames[it.subscriptionId] },
-                    activeServerProtocol = activeNode?.protocol,
+                    subscriptionName = (if (auto) bestNode else selected)?.let { subscriptionNames[it.subscriptionId] },
                     routingMode = if (connection is VpnConnectionState.Connected ||
                         connection is VpnConnectionState.Reconnecting
                     ) appliedConfig?.routeMode else routeMode,

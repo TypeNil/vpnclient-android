@@ -28,7 +28,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -68,7 +67,6 @@ import dev.typenil.vpnclient.ui.theme.AfterglowSheet
 import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
-import java.time.Instant
 
 @Composable
 fun HomeScreen(
@@ -76,6 +74,8 @@ fun HomeScreen(
     onOpenConnections: () -> Unit = {},
     onAddServer: () -> Unit = {},
     onOpenServers: () -> Unit = {},
+    onOpenSubscriptions: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onOpenDiagnostics: () -> Unit = {},
     onOpenRouting: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
@@ -96,6 +96,9 @@ fun HomeScreen(
         onOpenDetails = { showDetails = true },
         onOpenDiagnostics = onOpenDiagnostics,
         onOpenRouting = onOpenRouting,
+        onOpenServers = onOpenServers,
+        onOpenSubscriptions = onOpenSubscriptions,
+        onOpenSettings = onOpenSettings,
         onDismissGuard = viewModel::dismissRestartGuardWarning,
         errorMessage = (connection as? VpnConnectionState.Error)?.let { errorText(it.error) },
     )
@@ -114,42 +117,6 @@ fun HomeScreen(
 }
 
 @Composable
-private fun statusText(state: VpnConnectionState): String =
-    when (state) {
-        VpnConnectionState.Idle -> {
-            stringResource(R.string.home_status_disconnected)
-        }
-
-        is VpnConnectionState.Preparing -> {
-            stringResource(R.string.home_status_preparing)
-        }
-
-        VpnConnectionState.PermissionRequired -> {
-            stringResource(R.string.home_status_permission)
-        }
-
-        is VpnConnectionState.Connecting -> {
-            stringResource(R.string.home_status_connecting)
-        }
-
-        is VpnConnectionState.Connected -> {
-            stringResource(R.string.home_status_connected)
-        }
-
-        is VpnConnectionState.Reconnecting -> {
-            stringResource(R.string.home_status_reconnecting, state.attempt)
-        }
-
-        VpnConnectionState.Stopping -> {
-            stringResource(R.string.home_status_disconnecting)
-        }
-
-        is VpnConnectionState.Error -> {
-            stringResource(R.string.home_status_failed)
-        }
-    }
-
-@Composable
 private fun errorText(error: VpnError): String =
     when (error) {
         VpnError.PermissionDenied -> stringResource(R.string.home_error_permission_denied)
@@ -160,137 +127,6 @@ private fun errorText(error: VpnError): String =
         is VpnError.TunnelFailed -> stringResource(R.string.home_error_tunnel, error.detail)
         is VpnError.Unexpected -> error.detail
     }
-
-private fun protocolLabel(protocol: String): String = runCatching { ProtocolType.valueOf(protocol) }.getOrNull()?.label ?: protocol
-
-/**
- * Display parts for the session node. The Auto sentinel stands for the
- * urltest group, not for one of its members: until the group reports a winner
- * it has no protocol or server of its own (its OTHER protocol is internal
- * plumbing, not a user-facing description), and a resolved Auto carries the
- * leaf's real values.
- */
-private fun nodeDetail(node: NodeSummary): Pair<String?, String?> =
-    if (node.id == NodeSelection.AUTO_ID && node.protocol == ProtocolType.OTHER) {
-        null to null
-    } else {
-        node.protocol.label to node.server
-    }
-
-/** Tap opens the quick-pick sheet — but only when there is something to
- *  pick: with no nodes the card is an add prompt, not a picker. */
-@Composable
-private fun NodeCard(
-    ui: HomeUiState,
-    onAddServer: () -> Unit,
-    onPick: () -> Unit,
-) {
-    val state = ui.connection
-    // While a connection is (being) established, show the node it uses;
-    // otherwise show the currently selected node.
-    val name: String?
-    val protocol: String?
-    val server: String?
-    when (state) {
-        is VpnConnectionState.Connected -> {
-            name = state.node.name
-            val (p, s) = nodeDetail(state.node)
-            protocol = p
-            server = s
-        }
-
-        is VpnConnectionState.Connecting -> {
-            name = state.node.name
-            val (p, s) = nodeDetail(state.node)
-            protocol = p
-            server = s
-        }
-
-        is VpnConnectionState.Reconnecting -> {
-            name = state.node.name
-            val (p, s) = nodeDetail(state.node)
-            protocol = p
-            server = s
-        }
-
-        is VpnConnectionState.Preparing -> {
-            name = state.node.name
-            val (p, s) = nodeDetail(state.node)
-            protocol = p
-            server = s
-        }
-
-        is VpnConnectionState.Error -> {
-            name = state.node?.name
-                ?: ui.selectedNodeName
-                ?: ui.selectedNodeNameRes?.let { stringResource(it) }
-            protocol = state.node?.protocol?.label
-                ?: ui.selectedNodeProtocol?.let(::protocolLabel)
-            server = state.node?.server ?: ui.selectedNodeServer
-        }
-
-        else -> {
-            name = ui.selectedNodeName
-                ?: ui.selectedNodeNameRes?.let { stringResource(it) }
-            protocol = ui.selectedNodeProtocol?.let(::protocolLabel)
-            server = ui.selectedNodeServer
-        }
-    }
-
-    val pickable = ui.serverOptions.isNotEmpty()
-    Card(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .then(
-                    if (pickable) Modifier.clickable(onClick = onPick) else Modifier,
-                ),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            // First-run context: no node rows at all — a "No server
-            // selected" label would be a dead end, so offer the add
-            // action instead. Only when the card has no node to show
-            // (idle/error with nothing selected).
-            if (name == null && ui.noNodesAtAll) {
-                Text(
-                    text = stringResource(R.string.common_no_servers_yet),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.common_add_servers_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onAddServer) {
-                    Text(stringResource(R.string.common_add_server_cta))
-                }
-            } else {
-                Text(
-                    text = name ?: stringResource(R.string.home_no_server_selected),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                if (protocol != null || server != null) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = listOfNotNull(protocol, server).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (pickable) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.home_tap_to_change),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * Quick-pick bottom sheet: Auto pinned first, then every enabled node behind a
@@ -463,128 +299,6 @@ private fun PickerRow(
     }
 }
 
-@Composable
-private fun ErrorCard(error: VpnError) {
-    // Informational only — the Error state is terminal until the next connect.
-    var dismissed by remember(error) { mutableStateOf(false) }
-    if (dismissed) return
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-            ),
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = errorText(error),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { dismissed = true }) {
-                Text(stringResource(R.string.common_dismiss))
-            }
-        }
-    }
-}
-
-@Composable
-private fun RestartGuardCard(onDismiss: () -> Unit) {
-    // Persisted counterpart of the restart-guard alert notification — shown
-    // even when notifications are denied, until dismissed or a new connect.
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors =
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-            ),
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.home_restart_guard_text),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.common_dismiss))
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatsCard(
-    stats: TrafficStats,
-    onOpenConnections: () -> Unit,
-    onOpenDetails: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            StatRow(
-                stringResource(R.string.home_stat_download),
-                formatRate(stats.downlinkBytesPerSec) + "  (" +
-                    stringResource(
-                        R.string.home_stat_total_suffix,
-                        formatBytes(stats.downlinkTotalBytes),
-                    ) + ")",
-            )
-            StatRow(
-                stringResource(R.string.home_stat_upload),
-                formatRate(stats.uplinkBytesPerSec) + "  (" +
-                    stringResource(
-                        R.string.home_stat_total_suffix,
-                        formatBytes(stats.uplinkTotalBytes),
-                    ) + ")",
-            )
-            StatRow(
-                label = stringResource(R.string.home_stat_connections),
-                value =
-                    stringResource(
-                        R.string.home_stat_connections_value,
-                        stats.connectionsIn,
-                        stats.connectionsOut,
-                    ),
-                // clickable before padding — the padded area stays tappable.
-                modifier =
-                    Modifier
-                        .clickable(onClick = onOpenConnections)
-                        .padding(vertical = 4.dp),
-                trailing = {
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-            )
-            StatRow(
-                label = stringResource(R.string.home_details_title),
-                value = "",
-                modifier =
-                    Modifier
-                        .clickable(onClick = onOpenDetails)
-                        .padding(vertical = 4.dp),
-                trailing = {
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-            )
-        }
-    }
-}
-
 /**
  * Real session details: engine-reported outbound, persisted routing/per-app
  * settings, the service's underlay transport, and stats from the live
@@ -660,78 +374,5 @@ private fun SessionDetailsSheet(
             // live state, so it renders even when the session is healthy.
             details?.lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
         }
-    }
-}
-
-@Composable
-private fun StatRow(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        Text(text = value, style = MaterialTheme.typography.bodySmall)
-        trailing?.invoke()
-    }
-}
-
-@Composable
-private fun ConnectButton(
-    connection: VpnConnectionState,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
-) {
-    val label: String
-    val enabled: Boolean
-    val action: () -> Unit
-    when (connection) {
-        is VpnConnectionState.Connected,
-        is VpnConnectionState.Reconnecting,
-        -> {
-            label = stringResource(R.string.action_disconnect)
-            enabled = true
-            action = onDisconnect
-        }
-
-        VpnConnectionState.Stopping -> {
-            label = stringResource(R.string.home_status_disconnecting)
-            enabled = false
-            action = {}
-        }
-
-        is VpnConnectionState.Preparing,
-        VpnConnectionState.PermissionRequired,
-        is VpnConnectionState.Connecting,
-        -> {
-            label = stringResource(R.string.home_status_connecting)
-            enabled = false
-            action = {}
-        }
-
-        VpnConnectionState.Idle,
-        is VpnConnectionState.Error,
-        -> {
-            label = stringResource(R.string.home_connect)
-            enabled = true
-            action = onConnect
-        }
-    }
-
-    Button(
-        onClick = action,
-        enabled = enabled,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-    ) {
-        Text(label, style = MaterialTheme.typography.titleMedium)
     }
 }
