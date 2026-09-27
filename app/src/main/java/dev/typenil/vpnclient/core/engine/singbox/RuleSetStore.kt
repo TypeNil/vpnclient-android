@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.util.zip.Inflater
 
 /**
  * App-side store for sing-box binary rule sets (.srs). Remote rule sets are
@@ -69,39 +70,67 @@ class RuleSetStore @Inject constructor(
 
     private fun ensureFile(tag: String): File {
         val target = File(dir, "$tag.srs")
-        val fresh = hasValidMagic(target) &&
+        val fresh = isValidSrs(target) &&
             System.currentTimeMillis() - target.lastModified() < STALE_MS
         if (fresh) return target
         // Seed from the bundled baseline and use it immediately — a fresh
         // install must connect even with the CDN unreachable, and must not
         // stall the connect on a download attempt. The seed is marked fresh,
         // so revalidation happens on a later ensureReady once it goes stale.
-        // A present-but-corrupt file (bad magic) is not a seed blocker —
+        // A present-but-corrupt file is not a seed blocker —
         // seeding overwrites it atomically.
-        if (!hasValidMagic(target)) {
+        if (!isValidSrs(target)) {
             if (seedFromBundle(tag, target)) return target
         }
         try {
             download(tag, target)
         } catch (e: Exception) {
             // A stale copy beats none — routing may be slightly outdated but
-            // the connect still succeeds. Only a structurally valid (magic)
+            // the connect still succeeds. Only a structurally valid
             // file qualifies; a corrupt file must fail the connect instead
             // of silently degrading routing.
-            if (hasValidMagic(target)) return target
+            if (isValidSrs(target)) return target
             throw EngineError.StartFailed("routing lists unavailable")
         }
         return target
     }
 
-    /** A stored file is usable only when it still starts with the .srs
-     *  magic — a truncated or poisoned file must never pass as fresh or
-     *  as the last-known-good fallback. */
-    private fun hasValidMagic(file: File): Boolean {
-        if (!file.isFile) return false
-        file.inputStream().use { probe ->
-            val magic = ByteArray(SRS_MAGIC.size)
-            return probe.read(magic) == SRS_MAGIC.size && magic.contentEquals(SRS_MAGIC)
+    /** A stored file is usable only when it starts with the .srs
+     *  magic ("SRS\x01") and its zlib-compressed payload is intact and
+     *  can be decompressed to completion. A truncated, poisoned, or
+     *  corrupt file must never pass as fresh or replace last-known-good. */
+    private fun isValidSrs(file: File): Boolean {
+        if (!file.isFile || file.length() < SRS_MAGIC.size + 2) return false
+        return try {
+            file.inputStream().use { raw ->
+                val magic = ByteArray(SRS_MAGIC.size)
+                if (raw.read(magic) != SRS_MAGIC.size || !magic.contentEquals(SRS_MAGIC)) {
+                    return false
+                }
+                val inflater = Inflater(false)
+                try {
+                    val inputBuf = ByteArray(8192)
+                    val outBuf = ByteArray(8192)
+                    var decompressedBytes = 0L
+                    while (true) {
+                        val n = raw.read(inputBuf)
+                        if (n < 0) break
+                        inflater.setInput(inputBuf, 0, n)
+                        while (!inflater.needsInput()) {
+                            val count = inflater.inflate(outBuf)
+                            if (count == 0) {
+                                if (inflater.finished() || inflater.needsDictionary()) break
+                            }
+                            decompressedBytes += count
+                        }
+                    }
+                    decompressedBytes > 0 && inflater.finished()
+                } finally {
+                    inflater.end()
+                }
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -135,7 +164,7 @@ class RuleSetStore @Inject constructor(
         try {
             input.use { inp -> tmp.outputStream().use { out -> inp.copyTo(out) } }
             // A broken asset must not seed the store either.
-            if (!hasValidMagic(tmp)) return false
+            if (!isValidSrs(tmp)) return false
             if (!installAtomically(tmp, target)) return false
             target.setLastModified(System.currentTimeMillis())
             return true
@@ -172,10 +201,11 @@ class RuleSetStore @Inject constructor(
                     }
                 }
                 if (tmp.length() == 0L) throw IOException("empty rule set")
-                // Cheap integrity gate: .srs files start with "SRS\x01".
-                // A poisoned 200 (captive portal, truncated mirror) must not
-                // replace a working copy — the old file survives untouched.
-                if (!hasValidMagic(tmp)) throw IOException("not a binary rule set")
+                // Deep integrity gate: .srs files start with "SRS\x01" and
+                // contain an RFC 1950 zlib-compressed payload that must decompress
+                // fully. A poisoned 200 (captive portal, truncated mirror) must
+                // not replace a working copy — the old file survives untouched.
+                if (!isValidSrs(tmp)) throw IOException("corrupted or incomplete rule set")
                 if (!installAtomically(tmp, target)) {
                     // The old target (if any) was not touched — it stays
                     // available for the last-known-good fallback.

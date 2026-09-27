@@ -19,9 +19,20 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
-/** A structurally valid .srs payload: the "SRS\x01" magic plus body. */
-private fun validSrsBytes(): ByteArray =
-    byteArrayOf(0x53, 0x52, 0x53, 0x01) + "srs-bytes".toByteArray()
+/** A structurally valid .srs payload: the "SRS\x01" magic plus valid zlib body. */
+private fun validSrsBytes(content: String = "srs-payload-data"): ByteArray {
+    val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, false)
+    deflater.setInput(content.toByteArray())
+    deflater.finish()
+    val buf = ByteArray(1024)
+    val compressed = java.io.ByteArrayOutputStream()
+    while (!deflater.finished()) {
+        val n = deflater.deflate(buf)
+        compressed.write(buf, 0, n)
+    }
+    deflater.end()
+    return byteArrayOf(0x53, 0x52, 0x53, 0x01) + compressed.toByteArray()
+}
 
 /**
  * JVM coverage for the store's freshness/serialization contract. The
@@ -246,6 +257,50 @@ class RuleSetStoreTest {
             fail("expected StartFailed")
         } catch (e: EngineError.StartFailed) {
             // expected — truncated file is not a usable stale copy
+        }
+    }
+
+    @Test
+    fun `truncated payload with valid magic keeps the stale copy`() = runTest {
+        val good = validSrsBytes("working-rules")
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(good)
+                setLastModified(0L)
+            }
+        }
+        // Valid magic + truncated zlib stream:
+        val truncated = validSrsBytes("incoming-rules").let { bytes ->
+            bytes.copyOf(bytes.size / 2)
+        }
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(truncated)))
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(good.size.toLong(), File(it).length())
+        }
+    }
+
+    @Test
+    fun `corrupt zlib payload with valid magic keeps the stale copy`() = runTest {
+        val good = validSrsBytes("working-rules")
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(good)
+                setLastModified(0L)
+            }
+        }
+        // Valid magic + corrupt random body:
+        val corruptBody = byteArrayOf(0x53, 0x52, 0x53, 0x01) + ByteArray(32) { 0xFF.toByte() }
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(corruptBody)))
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(good.size.toLong(), File(it).length())
         }
     }
 
