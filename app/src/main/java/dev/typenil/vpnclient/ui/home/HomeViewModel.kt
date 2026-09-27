@@ -188,7 +188,15 @@ class HomeViewModel
                 // What the header describes: the picked node, or — for Auto —
                 // the urltest group's measured winner. "First enabled
                 // subscription" would name a provider the session isn't using.
-                val activeTag = groups.firstOrNull { it.selectable }?.selected
+                val autoGroup = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }
+                val autoWinnerTag = autoGroup?.selected?.takeIf { it.isNotBlank() }
+                    ?: autoGroup?.items?.filter { (it.urlTestDelayMs ?: 0) > 0 }?.minByOrNull { it.urlTestDelayMs!! }?.tag
+                val activeTag =
+                    if (auto) {
+                        autoWinnerTag
+                    } else {
+                        groups.firstOrNull { it.selectable }?.selected?.takeIf { it.isNotBlank() }
+                    }
                 val activeNode = activeTag?.let { tag -> nodes.firstOrNull { it.id == tag } }
                 val sessionNode = when (connection) {
                     is VpnConnectionState.Connected -> connection.node
@@ -200,6 +208,7 @@ class HomeViewModel
                 val shownNode = activeNode ?: sessionNode?.let { live ->
                     nodes.firstOrNull { it.id == live.id }
                 } ?: selected
+                val autoWinnerNode = if (auto) activeNode else null
                 HomeUiState(
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
@@ -210,11 +219,14 @@ class HomeViewModel
                         selected?.let {
                             prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
                                 ?: it.name
+                        } ?: autoWinnerNode?.let {
+                            prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
+                                ?: it.name
                         },
                     selectedNodeNameRes =
-                        if (!auto || selected != null) null else R.string.common_auto_fastest,
-                    selectedNodeProtocol = selected?.protocol,
-                    selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
+                        if (!auto || selected != null || autoWinnerNode != null) null else R.string.common_auto_fastest,
+                    selectedNodeProtocol = (selected ?: autoWinnerNode)?.protocol,
+                    selectedNodeServer = (selected ?: autoWinnerNode)?.let { "${it.server}:${it.port}" },
                     autoSelected = auto,
                     noNodesAtAll = nodes.isEmpty(),
                     serverOptions =
@@ -285,17 +297,22 @@ class HomeViewModel
                                 // is the egress (Auto · Fastest), a member tag resolves
                                 // through the node table.
                                 activeOutbound =
-                                    groups
-                                        .firstOrNull { it.selectable }
-                                        ?.selected
-                                        ?.let { tag ->
-                                            when {
-                                                tag == NodeSelection.AUTO_ID -> null
-                                                else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
+                                    if (auto) {
+                                        activeNode?.name ?: autoWinnerTag
+                                    } else {
+                                        groups
+                                            .firstOrNull { it.selectable }
+                                            ?.selected
+                                            ?.let { tag ->
+                                                when {
+                                                    tag == NodeSelection.AUTO_ID -> null
+                                                    else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
+                                                }
                                             }
-                                        },
+                                    },
                                 activeOutboundRes =
                                     if (
+                                        !auto &&
                                         groups
                                             .firstOrNull { it.selectable }
                                             ?.selected == NodeSelection.AUTO_ID

@@ -228,28 +228,49 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
         is VpnConnectionState.Reconnecting -> state.node
         else -> null
     }
-    val title = if (ui.autoSelected) stringResource(R.string.afterglow_auto_select) else
-        ui.selectedNodeName ?: live?.name ?: ui.selectedNodeNameRes?.let { stringResource(it) }
-            ?: stringResource(if (noServers) R.string.common_no_servers_yet else R.string.home_no_server_selected)
-    val subtitle = if (noServers) stringResource(if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers)
-        else listOfNotNull(ui.subscriptionName, ui.activeServerProtocol ?: ui.selectedNodeProtocol ?: live?.protocol?.label)
-            .filter { it.isNotBlank() }.joinToString(" · ")
+    val autoWinner = if (ui.autoSelected) {
+        ui.selectedNodeName?.takeIf { it.isNotBlank() }
+            ?: ui.sessionDetails?.activeOutbound?.takeIf { it.isNotBlank() }
+            ?: live?.name?.takeIf { " → " in it }?.substringAfter(" → ")?.takeIf { it.isNotBlank() }
+    } else null
+    val showAutoBadge = ui.autoSelected && autoWinner != null
+    val title = when {
+        noServers -> stringResource(R.string.common_no_servers_yet)
+        ui.autoSelected -> autoWinner ?: stringResource(R.string.afterglow_auto_select)
+        else -> ui.selectedNodeName ?: live?.name ?: ui.selectedNodeNameRes?.let { stringResource(it) }
+            ?: stringResource(R.string.home_no_server_selected)
+    }
+    val protocolLabel = (ui.activeServerProtocol ?: ui.selectedNodeProtocol ?: live?.protocol?.label)
+        ?.takeIf { it.isNotBlank() && !it.equals("Other", ignoreCase = true) }
+    val subtitle = when {
+        noServers -> stringResource(if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers)
+        ui.autoSelected && autoWinner == null -> stringResource(R.string.home_auto_subtitle)
+        else -> listOfNotNull(ui.subscriptionName, protocolLabel).filter { it.isNotBlank() }.joinToString(" · ")
+    }
     Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
         Text(stringResource(R.string.afterglow_selected_server), color = colors.muted,
             fontSize = 11.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp))
         Row(Modifier.fillMaxWidth().clickable(onClick = if (noServers) onAdd else onPick)
-            .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                    lineHeight = 25.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (showAutoBadge) {
+                        Box(Modifier.padding(end = 8.dp)
+                            .border(1.dp, colors.coral, RoundedCornerShape(4.dp))
+                            .background(colors.errorSurface)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)) {
+                            Text(stringResource(R.string.afterglow_auto), color = colors.coral,
+                                fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        }
+                    }
+                    Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp,
+                        lineHeight = 25.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false))
+                }
                 if (subtitle.isNotEmpty()) Text(subtitle, color = colors.muted, fontSize = 13.sp,
                     maxLines = if (noServers) 3 else 2, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp))
-                if (ui.autoSelected && !ui.sessionDetails?.activeOutbound.isNullOrBlank()) {
-                    Text(stringResource(R.string.afterglow_current_outbound, ui.sessionDetails!!.activeOutbound!!),
-                        color = colors.coral, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
             }
             CircledChevron()
         }

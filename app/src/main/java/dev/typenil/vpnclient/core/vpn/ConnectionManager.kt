@@ -466,14 +466,10 @@ class ConnectionManager
                             ) &&
                             sessionNode?.id == NodeSelection.AUTO_ID
                         ) {
-                            updateSessionNode(
-                                NodeSelection.AUTO_ID,
-                                resolvedTag =
-                                    groups
-                                        .firstOrNull {
-                                            it.tag == NodeSelection.AUTO_ID
-                                        }?.selected,
-                            )
+                            val resolved = resolveAutoWinnerTag(groups)
+                            if (resolved != null) {
+                                updateSessionNode(NodeSelection.AUTO_ID, resolvedTag = resolved)
+                            }
                         }
                     }
                 }
@@ -622,7 +618,7 @@ class ConnectionManager
                 NodeSelection.Auto -> {
                     updateSessionNode(
                         NodeSelection.AUTO_ID,
-                        resolvedTag = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }?.selected,
+                        resolvedTag = resolveAutoWinnerTag(groups),
                     )
                 }
 
@@ -630,6 +626,17 @@ class ConnectionManager
                     updateSessionNode(selection.id)
                 }
             }
+        }
+
+        /**
+         * Resolves the winner outbound tag from the urltest group.
+         * sing-box's urltest group dynamically selects by minimum latency and
+         * leaves `selected` empty, so the winner is the item with lowest delay.
+         */
+        private fun resolveAutoWinnerTag(groups: List<OutboundGroupInfo>): String? {
+            val autoGroup = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID } ?: return null
+            return autoGroup.selected?.takeIf { it.isNotBlank() }
+                ?: autoGroup.items.filter { (it.urlTestDelayMs ?: 0) > 0 }.minByOrNull { it.urlTestDelayMs!! }?.tag
         }
 
         /** Point the session's displayed node at [id] — the engine's

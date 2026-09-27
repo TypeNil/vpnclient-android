@@ -35,7 +35,7 @@
   refresh, rule-set downloads) is routed through the VPN while connected
   (`PerAppPolicy` includes the app). A malicious exit node can therefore
   observe this fetch path; downloads are still integrity-gated (rule sets
-  carry `SSR\x01` magic + size cap, subscription bodies are full-validated
+  carry `SRS\x01` magic + size cap, subscription bodies are full-validated
   before commit), so worst case is a failed fetch keeping last-known-good —
   never silent corruption. `LatencyProbe` is the deliberate exception: it
   measures the underlay, so it binds off-tunnel via `VpnSocketProtector`.
