@@ -4,8 +4,11 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.RouteMode
+import io.nekohasekai.libbox.Libbox
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -39,11 +42,23 @@ import java.util.zip.Inflater
  * refresh never destroys a working copy.
  */
 @Singleton
-class RuleSetStore @Inject constructor(
-    @ApplicationContext context: Context,
+class RuleSetStore(
+    context: Context,
     private val client: OkHttpClient,
     private val bundled: BundledRuleSets,
+    private val coreValidator: CoreValidator = LibboxCoreValidator,
 ) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        client: OkHttpClient,
+        bundled: BundledRuleSets,
+    ) : this(
+        context = context,
+        client = client,
+        bundled = bundled,
+        coreValidator = LibboxCoreValidator,
+    )
     private val dir = File(context.filesDir, "rule_sets")
 
     /** One mutex per tag: concurrent ensureReady calls for the same tag
@@ -67,6 +82,8 @@ class RuleSetStore @Inject constructor(
                 }
             }.awaitAll().toMap()
         }
+
+    private val validatedCache = ConcurrentHashMap<String, Boolean>()
 
     private fun ensureFile(tag: String): File {
         val target = File(dir, "$tag.srs")
@@ -96,12 +113,15 @@ class RuleSetStore @Inject constructor(
     }
 
     /** A stored file is usable only when it starts with the .srs
-     *  magic ("SRS\x01") and its zlib-compressed payload is intact and
-     *  can be decompressed to completion. A truncated, poisoned, or
+     *  magic ("SRS\x01"), its zlib-compressed payload is intact and within
+     *  size bounds, its decompressed header conforms to the sing-box binary
+     *  schema, and the core can decode it. A truncated, poisoned, or
      *  corrupt file must never pass as fresh or replace last-known-good. */
     private fun isValidSrs(file: File): Boolean {
-        if (!file.isFile || file.length() < SRS_MAGIC.size + 2) return false
-        return try {
+        if (!file.isFile || file.length() < SRS_MAGIC.size + 4 || file.length() > MAX_RULE_SET_BYTES) return false
+        val cacheKey = "${file.absolutePath}:${file.length()}:${file.lastModified()}"
+        if (validatedCache[cacheKey] == true) return true
+        val structurallyValid = try {
             file.inputStream().use { raw ->
                 val magic = ByteArray(SRS_MAGIC.size)
                 if (raw.read(magic) != SRS_MAGIC.size || !magic.contentEquals(SRS_MAGIC)) {
@@ -112,6 +132,8 @@ class RuleSetStore @Inject constructor(
                     val inputBuf = ByteArray(8192)
                     val outBuf = ByteArray(8192)
                     var decompressedBytes = 0L
+                    val headerProbe = ByteArray(16)
+                    var headerBytesRead = 0
                     while (true) {
                         val n = raw.read(inputBuf)
                         if (n < 0) break
@@ -121,16 +143,87 @@ class RuleSetStore @Inject constructor(
                             if (count == 0) {
                                 if (inflater.finished() || inflater.needsDictionary()) break
                             }
+                            if (headerBytesRead < headerProbe.size) {
+                                val toCopy = minOf(count, headerProbe.size - headerBytesRead)
+                                System.arraycopy(outBuf, 0, headerProbe, headerBytesRead, toCopy)
+                                headerBytesRead += toCopy
+                            }
                             decompressedBytes += count
+                            if (decompressedBytes > MAX_DECOMPRESSED_BYTES) {
+                                return false // Decompression bomb defense
+                            }
                         }
                     }
-                    decompressedBytes > 0 && inflater.finished()
+                    if (decompressedBytes == 0L || !inflater.finished()) return false
+                    verifySrsHeader(headerProbe, headerBytesRead)
                 } finally {
                     inflater.end()
                 }
             }
         } catch (_: Exception) {
             false
+        }
+        if (!structurallyValid) return false
+        val valid = coreValidator.validate(file)
+        if (valid) {
+            validatedCache[cacheKey] = true
+        }
+        return valid
+    }
+
+    /**
+     * Inspects the decompressed stream header against the sing-box binary
+     * rule-set specification (common/srs/binary.go):
+     * - Rule count encoded as uvarint (must be > 0 and <= 100,000)
+     * - First rule type must be 0 (default) or 1 (logical)
+     * - For default rules, first item type must be 0..23 or 0xFF (ruleItemFinal)
+     */
+    private fun verifySrsHeader(bytes: ByteArray, length: Int): Boolean {
+        if (length < 3) return false
+        var offset = 0
+        var ruleCount: Long = 0
+        var shift = 0
+        var foundVarint = false
+        while (offset < length && offset < 10) {
+            val b = bytes[offset++].toInt() and 0xFF
+            ruleCount = ruleCount or ((b and 0x7F).toLong() shl shift)
+            if (b and 0x80 == 0) {
+                foundVarint = true
+                break
+            }
+            shift += 7
+        }
+        if (!foundVarint || ruleCount < 1L || ruleCount > 100_000L) return false
+        if (offset >= length) return false
+        val ruleType = bytes[offset++].toInt() and 0xFF
+        if (ruleType != 0 && ruleType != 1) return false
+        if (ruleType == 0) {
+            if (offset >= length) return false
+            val firstItemType = bytes[offset].toInt() and 0xFF
+            if (firstItemType !in 0..23 && firstItemType != 0xFF) return false
+        }
+        return true
+    }
+
+    fun interface CoreValidator {
+        /** Return true if the core accepts and decodes [file] without error; false if rejected. */
+        fun validate(file: File): Boolean
+    }
+
+    object LibboxCoreValidator : CoreValidator {
+        override fun validate(file: File): Boolean {
+            return try {
+                val path = file.absolutePath.replace("\\", "\\\\").replace("\"", "\\\"")
+                val probeConfig =
+                    """{"outbounds":[{"type":"direct","tag":"direct"}],"route":{"rules":[{"rule_set":["probe"],"outbound":"direct"}],"rule_set":[{"type":"local","tag":"probe","format":"binary","path":"$path"}]}}"""
+                Libbox.checkConfig(probeConfig)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Fail-closed on ANY error (Exception, LinkageError, native crash/error)
+                false
+            }
         }
     }
 
@@ -229,6 +322,10 @@ class RuleSetStore @Inject constructor(
         /** Hard cap on a downloaded rule set — the real files are ~5 MB
          *  max; anything bigger is a hostile or broken endpoint. */
         const val MAX_RULE_SET_BYTES = 32L * 1024 * 1024
+
+        /** Hard cap on decompressed rule-set size (64 MB) — defense against
+         *  zlib decompression bombs. */
+        const val MAX_DECOMPRESSED_BYTES = 64L * 1024 * 1024
 
         /** sing-box binary rule-set magic ("SRS\x01"). */
         val SRS_MAGIC = byteArrayOf(0x53, 0x52, 0x53, 0x01)

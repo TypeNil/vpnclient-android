@@ -19,10 +19,47 @@ import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
-/** A structurally valid .srs payload: the "SRS\x01" magic plus valid zlib body. */
-private fun validSrsBytes(content: String = "srs-payload-data"): ByteArray {
+/**
+ * A structurally valid sing-box binary rule-set (.srs) payload with valid conditions:
+ * Magic "SRS\x01" + zlib container with:
+ * - Rule count uvarint = 1 (0x01)
+ * - Rule type uint8 = 0 (default rule: 0x00)
+ * - Item type uint8 = 0x03 (ruleItemDomainKeyword: 0x03)
+ * - Keyword count uvarint = 1 (0x01)
+ * - Keyword length uvarint = 4 (0x04)
+ * - Keyword string bytes = "test" (0x74, 0x65, 0x73, 0x74)
+ * - Item type uint8 = 0xFF (ruleItemFinal: 0xFF)
+ * - Invert bool = false (0x00)
+ */
+private fun validSrsBytes(
+    payload: ByteArray = byteArrayOf(
+        0x01,
+        0x00,
+        0x03,
+        0x01,
+        0x04,
+        0x74, 0x65, 0x73, 0x74,
+        0xFF.toByte(),
+        0x00,
+    ),
+): ByteArray {
     val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, false)
-    deflater.setInput(content.toByteArray())
+    deflater.setInput(payload)
+    deflater.finish()
+    val buf = ByteArray(1024)
+    val compressed = java.io.ByteArrayOutputStream()
+    while (!deflater.finished()) {
+        val n = deflater.deflate(buf)
+        compressed.write(buf, 0, n)
+    }
+    deflater.end()
+    return byteArrayOf(0x53, 0x52, 0x53, 0x01) + compressed.toByteArray()
+}
+
+/** An arbitrary zlib payload that is NOT a valid sing-box rule set (e.g. zlib("hello")). */
+private fun pseudoSrsBytes(text: String = "arbitrary-zlib-content"): ByteArray {
+    val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, false)
+    deflater.setInput(text.toByteArray())
     deflater.finish()
     val buf = ByteArray(1024)
     val compressed = java.io.ByteArrayOutputStream()
@@ -65,7 +102,7 @@ class RuleSetStoreTest {
                 chain.proceed(chain.request().newBuilder().url(server.url("/")).build())
             }
             .build()
-        store = RuleSetStore(context, client, bundled)
+        store = RuleSetStore(context, client, bundled, coreValidator = { true })
     }
 
     @After
@@ -262,7 +299,7 @@ class RuleSetStoreTest {
 
     @Test
     fun `truncated payload with valid magic keeps the stale copy`() = runTest {
-        val good = validSrsBytes("working-rules")
+        val good = validSrsBytes()
         RouteMode.BYPASS_RU.ruleSetTags.forEach {
             File(ruleDir, "$it.srs").apply {
                 writeBytes(good)
@@ -270,7 +307,7 @@ class RuleSetStoreTest {
             }
         }
         // Valid magic + truncated zlib stream:
-        val truncated = validSrsBytes("incoming-rules").let { bytes ->
+        val truncated = validSrsBytes().let { bytes ->
             bytes.copyOf(bytes.size / 2)
         }
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
@@ -284,8 +321,97 @@ class RuleSetStoreTest {
     }
 
     @Test
+    fun `core validator rejection keeps the stale copy`() = runTest {
+        val good = validSrsBytes()
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(good)
+                setLastModified(0L)
+            }
+        }
+        val rejectingStore = RuleSetStore(
+            context = object : ContextWrapper(null) { override fun getFilesDir(): File = dir },
+            client = OkHttpClient.Builder()
+                .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().url(server.url("/")).build()) }
+                .build(),
+            bundled = object : BundledRuleSets(object : ContextWrapper(null) { override fun getFilesDir(): File = dir }) {
+                override fun open(tag: String) = bundledBytes[tag]?.inputStream()
+            },
+            // Rejects the incoming downloaded temp file (simulating core decode error on new file),
+            // while existing working target remains valid.
+            coreValidator = { file -> !file.name.contains(".tmp") },
+        )
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(good)))
+        }
+        val paths = rejectingStore.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(good.size.toLong(), File(it).length())
+        }
+    }
+
+    @Test
+    fun `valid zlib with non-srs schema keeps the stale copy`() = runTest {
+        val good = validSrsBytes()
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(good)
+                setLastModified(0L)
+            }
+        }
+        // Has valid magic and valid zlib, but contains "hello" instead of sing-box rule set schema
+        val nonSrs = pseudoSrsBytes("hello-not-a-ruleset")
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(nonSrs)))
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(good.size.toLong(), File(it).length())
+        }
+    }
+
+    @Test
+    fun `decompression bomb exceeding max decompressed bytes keeps the stale copy`() = runTest {
+        val good = validSrsBytes()
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(good)
+                setLastModified(0L)
+            }
+        }
+        // 65 MB of zeroes with valid SRS header at index 0..3:
+        // Compresses down to ~64 KB with deflate, but inflates to 65 MB!
+        val bombBytes = ByteArray(65 * 1024 * 1024)
+        bombBytes[0] = 0x01
+        bombBytes[1] = 0x00
+        bombBytes[2] = 0xFF.toByte()
+        bombBytes[3] = 0x00
+        val deflater = java.util.zip.Deflater(java.util.zip.Deflater.BEST_COMPRESSION, false)
+        deflater.setInput(bombBytes)
+        deflater.finish()
+        val buf = ByteArray(8192)
+        val compressed = java.io.ByteArrayOutputStream()
+        while (!deflater.finished()) {
+            val n = deflater.deflate(buf)
+            compressed.write(buf, 0, n)
+        }
+        deflater.end()
+        val bomb = byteArrayOf(0x53, 0x52, 0x53, 0x01) + compressed.toByteArray()
+        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(bomb)))
+        }
+        val paths = store.ensureReady(RouteMode.BYPASS_RU)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        paths.values.forEach {
+            assertEquals(good.size.toLong(), File(it).length())
+        }
+    }
+
+    @Test
     fun `corrupt zlib payload with valid magic keeps the stale copy`() = runTest {
-        val good = validSrsBytes("working-rules")
+        val good = validSrsBytes()
         RouteMode.BYPASS_RU.ruleSetTags.forEach {
             File(ruleDir, "$it.srs").apply {
                 writeBytes(good)
