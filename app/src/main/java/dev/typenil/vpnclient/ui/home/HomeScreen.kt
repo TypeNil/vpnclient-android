@@ -1,7 +1,11 @@
 package dev.typenil.vpnclient.ui.home
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -57,6 +64,10 @@ import dev.typenil.vpnclient.ui.common.formatRate
 import dev.typenil.vpnclient.ui.common.perAppSummary
 import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.uptimeText
+import dev.typenil.vpnclient.ui.theme.AfterglowSheet
+import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import java.time.Instant
 
 @Composable
@@ -65,100 +76,40 @@ fun HomeScreen(
     onOpenConnections: () -> Unit = {},
     onAddServer: () -> Unit = {},
     onOpenServers: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
+    onOpenRouting: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val connection = ui.connection
 
-    Column(
-        modifier =
-            modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        ui.subscriptionName?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        Text(
-            text = statusText(connection),
-            style = MaterialTheme.typography.headlineMedium,
-            color =
-                when (connection) {
-                    is VpnConnectionState.Connected -> MaterialTheme.colorScheme.primary
-                    is VpnConnectionState.Error -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurface
-                },
-            textAlign = TextAlign.Center,
+    var showPicker by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
+    AfterglowHomeContent(
+        ui = ui,
+        modifier = modifier,
+        onConnect = viewModel::connect,
+        onDisconnect = viewModel::disconnect,
+        onPick = { showPicker = true },
+        onAddServer = onAddServer,
+        onOpenConnections = onOpenConnections,
+        onOpenDetails = { showDetails = true },
+        onOpenDiagnostics = onOpenDiagnostics,
+        onOpenRouting = onOpenRouting,
+        onDismissGuard = viewModel::dismissRestartGuardWarning,
+        errorMessage = (connection as? VpnConnectionState.Error)?.let { errorText(it.error) },
+    )
+    if (showPicker) {
+        ServerPickerSheet(
+            options = ui.serverOptions,
+            selectedId = ui.selectedOptionId,
+            onPick = { showPicker = false; viewModel.selectServer(it) },
+            onOpenServers = { showPicker = false; onOpenServers() },
+            onDismiss = { showPicker = false },
         )
-
-        Spacer(Modifier.height(16.dp))
-
-        var showPicker by remember { mutableStateOf(false) }
-        NodeCard(
-            ui = ui,
-            onAddServer = onAddServer,
-            onPick = { showPicker = true },
-        )
-        if (showPicker) {
-            ServerPickerSheet(
-                options = ui.serverOptions,
-                selectedId = ui.selectedOptionId,
-                onPick = {
-                    showPicker = false
-                    viewModel.selectServer(it)
-                },
-                onOpenServers = {
-                    showPicker = false
-                    onOpenServers()
-                },
-                onDismiss = { showPicker = false },
-            )
-        }
-
-        if (ui.restartGuardTripped) {
-            Spacer(Modifier.height(12.dp))
-            RestartGuardCard(onDismiss = viewModel::dismissRestartGuardWarning)
-        }
-
-        if (connection is VpnConnectionState.Error) {
-            Spacer(Modifier.height(12.dp))
-            ErrorCard(connection.error)
-        }
-
-        if (connection is VpnConnectionState.Connected) {
-            var showDetails by remember { mutableStateOf(false) }
-            connection.stats?.let { stats ->
-                Spacer(Modifier.height(12.dp))
-                StatsCard(
-                    stats = stats,
-                    onOpenConnections = onOpenConnections,
-                    onOpenDetails = { showDetails = true },
-                )
-            }
-            if (showDetails) {
-                SessionDetailsSheet(
-                    state = connection,
-                    details = ui.sessionDetails,
-                    onDismiss = { showDetails = false },
-                )
-            }
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        ConnectButton(
-            connection = connection,
-            onConnect = viewModel::connect,
-            onDisconnect = viewModel::disconnect,
-        )
+    }
+    if (showDetails && connection is VpnConnectionState.Connected) {
+        SessionDetailsSheet(connection, ui.sessionDetails, onDismiss = { showDetails = false })
     }
 }
 
@@ -377,12 +328,13 @@ private fun ServerPickerSheet(
             autoTitle?.contains(trimmed, ignoreCase = true) == true ||
             auto?.searchText?.contains(trimmed, ignoreCase = true) == true
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 24.dp)) {
-            Text(
-                text = stringResource(R.string.home_picker_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+    val colors = AfterglowTheme.colors
+    AfterglowSheet(onDismiss = onDismiss) {
+        Column(Modifier.padding(bottom = 12.dp)) {
+            AfterglowSheetHeader(
+                title = stringResource(R.string.home_picker_title),
+                closeLabel = stringResource(R.string.common_dismiss),
+                onDismiss = onDismiss,
             )
             OutlinedTextField(
                 value = query,
@@ -390,7 +342,16 @@ private fun ServerPickerSheet(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp),
+                        .padding(horizontal = 20.dp)
+                        .heightIn(min = AfterglowTokens.fieldHeight),
+                shape = AfterglowTokens.inputShape,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.coral,
+                    unfocusedBorderColor = colors.border,
+                    focusedContainerColor = colors.paperSecondary,
+                    unfocusedContainerColor = colors.paperSecondary,
+                    cursorColor = colors.coral,
+                ),
                 placeholder = { Text(stringResource(R.string.home_picker_search)) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
@@ -410,9 +371,9 @@ private fun ServerPickerSheet(
             // soft keyboard open, which covers the bottom of the sheet.
             TextButton(
                 onClick = onOpenServers,
-                modifier = Modifier.padding(horizontal = 12.dp),
+                modifier = Modifier.padding(horizontal = 12.dp).heightIn(min = 48.dp),
             ) {
-                Text(stringResource(R.string.home_picker_all_servers))
+                Text(stringResource(R.string.home_picker_all_servers), color = colors.coral)
             }
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 // Auto is the picker's first-class choice — shown on an
@@ -441,7 +402,7 @@ private fun ServerPickerSheet(
                             text = stringResource(R.string.home_picker_no_match, trimmed),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                         )
                     }
                 }
@@ -456,12 +417,18 @@ private fun PickerRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val colors = AfterglowTheme.colors
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp)
+                .border(AfterglowTokens.border, if (selected) colors.coral else colors.border, AfterglowTokens.chipShape)
+                .background(if (selected) colors.errorSurface else colors.paperSecondary, AfterglowTokens.chipShape)
+                .semantics { this.selected = selected }
                 .clickable(onClick = onClick)
-                .padding(horizontal = 24.dp, vertical = 12.dp),
+                .heightIn(min = AfterglowTokens.rowHeight)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -630,20 +597,21 @@ private fun SessionDetailsSheet(
     details: SessionDetails?,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    AfterglowSheet(onDismiss = onDismiss) {
+        AfterglowSheetHeader(
+            title = stringResource(R.string.home_details_title),
+            closeLabel = stringResource(R.string.common_dismiss),
+            onDismiss = onDismiss,
+        )
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val none = stringResource(R.string.common_none)
-            Text(
-                stringResource(R.string.home_details_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
             DetailRow(stringResource(R.string.home_details_node), state.node.name)
             // The selector group's pick is what actually egresses — can
             // diverge from the session node after a live outbound switch.

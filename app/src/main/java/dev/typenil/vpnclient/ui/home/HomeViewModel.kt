@@ -37,6 +37,9 @@ data class HomeUiState(
      *  (the Auto sentinel) — the screen resolves it to the localized label. */
     @param:StringRes val selectedNodeNameRes: Int? = null,
     val subscriptionName: String? = null,
+    val activeServerProtocol: String? = null,
+    val routingMode: RouteMode? = RouteMode.ALL,
+    val routingPending: Boolean = false,
     /** Restart guard disabled auto-start — persistent warning, survives a
      *  denied notification permission (the alert notification may never
      *  have been seen). */
@@ -185,12 +188,18 @@ class HomeViewModel
                 // What the header describes: the picked node, or — for Auto —
                 // the urltest group's measured winner. "First enabled
                 // subscription" would name a provider the session isn't using.
-                val shownNode =
-                    selected
-                        ?: groups
-                            .firstOrNull { it.tag == NodeSelection.AUTO_ID }
-                            ?.selected
-                            ?.let { winnerId -> nodes.firstOrNull { it.id == winnerId } }
+                val activeTag = groups.firstOrNull { it.selectable }?.selected
+                val activeNode = activeTag?.let { tag -> nodes.firstOrNull { it.id == tag } }
+                val sessionNode = when (connection) {
+                    is VpnConnectionState.Connected -> connection.node
+                    is VpnConnectionState.Connecting -> connection.node
+                    is VpnConnectionState.Preparing -> connection.node
+                    is VpnConnectionState.Reconnecting -> connection.node
+                    else -> null
+                }
+                val shownNode = activeNode ?: sessionNode?.let { live ->
+                    nodes.firstOrNull { it.id == live.id }
+                } ?: selected
                 HomeUiState(
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
@@ -255,6 +264,13 @@ class HomeViewModel
                         },
                     selectedOptionId = selectedId,
                     subscriptionName = shownNode?.let { subscriptionNames[it.subscriptionId] },
+                    activeServerProtocol = activeNode?.protocol,
+                    routingMode = if (connection is VpnConnectionState.Connected ||
+                        connection is VpnConnectionState.Reconnecting
+                    ) appliedConfig?.routeMode else routeMode,
+                    routingPending = (connection is VpnConnectionState.Connected ||
+                        connection is VpnConnectionState.Reconnecting) &&
+                        appliedConfig != null && appliedConfig.routeMode != routeMode,
                     restartGuardTripped = guardTripped,
                     // The sheet is real-state only: it exists only while Connected —
                     // outside that there is no session to describe.
