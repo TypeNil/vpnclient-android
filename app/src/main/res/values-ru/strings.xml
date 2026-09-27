@@ -123,6 +123,8 @@
     <string name="afterglow_connecting">Подключение…</string>
     <string name="afterglow_stopping">Отключение…</string>
     <string name="afterglow_auto">АВТО</string>
+    <string name="afterglow_auto_best_latency">Мин. задержка: %1$s (%2$d мс)</string>
+    <string name="afterglow_auto_best_latency_noms">Мин. задержка: %1$s</string>
     <string name="afterglow_your_connection">ВАШЕ СОЕДИНЕНИЕ</string>
     <string name="afterglow_home_index">ГЛАВНАЯ / 01</string>
     <string name="afterglow_connection_index">СОЕДИНЕНИЕ</string>

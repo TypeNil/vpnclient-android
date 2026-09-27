@@ -110,7 +110,7 @@ internal fun AfterglowHomeContent(
         Spacer(Modifier.height(20.dp))
         ServerAndRouting(ui, onPick, onAddServer, onOpenRouting)
         if (state is VpnConnectionState.Connected) {
-            SessionStats(state, onOpenDetails)
+            SessionStats(state, onOpenConnections, onOpenDetails)
         }
     }
 }
@@ -228,23 +228,25 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
         is VpnConnectionState.Reconnecting -> state.node
         else -> null
     }
-    val autoWinner = if (ui.autoSelected) {
-        ui.selectedNodeName?.takeIf { it.isNotBlank() }
-            ?: ui.sessionDetails?.activeOutbound?.takeIf { it.isNotBlank() }
-            ?: live?.name?.takeIf { " → " in it }?.substringAfter(" → ")?.takeIf { it.isNotBlank() }
-    } else null
-    val showAutoBadge = ui.autoSelected && autoWinner != null
     val title = when {
         noServers -> stringResource(R.string.common_no_servers_yet)
-        ui.autoSelected -> autoWinner ?: stringResource(R.string.afterglow_auto_select)
+        ui.autoSelected -> stringResource(R.string.afterglow_auto_select)
         else -> ui.selectedNodeName ?: live?.name ?: ui.selectedNodeNameRes?.let { stringResource(it) }
             ?: stringResource(R.string.home_no_server_selected)
     }
     val protocolLabel = (ui.activeServerProtocol ?: ui.selectedNodeProtocol ?: live?.protocol?.label)
         ?.takeIf { it.isNotBlank() && !it.equals("Other", ignoreCase = true) }
+    val autoSubtitle = when {
+        ui.bestLatencyNodeName != null && ui.bestLatencyMs != null ->
+            stringResource(R.string.afterglow_auto_best_latency, ui.bestLatencyNodeName, ui.bestLatencyMs)
+        ui.bestLatencyNodeName != null ->
+            stringResource(R.string.afterglow_auto_best_latency_noms, ui.bestLatencyNodeName)
+        else ->
+            stringResource(R.string.home_auto_subtitle)
+    }
     val subtitle = when {
         noServers -> stringResource(if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers)
-        ui.autoSelected && autoWinner == null -> stringResource(R.string.home_auto_subtitle)
+        ui.autoSelected -> listOfNotNull(ui.subscriptionName, autoSubtitle).filter { it.isNotBlank() }.joinToString(" · ")
         else -> listOfNotNull(ui.subscriptionName, protocolLabel).filter { it.isNotBlank() }.joinToString(" · ")
     }
     Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
@@ -254,20 +256,8 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
         Row(Modifier.fillMaxWidth().clickable(onClick = if (noServers) onAdd else onPick)
             .heightIn(min = 64.dp).padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (showAutoBadge) {
-                        Box(Modifier.padding(end = 8.dp)
-                            .border(1.dp, colors.coral, RoundedCornerShape(4.dp))
-                            .background(colors.errorSurface)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)) {
-                            Text(stringResource(R.string.afterglow_auto), color = colors.coral,
-                                fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                        }
-                    }
-                    Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                        lineHeight = 25.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false))
-                }
+                Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp,
+                    lineHeight = 25.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (subtitle.isNotEmpty()) Text(subtitle, color = colors.muted, fontSize = 13.sp,
                     maxLines = if (noServers) 3 else 2, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp))
@@ -325,7 +315,11 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
 }
 
 @Composable
-private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () -> Unit) {
+private fun SessionStats(
+    state: VpnConnectionState.Connected,
+    onOpenConnections: () -> Unit,
+    onOpenDetails: () -> Unit,
+) {
     val colors = AfterglowTheme.colors
     val history = remember(state.since) { TrafficHistory() }
     var samples by remember(state.since) { mutableStateOf<List<TrafficHistory.Point>>(emptyList()) }
@@ -375,6 +369,17 @@ private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () 
             }
         } else Text(stringResource(R.string.afterglow_stats_unavailable), color = colors.muted,
             modifier = Modifier.padding(16.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+        Row(Modifier.fillMaxWidth().clickable(onClick = onOpenConnections).heightIn(min = 48.dp)
+            .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.home_stat_connections), color = colors.ink,
+                fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (fresh) {
+                Text(stringResource(R.string.home_stat_connections_value, stats.connectionsIn, stats.connectionsOut),
+                    color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(end = 8.dp))
+            }
+            CircledChevron()
+        }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
         Row(Modifier.fillMaxWidth().clickable(onClick = onOpenDetails).heightIn(min = 48.dp)
             .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -123,6 +123,8 @@
     <string name="afterglow_connecting">CONNECTING…</string>
     <string name="afterglow_stopping">DISCONNECTING…</string>
     <string name="afterglow_auto">AUTO</string>
+    <string name="afterglow_auto_best_latency">Min latency: %1$s (%2$d ms)</string>
+    <string name="afterglow_auto_best_latency_noms">Min latency: %1$s</string>
     <string name="afterglow_your_connection">YOUR CONNECTION</string>
     <string name="afterglow_home_index">HOME / 01</string>
     <string name="afterglow_connection_index">CONNECTION</string>

@@ -33,6 +33,10 @@ data class HomeUiState(
     val selectedNodeServer: String? = null,
     /** The persisted pick is "Auto / Fastest" — no concrete node exists. */
     val autoSelected: Boolean = false,
+    /** Best measured latency node name from urltest (if tested). Does NOT claim
+     *  to be the guaranteed active egress when tolerance is in effect. */
+    val bestLatencyNodeName: String? = null,
+    val bestLatencyMs: Int? = null,
     /** Resource for the persisted pick when no concrete node name exists
      *  (the Auto sentinel) — the screen resolves it to the localized label. */
     @param:StringRes val selectedNodeNameRes: Int? = null,
@@ -189,14 +193,14 @@ class HomeViewModel
                 // the urltest group's measured winner. "First enabled
                 // subscription" would name a provider the session isn't using.
                 val autoGroup = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }
-                val autoWinnerTag = autoGroup?.selected?.takeIf { it.isNotBlank() }
-                    ?: autoGroup?.items?.filter { (it.urlTestDelayMs ?: 0) > 0 }?.minByOrNull { it.urlTestDelayMs!! }?.tag
-                val activeTag =
-                    if (auto) {
-                        autoWinnerTag
-                    } else {
-                        groups.firstOrNull { it.selectable }?.selected?.takeIf { it.isNotBlank() }
-                    }
+                val bestItem = autoGroup?.items?.filter { (it.urlTestDelayMs ?: 0) > 0 }?.minByOrNull { it.urlTestDelayMs!! }
+                val bestNode = bestItem?.let { item -> nodes.firstOrNull { it.id == item.tag } }
+                val bestLatencyNodeName = bestNode?.let {
+                    prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() } ?: it.name
+                } ?: bestItem?.tag
+                val bestLatencyMs = bestItem?.urlTestDelayMs
+
+                val activeTag = groups.firstOrNull { it.selectable }?.selected?.takeIf { it.isNotBlank() }
                 val activeNode = activeTag?.let { tag -> nodes.firstOrNull { it.id == tag } }
                 val sessionNode = when (connection) {
                     is VpnConnectionState.Connected -> connection.node
@@ -208,7 +212,6 @@ class HomeViewModel
                 val shownNode = activeNode ?: sessionNode?.let { live ->
                     nodes.firstOrNull { it.id == live.id }
                 } ?: selected
-                val autoWinnerNode = if (auto) activeNode else null
                 HomeUiState(
                     connection = connection,
                     // The Auto pick resolves to a node only at the engine — while
@@ -219,15 +222,14 @@ class HomeViewModel
                         selected?.let {
                             prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
                                 ?: it.name
-                        } ?: autoWinnerNode?.let {
-                            prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
-                                ?: it.name
                         },
                     selectedNodeNameRes =
-                        if (!auto || selected != null || autoWinnerNode != null) null else R.string.common_auto_fastest,
-                    selectedNodeProtocol = (selected ?: autoWinnerNode)?.protocol,
-                    selectedNodeServer = (selected ?: autoWinnerNode)?.let { "${it.server}:${it.port}" },
+                        if (!auto || selected != null) null else R.string.afterglow_auto_select,
+                    selectedNodeProtocol = selected?.protocol,
+                    selectedNodeServer = selected?.let { "${it.server}:${it.port}" },
                     autoSelected = auto,
+                    bestLatencyNodeName = if (auto) bestLatencyNodeName else null,
+                    bestLatencyMs = if (auto) bestLatencyMs else null,
                     noNodesAtAll = nodes.isEmpty(),
                     serverOptions =
                         if (nodes.isEmpty()) {
@@ -297,27 +299,22 @@ class HomeViewModel
                                 // is the egress (Auto · Fastest), a member tag resolves
                                 // through the node table.
                                 activeOutbound =
-                                    if (auto) {
-                                        activeNode?.name ?: autoWinnerTag
-                                    } else {
-                                        groups
-                                            .firstOrNull { it.selectable }
-                                            ?.selected
-                                            ?.let { tag ->
-                                                when {
-                                                    tag == NodeSelection.AUTO_ID -> null
-                                                    else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
-                                                }
+                                    groups
+                                        .firstOrNull { it.selectable }
+                                        ?.selected
+                                        ?.let { tag ->
+                                            when {
+                                                tag == NodeSelection.AUTO_ID -> null
+                                                else -> nodes.firstOrNull { it.id == tag }?.name ?: tag
                                             }
-                                    },
+                                        },
                                 activeOutboundRes =
                                     if (
-                                        !auto &&
                                         groups
                                             .firstOrNull { it.selectable }
                                             ?.selected == NodeSelection.AUTO_ID
                                     ) {
-                                        R.string.common_auto_fastest
+                                        R.string.afterglow_auto_select
                                     } else {
                                         null
                                     },

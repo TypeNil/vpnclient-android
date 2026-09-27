@@ -629,14 +629,13 @@ class ConnectionManager
         }
 
         /**
-         * Resolves the winner outbound tag from the urltest group.
-         * sing-box's urltest group dynamically selects by minimum latency and
-         * leaves `selected` empty, so the winner is the item with lowest delay.
+         * Resolves the selected outbound tag reported by the engine for the
+         * auto/urltest group. Only explicit non-blank selections reported by
+         * the core are honored; we never guess egress from delay metrics.
          */
         private fun resolveAutoWinnerTag(groups: List<OutboundGroupInfo>): String? {
             val autoGroup = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID } ?: return null
             return autoGroup.selected?.takeIf { it.isNotBlank() }
-                ?: autoGroup.items.filter { (it.urlTestDelayMs ?: 0) > 0 }.minByOrNull { it.urlTestDelayMs!! }?.tag
         }
 
         /** Point the session's displayed node at [id] — the engine's
@@ -675,9 +674,7 @@ class ConnectionManager
                     publish(current.copy(node = summary))
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> Unit
             }
         }
 
@@ -825,9 +822,7 @@ class ConnectionManager
                             }
                         }
 
-                        else -> {
-                            Unit
-                        }
+                        else -> Unit
                     }
                 }
             }
@@ -897,9 +892,7 @@ class ConnectionManager
                             }
                         }
 
-                        settled is VpnConnectionState.Error -> {
-                            Unit
-                        }
+                        settled is VpnConnectionState.Error -> Unit
 
                         else -> {
                             mutex.withLock {
