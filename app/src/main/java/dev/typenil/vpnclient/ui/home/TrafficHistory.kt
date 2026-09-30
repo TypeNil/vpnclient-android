@@ -8,7 +8,16 @@ internal class TrafficHistory {
 
     fun observe(atNanos: Long, down: Long, up: Long) {
         if (atNanos <= 0 || (points.isNotEmpty() && atNanos <= points.last().atNanos)) return
-        points.addLast(Point(atNanos, down.coerceAtLeast(0), up.coerceAtLeast(0)))
+        val rawDown = down.coerceAtLeast(0)
+        val rawUp = up.coerceAtLeast(0)
+        val previous = points.lastOrNull()
+        // Smooth only the chart; numeric rates and cumulative totals remain the core's actual values.
+        // A paused status stream starts a new segment instead of blending with stale traffic.
+        val alpha = if (previous == null || atNanos - previous.atNanos > GAP_NANOS) 1.0
+            else 1.0 - kotlin.math.exp(-(atNanos - previous.atNanos).toDouble() / 1_500_000_000.0)
+        points.addLast(Point(atNanos,
+            (previous?.down?.let { it + (rawDown - it) * alpha } ?: rawDown.toDouble()).toLong(),
+            (previous?.up?.let { it + (rawUp - it) * alpha } ?: rawUp.toDouble()).toLong()))
         while (points.isNotEmpty() && points.first().atNanos < atNanos - WINDOW_NANOS) points.removeFirst()
         while (points.size > 64) points.removeFirst()
     }

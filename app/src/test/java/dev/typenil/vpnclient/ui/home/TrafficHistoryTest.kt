@@ -25,6 +25,18 @@ class TrafficHistoryTest {
         assertFalse(history.isFresh(start + 11_000_000_000L, start + 1_000_000_000L))
     }
 
+    @Test fun `chart dampens bursts but starts fresh after a reporting gap`() {
+        val history = TrafficHistory()
+        val start = 1_000_000_000_000L
+        history.observe(start, 0, 0)
+        history.observe(start + 1_000_000_000L, 1000, 500)
+        val smoothed = history.recent(start + 1_000_000_000L).last()
+        assertTrue(smoothed.down in 1..999)
+        assertTrue(smoothed.up in 1..499)
+        history.observe(start + 5_000_000_000L, 0, 0)
+        assertEquals(0, history.recent(start + 5_000_000_000L).last().down)
+    }
+
     @Test fun `paused status creates a real time gap and resume does not backfill`() {
         val history = TrafficHistory()
         val start = 1_000_000_000_000L
