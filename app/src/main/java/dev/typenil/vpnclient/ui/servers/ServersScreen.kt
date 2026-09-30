@@ -1,6 +1,8 @@
 package dev.typenil.vpnclient.ui.servers
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,9 +10,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -34,7 +37,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import dev.typenil.vpnclient.ui.theme.AfterglowCheckbox
 import dev.typenil.vpnclient.ui.theme.AfterglowChip as FilterChip
+import dev.typenil.vpnclient.ui.theme.AfterglowRadioButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,7 +54,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +68,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
+import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 
 @Composable
 fun ServersScreen(
@@ -69,10 +79,14 @@ fun ServersScreen(
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val testing by viewModel.testing.collectAsStateWithLifecycle()
 
+    // One column on phones, two on tablets — 160 dp min cards crushed the
+    // name/touch targets into slivers.
+    val sheetMax = LocalSheetMaxHeight.current
+        ?: LocalConfiguration.current.screenHeightDp.dp
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 160.dp),
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 16.dp),
+        columns = GridCells.Adaptive(minSize = 280.dp),
+        modifier = modifier.fillMaxWidth().heightIn(max = sheetMax * .78f),
+        contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -111,57 +125,26 @@ fun ServersScreen(
                         sortMode = ui.sortMode,
                         onSelect = viewModel::setSortMode,
                     )
+                    // Star-only toggle — the word "Избранное" was what pushed
+                    // the Filters chip off the viewport; the glyph reads the
+                    // same in both locales. FilterChip carries the selected
+                    // semantics + visible state for free.
+                    val favLabel = stringResource(R.string.servers_favorites)
                     FilterChip(
                         selected = ui.favoritesOnly,
                         onClick = { viewModel.setFavoritesOnly(!ui.favoritesOnly) },
-                        label = { Text(stringResource(R.string.servers_favorites)) },
-                        leadingIcon = {
+                        label = {
                             Icon(
-                                Icons.Default.Star,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                if (ui.favoritesOnly) Icons.Filled.Star else Icons.Outlined.Star,
+                                contentDescription = favLabel,
+                                modifier = Modifier.size(20.dp),
                             )
                         },
                     )
-                    FilterChip(
-                        selected = ui.showHidden,
-                        onClick = { viewModel.setShowHidden(!ui.showHidden) },
-                        label = { Text(stringResource(R.string.servers_show_hidden)) },
-                    )
-                    ui.subscriptionOptions.forEach { option ->
-                        FilterChip(
-                            selected = ui.subscriptionFilter == option.id,
-                            onClick = {
-                                viewModel.setSubscriptionFilter(
-                                    if (ui.subscriptionFilter == option.id) null else option.id,
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text =
-                                        option.name.ifBlank {
-                                            stringResource(
-                                                R.string.common_subscription_numbered,
-                                                option.id,
-                                            )
-                                        },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                        )
-                    }
-                    ui.protocolOptions.forEach { protocol ->
-                        FilterChip(
-                            selected = ui.protocolFilter == protocol,
-                            onClick = {
-                                viewModel.setProtocolFilter(
-                                    if (ui.protocolFilter == protocol) null else protocol,
-                                )
-                            },
-                            label = { Text(protocolLabel(protocol)) },
-                        )
-                    }
+                    // Subscription / protocol / hidden filters sit behind one
+                    // dialog entry — as chips they grew into a long strip that
+                    // pushed the actual list out of view.
+                    FiltersEntry(ui, viewModel)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -303,12 +286,15 @@ private fun SortSelector(
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
+        // Bare mode label, no "Sort:" prefix — the long Russian label
+        // ("Сортировка: по задержке") pushed the Filters chip off-screen.
+        // The dropdown arrow already signals a menu; the items name it.
         FilterChip(
             selected = sortMode != ServerSortMode.Default,
             onClick = { open = true },
             label = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.servers_sort_prefix, sortModeLabel(sortMode)))
+                    Text(sortModeLabel(sortMode))
                     Icon(
                         Icons.Default.ArrowDropDown,
                         contentDescription = null,
@@ -341,6 +327,131 @@ private fun SortSelector(
 }
 
 @Composable
+private fun FiltersEntry(
+    ui: ServersUiState,
+    viewModel: ServersViewModel,
+) {
+    var open by remember { mutableStateOf(false) }
+    val active =
+        listOfNotNull(ui.subscriptionFilter, ui.protocolFilter).size +
+            (if (ui.showHidden) 1 else 0)
+    FilterChip(
+        selected = active > 0,
+        onClick = { open = true },
+        label = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.servers_filters) +
+                        if (active > 0) " · $active" else "",
+                )
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        },
+    )
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(stringResource(R.string.servers_filters)) },
+            text = {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    if (ui.subscriptionOptions.size > 1) {
+                        FilterHeader(stringResource(R.string.servers_filter_subscription))
+                        FilterOptionRow(
+                            stringResource(R.string.servers_filter_all),
+                            ui.subscriptionFilter == null,
+                        ) { viewModel.setSubscriptionFilter(null) }
+                        ui.subscriptionOptions.forEach { option ->
+                            FilterOptionRow(
+                                option.name.ifBlank {
+                                    stringResource(R.string.common_subscription_numbered, option.id)
+                                },
+                                ui.subscriptionFilter == option.id,
+                            ) { viewModel.setSubscriptionFilter(option.id) }
+                        }
+                    }
+                    if (ui.protocolOptions.size > 1) {
+                        FilterHeader(stringResource(R.string.servers_filter_protocol))
+                        FilterOptionRow(
+                            stringResource(R.string.servers_filter_all),
+                            ui.protocolFilter == null,
+                        ) { viewModel.setProtocolFilter(null) }
+                        ui.protocolOptions.forEach { protocol ->
+                            FilterOptionRow(
+                                protocolLabel(protocol),
+                                ui.protocolFilter == protocol,
+                            ) { viewModel.setProtocolFilter(protocol) }
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().clip(AfterglowTokens.chipShape)
+                            .clickable { viewModel.setShowHidden(!ui.showHidden) }
+                            .heightIn(min = AfterglowTokens.touchTarget),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AfterglowCheckbox(checked = ui.showHidden, onCheckedChange = null)
+                        Text(
+                            stringResource(R.string.servers_show_hidden),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { open = false }) {
+                    Text(stringResource(R.string.common_done))
+                }
+            },
+            dismissButton = {
+                if (active > 0) {
+                    TextButton(onClick = {
+                        viewModel.setSubscriptionFilter(null)
+                        viewModel.setProtocolFilter(null)
+                        viewModel.setShowHidden(false)
+                    }) {
+                        Text(stringResource(R.string.servers_filter_reset))
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun FilterHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun FilterOptionRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(AfterglowTokens.chipShape).clickable(onClick = onClick)
+            .heightIn(min = AfterglowTokens.touchTarget),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AfterglowRadioButton(selected = selected, onClick = null)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun sortModeLabel(mode: ServerSortMode): String =
     when (mode) {
         ServerSortMode.Default -> stringResource(R.string.sort_default)
@@ -357,7 +468,7 @@ private fun AutoCard(
     val colors = AfterglowTheme.colors
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected },
         shape = AfterglowTokens.cardShape,
         border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
         colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
@@ -404,7 +515,7 @@ private fun ServerCard(
     val colors = AfterglowTheme.colors
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected },
         shape = AfterglowTokens.cardShape,
         border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
         colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
@@ -424,7 +535,7 @@ private fun ServerCard(
                 )
                 IconButton(
                     onClick = onToggleFavorite,
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(AfterglowTokens.touchTarget),
                 ) {
                     Icon(
                         imageVector =
@@ -451,7 +562,7 @@ private fun ServerCard(
                 Box {
                     IconButton(
                         onClick = { menuOpen = true },
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(AfterglowTokens.touchTarget),
                     ) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
@@ -588,9 +699,11 @@ private fun LatencyBadge(
             Text(
                 text = stringResource(R.string.servers_latency_ms, delayMs),
                 style = MaterialTheme.typography.labelSmall,
+                // Light jade (tertiary) on paper fails text contrast — ink
+                // keeps the value legible in both themes.
                 color =
                     if (delayMs < 800) {
-                        MaterialTheme.colorScheme.tertiary
+                        AfterglowTheme.colors.ink
                     } else {
                         MaterialTheme.colorScheme.error
                     },

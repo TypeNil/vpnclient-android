@@ -22,6 +22,7 @@
     <string name="common_save">Save</string>
     <string name="common_delete">Delete</string>
     <string name="common_dismiss">Dismiss</string>
+    <string name="common_done">Done</string>
     <string name="common_refresh">Refresh</string>
     <string name="common_back">Back</string>
     <string name="common_selected">Selected</string>
@@ -29,7 +30,7 @@
     <string name="common_enabled">enabled</string>
     <string name="common_disabled">disabled</string>
     <string name="common_none">—</string>
-    <string name="common_auto_fastest">Auto · Fastest</string>
+    <string name="common_auto_fastest">Auto</string>
     <string name="common_no_servers_yet">No servers yet</string>
     <string name="common_add_servers_hint">Add a subscription or paste a share link to get started.</string>
     <string name="common_add_server_cta">Add subscription or share link</string>
@@ -123,6 +124,8 @@
     <string name="afterglow_connecting">CONNECTING…</string>
     <string name="afterglow_stopping">DISCONNECTING…</string>
     <string name="afterglow_auto">AUTO</string>
+    <string name="afterglow_status_reconnecting">Reconnecting…</string>
+    <string name="afterglow_measured_latency">Latency · %1$d ms</string>
     <string name="afterglow_auto_best_latency">Min latency: %1$s (%2$d ms)</string>
     <string name="afterglow_auto_best_latency_noms">Min latency: %1$s</string>
     <string name="afterglow_your_connection">YOUR CONNECTION</string>
@@ -148,9 +151,7 @@
     <string name="afterglow_action_required">ACTION REQUIRED</string>
     <string name="afterglow_session_progress">SESSION IN PROGRESS</string>
     <string name="afterglow_please_wait">PLEASE WAIT</string>
-    <string name="afterglow_no_servers_headline">NO SERVERS</string>
-    <string name="afterglow_auto_select">Auto-select</string>
-    <string name="afterglow_auto_candidate">Best measured: %1$s</string>
+    <string name="afterglow_no_servers_headline">No servers</string>
     <string name="afterglow_latency_not_measured">Latency not measured</string>
     <string name="afterglow_current_outbound">Current server: %1$s</string>
     <string name="afterglow_no_usable_servers">No usable servers. Check your subscriptions or server filters.</string>
@@ -197,27 +198,35 @@
     <string name="home_details_outbound">Outbound</string>
     <string name="home_details_pending">Pending reconnect</string>
     <string name="home_details_underlay">Underlying network</string>
+    <string name="underlay_wifi">Wi-Fi</string>
+    <string name="underlay_cellular">Cellular</string>
+    <string name="underlay_other">Other</string>
     <string name="home_details_uptime">Uptime</string>
     <string name="home_details_data_used">Data used</string>
     <string name="home_details_data_used_value">↓ %1$s · ↑ %2$s</string>
-    <string name="home_uptime_hms">%1$dh %2$dm %3$ds</string>
-    <string name="home_uptime_ms">%1$dm %2$ds</string>
-    <string name="home_uptime_s">%1$ds</string>
+    <string name="home_uptime_hms">%1$d h %2$d min %3$d s</string>
+    <string name="home_uptime_ms">%1$d min %2$d s</string>
+    <string name="home_uptime_s">%1$d s</string>
+    <string name="home_uptime_dhm">%1$d d %2$d h %3$d min</string>
     <string name="home_per_app_include">Include %1$d apps</string>
     <string name="home_per_app_include_one">Include %1$d app</string>
     <string name="home_per_app_exclude">Exclude %1$d apps</string>
     <string name="home_per_app_exclude_one">Exclude %1$d app</string>
-    <string name="home_auto_subtitle">Latency-tested pick</string>
+    <string name="home_auto_subtitle">Fastest available server</string>
     <string name="home_connect">Connect</string>
 
     <!-- Servers -->
     <string name="servers_search_hint">Search name or server</string>
     <string name="servers_favorites">Favorites</string>
+    <string name="servers_filters">Filters</string>
+    <string name="servers_filter_subscription">Subscription</string>
+    <string name="servers_filter_protocol">Protocol</string>
+    <string name="servers_filter_all">All</string>
+    <string name="servers_filter_reset">Reset</string>
     <string name="servers_test_latency">Test latency</string>
     <string name="servers_latency_via_proxy">via proxy</string>
     <string name="servers_latency_tcp">TCP connect</string>
     <string name="servers_no_match">No servers match the current filters</string>
-    <string name="servers_sort_prefix">Sort: %1$s</string>
     <string name="servers_latency_timeout">timeout</string>
     <string name="servers_favorite_remove">Remove from favorites</string>
     <string name="servers_favorite_add">Add to favorites</string>

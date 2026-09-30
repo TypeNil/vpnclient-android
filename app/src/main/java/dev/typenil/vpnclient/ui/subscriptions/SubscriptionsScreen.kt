@@ -1,5 +1,7 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,9 +9,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,12 +31,15 @@ import androidx.compose.material3.CardDefaults
 import dev.typenil.vpnclient.ui.theme.AfterglowCheckbox as Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowSheet
+import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import dev.typenil.vpnclient.ui.theme.AfterglowSwitch as Switch
@@ -49,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -65,11 +71,10 @@ import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImpor
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
+import dev.typenil.vpnclient.ui.common.DetailRow
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatDate
 import dev.typenil.vpnclient.ui.common.formatRelativeTime
-import dev.typenil.vpnclient.ui.theme.AfterglowTheme
-import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
@@ -138,9 +143,40 @@ fun SubscriptionsScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Sheet-native primary action: a full-width bordered row, easier to
+        // hit than a corner TextButton and consistent with the per-app card
+        // in the Routing sheet.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp)
+                .border(
+                    AfterglowTokens.border,
+                    AfterglowTheme.colors.border,
+                    AfterglowTokens.cardShape,
+                )
+                .background(AfterglowTheme.colors.paperSecondary, AfterglowTokens.cardShape)
+                .clickable { showAddDialog = true }
+                .heightIn(min = AfterglowTokens.rowHeight)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                tint = AfterglowTheme.colors.coral,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                stringResource(R.string.common_add_server_cta),
+                style = MaterialTheme.typography.titleMedium,
+                color = AfterglowTheme.colors.ink,
+                modifier = Modifier.weight(1f),
+            )
+        }
         if (ui.profiles.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.subs_empty),
                     style = MaterialTheme.typography.bodyLarge,
@@ -148,10 +184,15 @@ fun SubscriptionsScreen(
                 )
             }
         } else {
+            // Bound to the sheet's real height (IME-aware), not a raw
+            // screen-height fraction.
+            val sheetMax = LocalSheetMaxHeight.current
+                ?: LocalConfiguration.current.screenHeightDp.dp
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxWidth()
+                    .heightIn(max = sheetMax * .65f),
                 contentPadding = PaddingValues(
-                    start = 16.dp, top = 8.dp, end = 16.dp, bottom = 88.dp,
+                    start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -173,21 +214,6 @@ fun SubscriptionsScreen(
                     )
                 }
             }
-        }
-
-        FloatingActionButton(
-            onClick = { showAddDialog = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp),
-            shape = AfterglowTokens.cardShape,
-            containerColor = AfterglowTheme.colors.ink,
-            contentColor = AfterglowTheme.colors.paper,
-        ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = stringResource(R.string.subs_add_cd),
-            )
         }
     }
 
@@ -293,7 +319,7 @@ private fun SubscriptionCard(
                     Text(
                         text = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
@@ -435,39 +461,41 @@ private fun AddSubscriptionDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.subs_add_title)) },
         text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = onUrlChange,
-                        label = { Text(stringResource(R.string.subs_url_label)) },
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = onScanQr) {
-                                Icon(
-                                    painterResource(R.drawable.ic_qr_scanner),
-                                    contentDescription = stringResource(R.string.subs_scan_qr_cd),
-                                )
+            // Scrollable: landscape/large fonts must still reach the actions.
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                // Full-width field — sharing the row with Paste wrapped long
+                // localized labels through the outline.
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = onUrlChange,
+                    label = { Text(stringResource(R.string.subs_url_label)) },
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = onScanQr) {
+                            Icon(
+                                painterResource(R.drawable.ic_qr_scanner),
+                                contentDescription = stringResource(R.string.subs_scan_qr_cd),
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(
+                    onClick = {
+                        val text = clipboard.getText()?.text?.trim()
+                        if (!text.isNullOrEmpty()) {
+                            val parsed = ImportUrlExtractor.extract(null, text, null)
+                            if (parsed != null) {
+                                onUrlChange(parsed.url)
+                                if (!parsed.name.isNullOrBlank()) onNameChange(parsed.name)
+                            } else {
+                                onUrlChange(text)
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = {
-                            val text = clipboard.getText()?.text?.trim()
-                            if (!text.isNullOrEmpty()) {
-                                val parsed = ImportUrlExtractor.extract(null, text, null)
-                                if (parsed != null) {
-                                    onUrlChange(parsed.url)
-                                    if (!parsed.name.isNullOrBlank()) onNameChange(parsed.name)
-                                } else {
-                                    onUrlChange(text)
-                                }
-                            }
-                        },
-                    ) {
-                        Text(stringResource(R.string.subs_paste))
-                    }
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text(stringResource(R.string.subs_paste))
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
@@ -551,6 +579,12 @@ private fun SubscriptionDetailSheet(
     val manual = SubscriptionRepository.isManualSubscription(profile.url)
 
     AfterglowSheet(onDismiss = onDismiss) {
+        // Consistent with the other sheets: fixed close header, scrollable body.
+        AfterglowSheetHeader(
+            title = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
+            closeLabel = stringResource(R.string.common_dismiss),
+            onDismiss = onDismiss,
+        )
         // Scrollable: a long manual-node list (or a big announcement) must
         // not push the actions out of the sheet.
         Column(
@@ -558,13 +592,6 @@ private fun SubscriptionDetailSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 32.dp),
         ) {
-            Text(
-                text = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
             Text(
                 text =
                     if (manual) {
@@ -576,7 +603,7 @@ private fun SubscriptionDetailSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 24.dp),
+                modifier = Modifier.padding(horizontal = 20.dp),
             )
 
             Spacer(Modifier.height(12.dp))
@@ -589,9 +616,15 @@ private fun SubscriptionDetailSheet(
                     nodeCount,
                     formatRelativeTime(profile.lastUpdatedAt),
                 ),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
             profile.lastError?.let {
-                DetailRow(label = stringResource(R.string.common_last_error), value = it, error = true)
+                DetailRow(
+                    label = stringResource(R.string.common_last_error),
+                    value = it,
+                    error = true,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
             }
             DetailRow(
                 label = stringResource(R.string.subs_update_interval),
@@ -605,9 +638,14 @@ private fun SubscriptionDetailSheet(
                         )
                     else -> stringResource(R.string.subs_interval_manual)
                 },
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
             profile.announce?.let {
-                DetailRow(label = stringResource(R.string.subs_announcement), value = it)
+                DetailRow(
+                    label = stringResource(R.string.subs_announcement),
+                    value = it,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
             }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -616,7 +654,7 @@ private fun SubscriptionDetailSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 4.dp),
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -649,13 +687,13 @@ private fun SubscriptionDetailSheet(
                     text = stringResource(R.string.subs_imported_servers),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
                 manualNodes.forEach { node ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 24.dp, end = 8.dp),
+                            .padding(start = 20.dp, end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
@@ -682,7 +720,7 @@ private fun SubscriptionDetailSheet(
                 TextButton(
                     onClick = onRefresh,
                     enabled = !refreshing,
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
                     if (refreshing) {
                         CircularProgressIndicator(
@@ -700,7 +738,7 @@ private fun SubscriptionDetailSheet(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 4.dp),
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     OutlinedTextField(
@@ -728,7 +766,7 @@ private fun SubscriptionDetailSheet(
                         nameField = profile.name
                         renaming = true
                     },
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
                     Icon(
                         Icons.Default.Edit,
@@ -744,7 +782,7 @@ private fun SubscriptionDetailSheet(
             // candidate BEFORE committing — Save is a request, not a commit.
             if (!manual) {
                 if (editingUrl) {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
                         OutlinedTextField(
                             value = urlField,
                             onValueChange = { urlField = it },
@@ -780,7 +818,7 @@ private fun SubscriptionDetailSheet(
                             urlField = ""
                             editingUrl = true
                         },
-                        modifier = Modifier.padding(horizontal = 12.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp),
                     ) {
                         Text(stringResource(R.string.subs_edit_url))
                     }
@@ -790,7 +828,7 @@ private fun SubscriptionDetailSheet(
             if (!manual) {
                 TextButton(
                     onClick = onDelete,
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
                     Text(
                         stringResource(R.string.common_delete),
@@ -799,30 +837,5 @@ private fun SubscriptionDetailSheet(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, value: String, error: Boolean = false) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 4.dp),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(120.dp),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (error) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-        )
     }
 }

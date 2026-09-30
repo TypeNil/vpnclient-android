@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -44,8 +45,10 @@ import dev.typenil.vpnclient.core.vpn.IpCheckResult
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.ui.common.CORE_VERSION
 import dev.typenil.vpnclient.ui.common.DetailRow
+import dev.typenil.vpnclient.ui.common.appliedDnsSummary
 import dev.typenil.vpnclient.ui.common.perAppSummary
 import dev.typenil.vpnclient.ui.common.routeModeSummary
+import dev.typenil.vpnclient.ui.common.underlayLabel
 import dev.typenil.vpnclient.ui.common.uptimeText
 
 /**
@@ -66,7 +69,7 @@ fun DiagnosticsScreen(
     // Injected into the composable — the VM stays Context-free.
     val exporter = rememberLogExporter()
 
-    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    Column(modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             IconButton(onClick = onBack) {
                 Icon(
@@ -110,11 +113,11 @@ fun DiagnosticsScreen(
             )
             DetailRow(
                 stringResource(R.string.routing_dns_upstream),
-                applied?.dnsProfileSummary ?: none,
+                appliedDnsSummary(applied?.dnsProfileSummary),
             )
             DetailRow(
                 stringResource(R.string.home_details_underlay),
-                ui.underlay.label,
+                underlayLabel(ui.underlay),
             )
             (connection as? VpnConnectionState.Connected)?.let {
                 DetailRow(stringResource(R.string.home_details_uptime), uptimeText(it.since))

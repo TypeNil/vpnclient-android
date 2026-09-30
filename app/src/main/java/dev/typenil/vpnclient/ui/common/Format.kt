@@ -28,6 +28,29 @@ fun formatRelativeTime(instant: Instant?, now: Instant = Instant.now()): String 
     }
 }
 
+/**
+ * Whole-unit pieces of a session duration, consumed by the localized
+ * `home_uptime_*` strings. Pure JVM — no Compose — so the unit boundaries
+ * are testable. Negative input clamps to zero (a future `since` is a clock
+ * artifact, not uptime).
+ */
+data class UptimeParts(
+    val days: Long,
+    val hours: Long,
+    val minutes: Long,
+    val seconds: Long,
+)
+
+fun uptimeParts(totalSeconds: Long): UptimeParts {
+    val s = totalSeconds.coerceAtLeast(0)
+    return UptimeParts(
+        days = s / 86_400,
+        hours = (s % 86_400) / 3_600,
+        minutes = (s % 3_600) / 60,
+        seconds = s % 60,
+    )
+}
+
 /** `2026-05-01` style date for subscription expiry (epoch seconds). */
 fun formatDate(epochSeconds: Long): String =
     Instant.ofEpochSecond(epochSeconds)

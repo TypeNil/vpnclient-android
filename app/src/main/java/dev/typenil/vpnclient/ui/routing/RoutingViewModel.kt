@@ -11,6 +11,7 @@ import dev.typenil.vpnclient.core.engine.RoutingRuleValidator
 import dev.typenil.vpnclient.data.db.RoutingRuleDao
 import dev.typenil.vpnclient.data.db.RoutingRuleEntity
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
+import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.RoutingRuleSetValidator
 import dev.typenil.vpnclient.data.settings.SettingsRepository
@@ -46,6 +47,13 @@ data class RoutingUiState(
     /** A compiled-in setting changed while a session is alive. */
     val reconnectRecommended: Boolean = false,
     val sessionActive: Boolean = false,
+    /** Saved per-app policy — rendered up front in the sheet so the feature
+     *  is discoverable without scrolling past the rules section. */
+    val perAppMode: PerAppMode = PerAppMode.ALL,
+    val perAppCount: Int = 0,
+    /** The per-app policy the live engine runs — null when idle. */
+    val appliedPerAppMode: PerAppMode? = null,
+    val appliedPerAppCount: Int? = null,
 )
 
 @HiltViewModel
@@ -82,6 +90,7 @@ class RoutingViewModel
                 routingRuleDao.observeAll(),
                 ruleError,
                 ruleValidating,
+                settings.perAppPolicy,
             ) { values ->
                 val routeMode = values[0] as RouteMode
                 val bypassLan = values[1] as Boolean
@@ -94,6 +103,8 @@ class RoutingViewModel
                 val recommended = values[5] as Boolean
                 @Suppress("UNCHECKED_CAST")
                 val rules = values[6] as List<RoutingRuleEntity>
+                @Suppress("UNCHECKED_CAST")
+                val perAppPolicy = values[9] as Pair<PerAppMode, Set<String>>
                 RoutingUiState(
                     routeMode = routeMode,
                     bypassLan = bypassLan,
@@ -107,6 +118,10 @@ class RoutingViewModel
                     ruleValidating = values[8] as Boolean,
                     reconnectRecommended = recommended,
                     sessionActive = state.hasLiveConfig(),
+                    perAppMode = perAppPolicy.first,
+                    perAppCount = perAppPolicy.second.size,
+                    appliedPerAppMode = applied?.perAppMode,
+                    appliedPerAppCount = applied?.perAppPackages?.size,
                 )
             }.stateIn(
                 scope = viewModelScope,

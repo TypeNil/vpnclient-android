@@ -1,11 +1,16 @@
 package dev.typenil.vpnclient.ui.home
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -13,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,14 +30,16 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -41,6 +47,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,11 +60,11 @@ import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
 import dev.typenil.vpnclient.ui.common.routeModeSummary
+import dev.typenil.vpnclient.ui.common.uptimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import kotlinx.coroutines.delay
-import java.time.Duration
 import java.time.Instant
-import java.util.Locale
 
 private enum class VisualState { Offline, Preparing, Permission, Connecting, Connected, Reconnecting, Stopping, Error }
 
@@ -86,18 +93,31 @@ internal fun AfterglowHomeContent(
     onOpenDetails: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenRouting: () -> Unit,
-    onOpenServers: () -> Unit,
-    onOpenSubscriptions: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenServers: () -> Unit = {},
+    onOpenSubscriptions: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onDismissGuard: () -> Unit,
     errorMessage: String?,
 ) {
     val colors = AfterglowTheme.colors
     val state = ui.connection
     val noServers = ui.serverOptions.isEmpty() && (state is VpnConnectionState.Idle || state is VpnConnectionState.Error)
+    // Measured, not fixed: the scroll reserve tracks the real action height
+    // (+ modest gap) so large fonts can't bury the tail of the content.
+    var actionHeightPx by remember { mutableIntStateOf(0) }
+    val actionReserve = with(LocalDensity.current) { actionHeightPx.toDp() } + 12.dp
+    // Fonts wide enough to crowd two columns get one stacked layout instead.
+    val compact = LocalDensity.current.fontScale > 1.3f ||
+        LocalConfiguration.current.screenWidthDp < 340
     Box(modifier.fillMaxSize().background(colors.paper)) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp).navigationBarsPadding().padding(bottom = 150.dp)) {
+        Column(Modifier.align(Alignment.TopCenter).fillMaxHeight()
+            .widthIn(max = HomeContentMaxWidth).fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            // The transparent action overlay includes the bottom bar inset;
+            // its entire measured height is reserved below the scroll content.
+            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
+            .padding(bottom = actionReserve)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 58.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("RUNE", fontSize = 31.sp, fontWeight = FontWeight.Black, letterSpacing = (-2).sp, color = colors.ink)
                 Text(".", fontSize = 31.sp, fontWeight = FontWeight.Black, color = colors.coral)
@@ -115,30 +135,52 @@ internal fun AfterglowHomeContent(
             }
             if (ui.restartGuardTripped) StatusNotice(stringResource(R.string.home_restart_guard_text), onDismissGuard, false)
             Spacer(Modifier.height(18.dp))
-            SectionHeader(stringResource(R.string.afterglow_quick_access),
-                Modifier.padding(start = 2.dp, bottom = 8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ShortcutCard(R.string.nav_servers,
-                    stringResource(R.string.afterglow_servers_available,
-                        (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.weight(1f))
-                ShortcutCard(R.string.nav_subscriptions,
-                    stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
-                    false, onOpenSubscriptions, Modifier.weight(1f))
-            }
-            Spacer(Modifier.height(18.dp))
+            // Selected server + routing and live stats carry the session —
+            // shortcuts trail them instead of pushing them below the fold.
             ServerAndRouting(ui, onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
                 SessionStats(state, onOpenConnections, onOpenDetails)
             }
+            Spacer(Modifier.height(18.dp))
+            SectionHeader(stringResource(R.string.afterglow_quick_access),
+                Modifier.padding(start = 2.dp, bottom = 8.dp))
+            if (compact) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShortcutCard(R.string.nav_servers,
+                        stringResource(R.string.afterglow_servers_available,
+                            (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.fillMaxWidth())
+                    ShortcutCard(R.string.nav_subscriptions,
+                        stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
+                        false, onOpenSubscriptions, Modifier.fillMaxWidth())
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ShortcutCard(R.string.nav_servers,
+                        stringResource(R.string.afterglow_servers_available,
+                            (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.weight(1f))
+                    ShortcutCard(R.string.nav_subscriptions,
+                        stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
+                        false, onOpenSubscriptions, Modifier.weight(1f))
+                }
+            }
         }
-        ConnectionAction(state.visual(), noServers, if (noServers) {
-            if (ui.noNodesAtAll) onAddServer else onOpenServers
-        } else onConnect, onDisconnect,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
-                .padding(horizontal = 16.dp),
-            hasNodes = !ui.noNodesAtAll)
+        // Transparent, non-interactive decoration: only the action row handles
+        // input. Measure the mascot space and nav inset too for the scroll tail.
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .onSizeChanged { actionHeightPx = it.height }
+            .navigationBarsPadding()) {
+            ConnectionAction(state.visual(), noServers, if (noServers) {
+                if (ui.noNodesAtAll) onAddServer else onOpenServers
+            } else onConnect, onDisconnect,
+                Modifier.align(Alignment.TopCenter).widthIn(max = HomeContentMaxWidth)
+                    .fillMaxWidth().padding(horizontal = 16.dp),
+                hasNodes = !ui.noNodesAtAll)
+        }
     }
 }
+
+/** Wide screens center the editorial column instead of stretching it. */
+private val HomeContentMaxWidth = 560.dp
 
 @Composable
 private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
@@ -150,8 +192,7 @@ private fun SectionHeader(text: String, modifier: Modifier = Modifier) {
 private fun ShortcutCard(label: Int, caption: String, server: Boolean, onClick: () -> Unit,
     modifier: Modifier = Modifier) {
     val colors = AfterglowTheme.colors
-    Column(modifier.heightIn(min = 112.dp).clip(RoundedCornerShape(9.dp))
-        .border(1.dp, colors.border, RoundedCornerShape(9.dp))
+    Column(modifier.heightIn(min = 92.dp).border(1.dp, colors.border)
         .background(colors.paperSecondary)
         .semantics { role = Role.Button }
         .clickable(onClick = onClick)
@@ -177,48 +218,56 @@ private fun ConnectionHero(state: VisualState, noServers: Boolean, delayMs: Int?
         VisualState.Preparing, VisualState.Connecting, VisualState.Permission, VisualState.Reconnecting -> colors.transitionalHero
         else -> colors.offlineHero
     }
-    val base by animateColorAsState(target, label = "Hero status")
+    // Token tween, not the default spring — hero color shifts are state
+    // feedback, not physics; the standard duration matches the other state
+    // colors (accent, action surface) so the whole surface lands together.
+    val base by animateColorAsState(target, animationSpec = tween(AfterglowTokens.motionStandard),
+        label = "Hero status")
     val headline = stringResource(when {
         noServers && state == VisualState.Offline -> R.string.afterglow_no_servers_headline
         else -> when (state) {
-            VisualState.Offline -> R.string.afterglow_offline
-            VisualState.Connected -> R.string.afterglow_online
-            VisualState.Error -> R.string.afterglow_failed
-            VisualState.Reconnecting -> R.string.afterglow_relinking
-            VisualState.Preparing -> R.string.afterglow_preparing
+            VisualState.Offline -> R.string.home_status_disconnected
+            VisualState.Connected -> R.string.home_status_connected
+            VisualState.Error -> R.string.home_status_failed
+            VisualState.Reconnecting -> R.string.afterglow_status_reconnecting
+            VisualState.Preparing -> R.string.home_status_preparing
             VisualState.Permission -> R.string.afterglow_permission
-            VisualState.Connecting -> R.string.afterglow_connecting
-            VisualState.Stopping -> R.string.afterglow_stopping
+            VisualState.Connecting -> R.string.home_status_connecting
+            VisualState.Stopping -> R.string.home_status_disconnecting
         }
     })
     val fontScale = LocalDensity.current.fontScale
     val largeFont = fontScale > 1.3f
-    val narrow = LocalConfiguration.current.screenWidthDp <= 360
-    Box(Modifier.fillMaxWidth().heightIn(min = if (largeFont) (188f + (fontScale - 1.3f) * 85f).dp else 188.dp)
-        .clip(androidx.compose.ui.graphics.RectangleShape).background(Brush.horizontalGradient(listOf(base, base, colors.actionSurface)))) {
-        Spacer(Modifier.fillMaxWidth().height(188.dp))
-        // matchParentSize doesn't participate in the Hero's measurement; the 280dp artwork cannot stretch it.
+    // Landscape keeps a working viewport — compact hero, same type sizes.
+    val heroMin = if (LocalConfiguration.current.screenHeightDp <= 420) 128f else 164f
+    Box(Modifier.fillMaxWidth().heightIn(min = if (largeFont) (heroMin + (fontScale - 1.3f) * 85f).dp else heroMin.dp)
+        .semantics { stateDescription = headline }
+        .clip(AfterglowTokens.cardShape).background(Brush.horizontalGradient(listOf(base, base, colors.actionSurface)))) {
+        Spacer(Modifier.fillMaxWidth().height(heroMin.dp))
+        // Decorative artwork never participates in the hero's measurement.
         Box(Modifier.matchParentSize()) {
             Image(painterResource(R.drawable.afterglow_mascot), contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.requiredSize(280.dp).align(Alignment.CenterEnd).offset(x = 92.dp)
+                modifier = Modifier.fillMaxHeight().aspectRatio(1f)
+                    .align(Alignment.CenterEnd).offset(x = 18.dp)
                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                     .drawWithContent {
                         drawContent()
-                        drawRect(Brush.horizontalGradient(0f to Color.Transparent, .55f to Color.Black, 1f to Color.Black),
-                            blendMode = BlendMode.DstIn)
+                        drawRect(Brush.horizontalGradient(
+                            0f to Color.Transparent, .45f to Color.Black, 1f to Color.Black,
+                        ), blendMode = BlendMode.DstIn)
                     })
         }
         Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(
             0f to base, .3f to base.copy(alpha = .92f), .7f to Color.Transparent)))
-        val longHeadline = state == VisualState.Connecting || state == VisualState.Reconnecting ||
-            state == VisualState.Preparing || state == VisualState.Permission || state == VisualState.Stopping
-        Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(.62f)
-            .padding(start = 16.dp, end = 8.dp, top = 20.dp, bottom = 20.dp)) {
-            Text(headline, color = colors.onActionSurface, fontWeight = FontWeight.Black,
-                fontSize = if (largeFont) 24.sp else if (longHeadline) 26.sp else if (narrow) 32.sp else 36.sp,
-                lineHeight = if (largeFont || longHeadline) 32.sp else 39.sp,
-                maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.align(Alignment.CenterStart).fillMaxWidth(if (largeFont) .82f else .72f)
+            .padding(start = 18.dp, end = 8.dp, top = 20.dp, bottom = 20.dp)) {
+            Text(stringResource(R.string.afterglow_your_connection),
+                color = colors.onActionSurface.copy(alpha = .72f), fontSize = 10.sp,
+                fontWeight = FontWeight.Bold, letterSpacing = .8.sp,
+                modifier = Modifier.padding(bottom = 8.dp))
+            Text(headline, color = colors.onActionSurface, fontWeight = FontWeight.Bold,
+                fontSize = 28.sp, lineHeight = 33.sp)
             HeroLatency(delayMs, Modifier.padding(top = 8.dp))
         }
         Box(Modifier.fillMaxWidth().height(3.dp).align(Alignment.BottomCenter)
@@ -243,10 +292,11 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
         else -> stringResource(R.string.home_status_connecting)
     }
     val accent = when {
+        state == VisualState.Reconnecting -> colors.amber
         active -> colors.jade
         state == VisualState.Error -> colors.coralLight
-        state == VisualState.Connecting || state == VisualState.Reconnecting ||
-            state == VisualState.Preparing || state == VisualState.Permission -> colors.amber
+        state == VisualState.Connecting || state == VisualState.Preparing ||
+            state == VisualState.Permission -> colors.amber
         else -> colors.coral
     }
     // Companion face per state: idle=sad, connecting/transition=thinking,
@@ -263,36 +313,88 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
     // action in the title, so a static "VPN OFF/ON" subtitle would misreport.
     val subtitle = when {
         noServers -> stringResource(R.string.afterglow_no_servers_headline)
-        active -> stringResource(R.string.afterglow_online)
+        state == VisualState.Connected -> stringResource(R.string.afterglow_online)
         state == VisualState.Offline -> stringResource(R.string.afterglow_offline)
         else -> null
     }
-    Box(modifier.fillMaxWidth().padding(top = 40.dp)) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(Brush.horizontalGradient(listOf(colors.actionSurface, colors.actionSurface, colors.actionSurface.copy(alpha = .0f))))
-            .border(1.dp, accent.copy(alpha = .5f), RoundedCornerShape(16.dp))
-            .semantics { role = Role.Button }
-            .clickable(enabled = enabled, onClick = if (active && !noServers) onDisconnect else onConnect)
-            .padding(start = 76.dp, end = 18.dp, top = 14.dp, bottom = 14.dp)) {
-            Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Black, fontSize = 20.sp,
-                letterSpacing = 0.5.sp)
-            // NBSP placeholder keeps the line height so the card doesn't
-            // jump when the subtitle appears/disappears between states.
-            Text(subtitle ?: "\u00A0", color = colors.onActionSurface.copy(alpha = .7f), fontSize = 12.sp,
-                modifier = Modifier.padding(top = 2.dp))
+    val tint = when (state) {
+        VisualState.Connected -> colors.connectedHero
+        VisualState.Error -> colors.errorHero
+        VisualState.Preparing, VisualState.Permission, VisualState.Connecting,
+        VisualState.Reconnecting -> colors.transitionalHero
+        else -> colors.offlineHero
+    }
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(if (pressed) .98f else 1f,
+        animationSpec = tween(AfterglowTokens.motionFast), label = "Connection press")
+    val animatedAccent by animateColorAsState(accent, animationSpec = tween(AfterglowTokens.motionStandard),
+        label = "Connection accent")
+    val gradientEnd by animateColorAsState(lerp(colors.actionSurface, tint, .4f),
+        animationSpec = tween(AfterglowTokens.motionEmphasized), label = "Connection surface")
+    var shownFace by remember { mutableIntStateOf(companion) }
+    val faceAlpha = remember { Animatable(1f) }
+    LaunchedEffect(companion) {
+        if (shownFace != companion) {
+            // Swap one sprite while invisible: crossfading two expressions made
+            // overlapping eyes and paws look like a flicker during quick states.
+            faceAlpha.animateTo(0f, tween(AfterglowTokens.motionFast))
+            shownFace = companion
+            faceAlpha.animateTo(1f, tween(AfterglowTokens.motionEmphasized))
         }
-        // Companion perches on the button's top-left edge, overlapping upward.
-        Image(painterResource(companion), contentDescription = null,
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp).offset(y = (-34).dp).height(64.dp))
-        // Status dot pinned to the button's trailing edge.
-        Box(Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
-            .size(10.dp).background(accent, CircleShape))
+    }
+    // Decorative mascot earns its pad only on tall-enough screens; on
+    // landscape/short heights it leaves so the CTA keeps usable viewport.
+    val showMascot = LocalConfiguration.current.screenHeightDp > 420
+    Box(modifier.fillMaxWidth().padding(top = if (showMascot) 64.dp else 0.dp)
+        .graphicsLayer { scaleX = pressScale; scaleY = pressScale }) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(Brush.horizontalGradient(listOf(colors.actionSurface, gradientEnd)))
+            .border(1.dp, colors.onActionSurface.copy(alpha = .18f), RoundedCornerShape(12.dp))
+            .semantics { role = Role.Button }
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null,
+                onClick = if (active && !noServers) onDisconnect else onConnect)
+            .heightIn(min = 84.dp).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(animatedAccent),
+                contentAlignment = Alignment.Center) {
+                if (noServers) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                    tint = colors.actionSurface, modifier = Modifier.size(26.dp))
+                else Canvas(Modifier.size(24.dp)) {
+                    val stroke = 2.5.dp.toPx()
+                    drawArc(colors.actionSurface, -45f, 270f, false,
+                        style = Stroke(stroke, cap = StrokeCap.Round))
+                    drawLine(colors.actionSurface, Offset(size.width / 2, size.height * .06f),
+                        Offset(size.width / 2, size.height * .53f), stroke, cap = StrokeCap.Round)
+                }
+            }
+            Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.Center) {
+                // Localized labels grow with font scale — three lines keeps a
+                // long CTA honest without hiding it behind the mascot strip.
+                Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Black, fontSize = 19.sp,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(subtitle ?: "\u00A0", color = colors.onActionSurface.copy(alpha = .72f), fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+        // Transparent sprite padding lets the paws rest just inside the edge;
+        // the label column still owns the row — no in-row mascot spacer.
+        if (showMascot) {
+            Image(painterResource(shownFace), contentDescription = null,
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 7.dp).offset(y = (-52).dp)
+                    .height(72.dp).graphicsLayer {
+                        alpha = faceAlpha.value
+                        scaleX = .97f + .03f * faceAlpha.value
+                        scaleY = scaleX
+                        translationY = (1f - faceAlpha.value) * 4.dp.toPx()
+                    })
+        }
     }
 }
 
 @Composable
 private fun HeroLatency(delayMs: Int?, modifier: Modifier = Modifier) {
-    if (delayMs == null) return
+    if (delayMs == null || delayMs <= 0) return
     val colors = AfterglowTheme.colors
     // Match LatencyBadge semantics: <800 = healthy, >=800 = degraded. Use amber
     // for degraded so the dot stays visible on the red transitional/error heroes.
@@ -302,7 +404,7 @@ private fun HeroLatency(delayMs: Int?, modifier: Modifier = Modifier) {
         .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(6.dp).background(tone, CircleShape))
-        Text(stringResource(R.string.servers_latency_ms, delayMs),
+        Text(stringResource(R.string.afterglow_measured_latency, delayMs),
             color = colors.onActionSurface, fontSize = 11.sp, fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 5.dp))
     }
@@ -351,13 +453,11 @@ private fun ServerListBadge() {
 }
 
 @Composable
-private fun ServerBadge(auto: Boolean, modifier: Modifier = Modifier) {
+private fun ServerBadge(modifier: Modifier = Modifier) {
     val colors = AfterglowTheme.colors
     Box(modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
         contentAlignment = Alignment.Center) {
-        if (auto) Icon(Icons.Default.Refresh, contentDescription = null,
-            tint = colors.coral, modifier = Modifier.size(22.dp))
-        else Canvas(Modifier.size(20.dp)) {
+        Canvas(Modifier.size(20.dp)) {
             // Globe: outer circle + two meridians + equator. Distinct from the
             // horizontal-stack "server list" glyph used on the shortcut card.
             val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round)
@@ -392,45 +492,51 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
         is VpnConnectionState.Reconnecting -> state.node
         else -> null
     }
+    // A measured candidate is not necessarily the member used by the session.
+    val autoResolved = if (ui.autoSelected) {
+        (ui.connection as? VpnConnectionState.Connected)?.node?.name
+            ?.substringAfter("→", "")?.trim()?.takeIf { it.isNotBlank() }
+    } else null
     val title = when {
         noServers -> stringResource(R.string.common_no_servers_yet)
-        ui.autoSelected -> stringResource(R.string.afterglow_auto_select)
-        else -> ui.selectedNodeName ?: live?.name ?: ui.selectedNodeNameRes?.let { stringResource(it) }
-            ?: stringResource(R.string.home_no_server_selected)
+        autoResolved != null -> autoResolved
+        ui.autoSelected -> stringResource(R.string.home_auto_subtitle)
+        else -> ui.selectedNodeName ?: live?.name ?: stringResource(R.string.home_no_server_selected)
     }
-    val protocolLabel = (if (ui.autoSelected) ui.bestLatencyNodeProtocol else ui.selectedNodeProtocol ?: live?.protocol?.label)
+    val protocolLabel = if (ui.autoSelected) null else (ui.selectedNodeProtocol ?: live?.protocol?.label)
         ?.takeIf { it.isNotBlank() && !it.equals("Other", ignoreCase = true) }
-    // Latency already lives in the hero chip; don't echo a latency-derived
-    // subtitle here. For auto-select show which node the urltest picked.
-    val subtitle = when {
-        noServers -> stringResource(if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers)
-        ui.autoSelected -> ui.bestLatencyNodeName ?: stringResource(R.string.home_auto_subtitle)
-        else -> null
-    }
-    val metadata = listOfNotNull(ui.subscriptionName, protocolLabel).filter { it.isNotBlank() }.joinToString(" · ")
-    Column(Modifier.fillMaxWidth()) {
-        SectionHeader(stringResource(R.string.afterglow_selected_server),
-            Modifier.padding(start = 2.dp, bottom = 6.dp))
-        Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
-        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
+    val emptyHint = if (noServers) stringResource(
+        if (ui.noNodesAtAll) R.string.common_add_servers_hint else R.string.afterglow_no_usable_servers,
+    ) else null
+    val card = Modifier.fillMaxWidth().clip(AfterglowTokens.cardShape)
+        .border(1.dp, colors.border, AfterglowTokens.cardShape).background(colors.paperSecondary)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(card.semantics { role = Role.Button }
             .clickable(onClick = if (noServers) onAdd else onPick)
-            .heightIn(min = 68.dp).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            ServerBadge(ui.autoSelected && !noServers)
+            .heightIn(min = 72.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            ServerBadge()
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(bottom = 4.dp)) {
+                    Text(stringResource(R.string.afterglow_selected_server), color = colors.muted,
+                        fontSize = 11.sp, lineHeight = 12.sp,
+                        fontWeight = FontWeight.Bold, letterSpacing = .5.sp)
+                    val modeLabel = if (ui.autoSelected) stringResource(R.string.afterglow_auto) else protocolLabel
+                    if (!noServers && modeLabel != null) Text(modeLabel,
+                        color = colors.coral, fontSize = 11.sp, lineHeight = 12.sp,
+                        fontWeight = FontWeight.Medium)
+                }
                 Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 17.sp,
-                    lineHeight = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (subtitle != null) Text(subtitle, color = colors.muted, fontSize = 13.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 3.dp))
-                if (!noServers && metadata.isNotEmpty()) Text(metadata, color = colors.muted, fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                    lineHeight = 22.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (emptyHint != null) Text(emptyHint, color = colors.muted, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 4.dp))
             }
             CircledChevron()
         }
-        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(colors.border))
-        Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
-            .clickable(onClick = onRouting).heightIn(min = 58.dp)
-            .padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(card.semantics { role = Role.Button }
+            .clickable(onClick = onRouting).heightIn(min = 72.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Symmetrical rounded square badge matching the two-line text block height.
             Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center) {
@@ -475,7 +581,6 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
             }
             CircledChevron()
         }
-        }
     }
 }
 
@@ -508,29 +613,45 @@ private fun SessionStats(
     val displayNanos = frameTimeNanos(nowNanos, System.nanoTime())
     val fresh = stats != null && history.isFresh(displayNanos, state.statsReceivedAtNanos)
     val visibleSamples = samples.filter { it.atNanos in (displayNanos - TrafficHistory.WINDOW_NANOS)..displayNanos }
-    Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        SectionHeader(stringResource(R.string.afterglow_statistics), Modifier.weight(1f))
-        val elapsed = Duration.between(state.since, now).seconds.coerceAtLeast(0)
-        Text(stringResource(R.string.afterglow_session_elapsed,
-            String.format(Locale.ROOT, "%02d:%02d", elapsed / 60, elapsed % 60)),
-            color = colors.muted, fontSize = 12.sp, maxLines = 1)
+    val compact = LocalDensity.current.fontScale > 1.3f ||
+        LocalConfiguration.current.screenWidthDp < 340
+    // Wraps instead of squeezing: at large fonts a day-scale uptime moves
+    // under the heading rather than starving it.
+    FlowRow(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)) {
+        SectionHeader(stringResource(R.string.afterglow_statistics))
+        // Shared uptime formatter — explicit localized units, days included,
+        // never a raw 52:30:50 clock.
+        Text(stringResource(R.string.afterglow_session_elapsed, uptimeText(state.since, now)),
+            color = colors.muted, fontSize = 12.sp)
     }
     val s = stats.takeIf { fresh }
+    val chartSamples = if (fresh) visibleSamples else emptyList()
     Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
-        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            SpeedMetric(stringResource(R.string.home_stat_download), s?.let { formatRate(it.downlinkBytesPerSec) },
-                s?.let { formatBytes(it.downlinkTotalBytes) },
-                visibleSamples, displayNanos, true, colors.jade, Modifier.weight(1f))
-            Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
-            SpeedMetric(stringResource(R.string.home_stat_upload), s?.let { formatRate(it.uplinkBytesPerSec) },
-                s?.let { formatBytes(it.uplinkTotalBytes) },
-                visibleSamples, displayNanos, false, colors.coral, Modifier.weight(1f))
-        }
-        if (s == null) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+        if (s != null) {
+            if (compact) {
+                // Side-by-side metrics can't survive large fonts/narrow
+                // widths — stack them at full width instead.
+                SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
+                    s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.fillMaxWidth())
+                Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+                SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
+                    s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.fillMaxWidth())
+            } else {
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
+                        s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.weight(1f))
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
+                    SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
+                        s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.weight(1f))
+                }
+            }
+        } else {
+            // One compact state instead of two empty metric columns plus a
+            // trailing explanation — same information, less noise.
             Text(stringResource(R.string.afterglow_stats_unavailable), color = colors.muted,
-                modifier = Modifier.padding(16.dp))
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
         Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
@@ -538,9 +659,11 @@ private fun SessionStats(
             .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.home_stat_connections), color = colors.ink,
                 fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            // Light jade fails text contrast on paper — the direction
+            // glyphs take ink/coral; jade stays on the chart accents.
             if (s != null) Row(verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(end = 10.dp)) {
-                Text("↓", color = colors.jade, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("↓", color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text(" ${s.connectionsIn}", color = colors.muted, fontSize = 13.sp)
                 Text("  ↑", color = colors.coral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text(" ${s.connectionsOut}", color = colors.muted, fontSize = 13.sp)
@@ -559,26 +682,43 @@ private fun SessionStats(
 }
 
 @Composable
-private fun SpeedMetric(label: String, value: String?, total: String?, samples: List<TrafficHistory.Point>,
+private fun SpeedMetric(label: String, value: Long, totalBytes: Long, samples: List<TrafficHistory.Point>,
     nowNanos: Long, download: Boolean, lineColor: Color, modifier: Modifier) {
     val colors = AfterglowTheme.colors
     Column(modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (download) "↓" else "↑", color = lineColor, fontSize = 15.sp,
-                fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 4.dp))
-            Text(label, color = colors.muted, fontSize = 12.sp, maxLines = 1)
-            if (total != null) Text(total, color = colors.muted, fontSize = 11.sp, maxLines = 1,
-                modifier = Modifier.padding(start = 6.dp).weight(1f),
-                textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            // Ink/coral glyphs — light jade text fails contrast on paper.
+            Text(if (download) "↓" else "↑", color = if (download) colors.ink else colors.coral,
+                fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 4.dp))
+            Text(label, color = colors.muted, fontSize = 12.sp, maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
         }
-        Text(value ?: "—", color = colors.ink, fontSize = 21.sp, fontWeight = FontWeight.Bold,
+        Text(formatRate(value),
+            color = colors.ink, fontSize = 21.sp, fontWeight = FontWeight.Bold,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
-        Canvas(Modifier.fillMaxWidth().height(32.dp).padding(top = 4.dp)) {
+        // Total moves under the rate — inline it squeezed the label column.
+        Text(stringResource(R.string.home_stat_total_suffix, formatBytes(totalBytes)),
+            color = colors.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        TrafficChart(samples, nowNanos, download, lineColor)
+    }
+}
+
+@Composable
+private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, download: Boolean, lineColor: Color) {
+    val colors = AfterglowTheme.colors
+    var chartNanos by remember { mutableLongStateOf(nowNanos) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { chartNanos = System.nanoTime(); delay(100) }
+        }
+    }
+    Canvas(Modifier.fillMaxWidth().height(32.dp).padding(top = 4.dp)) {
             val baseline = size.height - 1.dp.toPx()
             drawLine(colors.border, Offset(0f, baseline), Offset(size.width, baseline), 1.dp.toPx())
             val maxRate = samples.maxOfOrNull { if (download) it.down else it.up } ?: 0L
             val scale = maxOf(32.0, maxRate.toDouble() * 1.2)
-            val start = nowNanos - TrafficHistory.WINDOW_NANOS
+            val start = maxOf(nowNanos, chartNanos) - TrafficHistory.WINDOW_NANOS
             fun point(sample: TrafficHistory.Point): Offset {
                 val rate = if (download) sample.down else sample.up
                 val x = size.width * ((sample.atNanos - start).toDouble() / TrafficHistory.WINDOW_NANOS).toFloat()
@@ -612,7 +752,6 @@ private fun SpeedMetric(label: String, value: String?, total: String?, samples: 
                 segment.add(sample)
             }
             drawSegment()
-        }
     }
 }
 

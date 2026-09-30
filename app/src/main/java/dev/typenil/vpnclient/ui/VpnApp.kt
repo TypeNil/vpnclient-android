@@ -1,16 +1,23 @@
 package dev.typenil.vpnclient.ui
 
 import android.app.Activity
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,7 +28,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Snackbar
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -29,7 +35,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
@@ -57,10 +67,13 @@ import dev.typenil.vpnclient.ui.routing.RoutingScreen
 import dev.typenil.vpnclient.ui.servers.ServersScreen
 import dev.typenil.vpnclient.ui.settings.SettingsScreen
 import dev.typenil.vpnclient.ui.subscriptions.SubscriptionsScreen
+import dev.typenil.vpnclient.ui.theme.AfterglowSheet
+import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.DarkAfterglow
 import dev.typenil.vpnclient.ui.theme.VPNClientTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 object Routes {
@@ -74,9 +87,6 @@ object Routes {
     const val CONNECTIONS = "connections"
     const val DIAGNOSTICS = "diagnostics"
 }
-
-/** savedStateHandle flag for the Subscriptions add dialog, posted by entry points. */
-private const val ADD_DIALOG_OPEN_KEY = "open_add_dialog"
 
 /**
  * Root composable: theme + NavHost.
@@ -98,16 +108,19 @@ fun VpnApp(
     VPNClientTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
         val navController = rememberNavController()
         val snackbarHostState = remember { SnackbarHostState() }
+        var activeSheet by rememberSaveable { mutableStateOf<String?>(null) }
+        var openAddDialog by rememberSaveable { mutableStateOf(false) }
+        val sheetSaveableState = rememberSaveableStateHolder()
 
         val pendingImport by importUrl.collectAsStateWithLifecycle()
         LaunchedEffect(pendingImport) {
-            // Re-navigating to SUBSCRIPTIONS while already on it recreates the
-            // back-stack entry — the dialog state the screen's import effect
-            // sets is rememberSaveable to the *old* entry and dies with it.
-            if (pendingImport != null &&
-                navController.currentDestination?.route != Routes.SUBSCRIPTIONS
-            ) {
-                navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
+            if (pendingImport != null) {
+                // External imports must surface immediately, even when a
+                // full-screen destination is currently covering the sheet host.
+                if (navController.currentDestination?.route !in listOf(Routes.HOME, Routes.SETTINGS)) {
+                    navController.popBackStack(Routes.HOME, inclusive = false)
+                }
+                activeSheet = Routes.SUBSCRIPTIONS
             }
         }
 
@@ -123,12 +136,13 @@ fun VpnApp(
         }
 
         val currentEntry by navController.currentBackStackEntryAsState()
-        val topLevelTitle = when (currentEntry?.destination?.route) {
-            Routes.SERVERS -> R.string.nav_servers
-            Routes.SUBSCRIPTIONS -> R.string.nav_subscriptions
-            Routes.SETTINGS -> R.string.nav_settings
-            else -> null
+        // QR_SCAN writes into the hosting HOME/SETTINGS entry before popping.
+        // The sheet keeps its rememberSaveable add-form fields across that trip.
+        val qrResultFlow = remember(currentEntry) {
+            currentEntry?.savedStateHandle?.getStateFlow<String?>(QR_RESULT_KEY, null)
+                ?: MutableStateFlow(null)
         }
+        val qrResult by qrResultFlow.collectAsStateWithLifecycle()
         val colors = AfterglowTheme.colors
         val darkAfterglow = colors == DarkAfterglow
         val activity = LocalActivity.current
@@ -154,122 +168,105 @@ fun VpnApp(
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = colors.paper,
-            // Home scrolls beneath gesture navigation; other screens keep their existing safe insets.
-            contentWindowInsets = if (currentEntry?.destination?.route == Routes.HOME)
-                WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
-            else ScaffoldDefaults.contentWindowInsets,
-            topBar = {
-                if (topLevelTitle != null) {
-                    Row(Modifier.fillMaxWidth().statusBarsPadding().heightIn(min = 56.dp).padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { navController.popBackStack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.common_back), tint = colors.ink)
-                        }
-                        Text(stringResource(topLevelTitle), color = colors.ink,
-                            fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 8.dp))
-                    }
-                }
-            },
+            // Route-independent: Home already applies navigationBarsPadding;
+            // the other destinations handle their own bottom inset, so a
+            // conditional root inset can only double-pad or under-pad.
+            contentWindowInsets =
+                WindowInsets.systemBars.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
             snackbarHost = {
-                SnackbarHost(snackbarHostState) { data ->
+                SnackbarHost(snackbarHostState, Modifier.navigationBarsPadding()) { data ->
                     Snackbar(data, containerColor = colors.ink, contentColor = colors.paper,
                         actionColor = colors.coralLight, shape = AfterglowTokens.cardShape)
                 }
             },
         ) { innerPadding ->
+            Box(Modifier.fillMaxSize()) {
             NavHost(
                 navController = navController,
                 startDestination = Routes.HOME,
                 modifier = Modifier.padding(innerPadding),
+                enterTransition = {
+                    fadeIn(tween(AfterglowTokens.motionStandard)) +
+                        slideInHorizontally(tween(AfterglowTokens.motionStandard)) { it / 12 }
+                },
+                exitTransition = { fadeOut(tween(AfterglowTokens.motionFast)) },
+                // Navigation 2.10 has separate predictive specs. Keep both
+                // paths identical so gesture release/cancellation cannot switch
+                // from the library's scale-out to our crossfade mid-transition.
+                popEnterTransition = {
+                    fadeIn(tween(AfterglowTokens.motionStandard))
+                },
+                popExitTransition = {
+                    fadeOut(tween(AfterglowTokens.motionStandard))
+                },
+                predictivePopEnterTransition = {
+                    fadeIn(tween(AfterglowTokens.motionStandard))
+                },
+                predictivePopExitTransition = {
+                    fadeOut(tween(AfterglowTokens.motionStandard))
+                },
             ) {
                 composable(Routes.HOME) {
+                    DestinationSurface {
                     HomeScreen(
                         onOpenConnections = { navController.navigate(Routes.CONNECTIONS) },
-                        onOpenSubscriptions = { navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true } },
+                        onOpenSubscriptions = { activeSheet = Routes.SUBSCRIPTIONS },
                         onOpenSettings = { navController.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                         onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
-                        onOpenRouting = { navController.navigate(Routes.ROUTING) },
-                        // The full Servers screen owns filters, sorting and latency tests.
-                        onOpenServers = { navController.navigate(Routes.SERVERS) { launchSingleTop = true } },
+                        onOpenRouting = { activeSheet = Routes.ROUTING },
+                        onOpenServers = { activeSheet = Routes.SERVERS },
                         onAddServer = {
-                            navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
-                            navController.currentBackStackEntry
-                                ?.savedStateHandle
-                                ?.set(ADD_DIALOG_OPEN_KEY, true)
+                            openAddDialog = true
+                            activeSheet = Routes.SUBSCRIPTIONS
                         },
                     )
-                }
-                composable(Routes.SERVERS) {
-                    ServersScreen(
-                        onAddServer = {
-                            navController.navigate(Routes.SUBSCRIPTIONS) { launchSingleTop = true }
-                            // Set after navigate(): savedStateHandle is
-                            // fetched from the now-top entry — get() before
-                            // the navigate would target the wrong entry.
-                            navController.currentBackStackEntry
-                                ?.savedStateHandle
-                                ?.set(ADD_DIALOG_OPEN_KEY, true)
-                        },
-                    )
-                }
-                composable(Routes.SUBSCRIPTIONS) { entry ->
-                    // A QR result arrives via the back-stack entry's
-                    // savedStateHandle; it feeds the same prefilled-dialog
-                    // funnel as deep links.
-                    val qrResult by entry.savedStateHandle
-                        .getStateFlow<String?>(QR_RESULT_KEY, null)
-                        .collectAsStateWithLifecycle()
-                    // "Open the add dialog" signal posted by cross-tab entry
-                    // points (Servers empty state) — consumed below.
-                    val openAddDialog by entry.savedStateHandle
-                        .getStateFlow(ADD_DIALOG_OPEN_KEY, false)
-                        .collectAsStateWithLifecycle()
-                    SubscriptionsScreen(
-                        snackbarHostState = snackbarHostState,
-                        import = pendingImport ?: qrResult?.let { ExtractedImport(it, null) },
-                        openAddDialog = openAddDialog,
-                        onAddDialogSignalConsumed = {
-                            entry.savedStateHandle.remove<Boolean>(ADD_DIALOG_OPEN_KEY)
-                        },
-                        onImportConsumed = {
-                            if (pendingImport != null) onImportConsumed()
-                            // Always drop a stale scan result too — it would
-                            // otherwise surface as a second import once the
-                            // ?: source flips back to it.
-                            entry.savedStateHandle.remove<String>(QR_RESULT_KEY)
-                        },
-                        onScanQr = {
-                            navController.navigate(Routes.QR_SCAN) { launchSingleTop = true }
-                        },
-                    )
+                    }
                 }
                 composable(Routes.SETTINGS) {
-                    SettingsScreen(
-                        onOpenRouting = { navController.navigate(Routes.ROUTING) },
-                        onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
-                        onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
-                        snackbarHostState = snackbarHostState,
-                    )
-                }
-                composable(Routes.ROUTING) {
-                    RoutingScreen(
-                        onBack = { navController.popBackStack() },
-                        onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
-                        snackbarHostState = snackbarHostState,
-                    )
+                    DestinationSurface {
+                    // The header travels with the destination — a root topBar
+                    // stayed visible over the incoming screen during back
+                    // transitions.
+                    Column(Modifier.fillMaxSize()) {
+                        // NavHost already carries the top inset — no second
+                        // status-bar pad on the destination-local header.
+                        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = stringResource(R.string.common_back), tint = colors.ink)
+                            }
+                            Text(stringResource(R.string.nav_settings), color = colors.ink,
+                                fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 8.dp))
+                        }
+                        SettingsScreen(
+                            onOpenRouting = { activeSheet = Routes.ROUTING },
+                            onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                            onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+                            snackbarHostState = snackbarHostState,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    }
                 }
                 composable(Routes.APP_FILTER) {
+                    DestinationSurface {
                     AppFilterScreen(onBack = { navController.popBackStack() })
+                    }
                 }
                 composable(Routes.CONNECTIONS) {
+                    DestinationSurface {
                     ConnectionsScreen(onBack = { navController.popBackStack() })
+                    }
                 }
                 composable(Routes.DIAGNOSTICS) {
+                    DestinationSurface {
                     DiagnosticsScreen(onBack = { navController.popBackStack() })
+                    }
                 }
                 composable(Routes.QR_SCAN) {
+                    DestinationSurface {
                     QrScanScreen(
                         onBack = { navController.popBackStack() },
                         onResult = { url ->
@@ -286,8 +283,75 @@ fun VpnApp(
                             }
                         },
                     )
+                    }
                 }
             }
+            if (currentEntry?.destination?.route == Routes.HOME ||
+                currentEntry?.destination?.route == Routes.SETTINGS) {
+                activeSheet?.let { sheet ->
+                    AfterglowSheet(onDismiss = { activeSheet = null }) {
+                        sheetSaveableState.SaveableStateProvider(sheet) {
+                        when (sheet) {
+                            Routes.SERVERS -> {
+                                AfterglowSheetHeader(stringResource(R.string.nav_servers),
+                                    stringResource(R.string.common_dismiss), { activeSheet = null })
+                                ServersScreen(onAddServer = {
+                                    openAddDialog = true
+                                    activeSheet = Routes.SUBSCRIPTIONS
+                                })
+                            }
+                            Routes.SUBSCRIPTIONS -> {
+                                // A sheet-local host — messages bound to the
+                                // root Scaffold host would render behind the
+                                // modal sheet and never be seen.
+                                val sheetSnackbar = remember { SnackbarHostState() }
+                                AfterglowSheetHeader(stringResource(R.string.nav_subscriptions),
+                                    stringResource(R.string.common_dismiss), { activeSheet = null })
+                                Box(Modifier.fillMaxWidth()) {
+                                    SubscriptionsScreen(
+                                        snackbarHostState = sheetSnackbar,
+                                        import = pendingImport ?: qrResult?.let { ExtractedImport(it, null) },
+                                        openAddDialog = openAddDialog,
+                                        onAddDialogSignalConsumed = { openAddDialog = false },
+                                        onImportConsumed = {
+                                            if (pendingImport != null) onImportConsumed()
+                                            currentEntry?.savedStateHandle?.remove<String>(QR_RESULT_KEY)
+                                        },
+                                        onScanQr = { navController.navigate(Routes.QR_SCAN) { launchSingleTop = true } },
+                                    )
+                                    SnackbarHost(sheetSnackbar, Modifier.align(Alignment.BottomCenter)) { data ->
+                                        Snackbar(data, containerColor = colors.ink, contentColor = colors.paper,
+                                            actionColor = colors.coralLight, shape = AfterglowTokens.cardShape)
+                                    }
+                                }
+                            }
+                            Routes.ROUTING -> {
+                                // Own host per sheet — not the shared root one.
+                                val routingSnackbar = remember { SnackbarHostState() }
+                                RoutingScreen(
+                                    onBack = { activeSheet = null },
+                                    onOpenAppFilter = { navController.navigate(Routes.APP_FILTER) },
+                                    snackbarHostState = routingSnackbar,
+                                )
+                            }
+                        }
+                        }
+                    }
+                }
+            }
+            }
         }
+    }
+}
+
+/**
+ * Opaque paper backing for one NavHost destination. During transitions the
+ * outgoing and incoming screens overlap; transparent destinations leaked
+ * stale content (headers, heroes) through each other mid-gesture.
+ */
+@Composable
+private fun DestinationSurface(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().background(AfterglowTheme.colors.paper)) {
+        content()
     }
 }

@@ -22,6 +22,7 @@
     <string name="common_save">Сохранить</string>
     <string name="common_delete">Удалить</string>
     <string name="common_dismiss">Скрыть</string>
+    <string name="common_done">Готово</string>
     <string name="common_refresh">Обновить</string>
     <string name="common_back">Назад</string>
     <string name="common_selected">Выбрано</string>
@@ -29,7 +30,7 @@
     <string name="common_enabled">включено</string>
     <string name="common_disabled">выключено</string>
     <string name="common_none">—</string>
-    <string name="common_auto_fastest">Авто · Самый быстрый</string>
+    <string name="common_auto_fastest">Автовыбор</string>
     <string name="common_no_servers_yet">Пока нет серверов</string>
     <string name="common_add_servers_hint">Добавьте подписку или вставьте ссылку на сервер, чтобы начать.</string>
     <string name="common_add_server_cta">Добавить подписку или ссылку</string>
@@ -123,6 +124,8 @@
     <string name="afterglow_connecting">Подключение…</string>
     <string name="afterglow_stopping">Отключение…</string>
     <string name="afterglow_auto">АВТО</string>
+    <string name="afterglow_status_reconnecting">Переподключение…</string>
+    <string name="afterglow_measured_latency">Задержка · %1$d мс</string>
     <string name="afterglow_auto_best_latency">Мин. задержка: %1$s (%2$d мс)</string>
     <string name="afterglow_auto_best_latency_noms">Мин. задержка: %1$s</string>
     <string name="afterglow_your_connection">ВАШЕ СОЕДИНЕНИЕ</string>
@@ -149,8 +152,6 @@
     <string name="afterglow_session_progress">СЕАНС АКТИВЕН</string>
     <string name="afterglow_please_wait">ПОДОЖДИТЕ</string>
     <string name="afterglow_no_servers_headline">Нет серверов</string>
-    <string name="afterglow_auto_select">Автовыбор</string>
-    <string name="afterglow_auto_candidate">Лучший по задержке: %1$s</string>
     <string name="afterglow_latency_not_measured">Задержка не измерена</string>
     <string name="afterglow_current_outbound">Текущий сервер: %1$s</string>
     <string name="afterglow_no_usable_servers">Нет доступных серверов. Проверьте подписки или фильтры серверов.</string>
@@ -197,27 +198,35 @@
     <string name="home_details_outbound">Исходящее соединение</string>
     <string name="home_details_pending">Ждут переподключения</string>
     <string name="home_details_underlay">Базовая сеть</string>
+    <string name="underlay_wifi">Wi-Fi</string>
+    <string name="underlay_cellular">Мобильная сеть</string>
+    <string name="underlay_other">Другая</string>
     <string name="home_details_uptime">Время работы</string>
     <string name="home_details_data_used">Трафик</string>
     <string name="home_details_data_used_value">↓ %1$s · ↑ %2$s</string>
     <string name="home_uptime_hms">%1$d ч %2$d мин %3$d с</string>
     <string name="home_uptime_ms">%1$d мин %2$d с</string>
     <string name="home_uptime_s">%1$d с</string>
+    <string name="home_uptime_dhm">%1$d д %2$d ч %3$d мин</string>
     <string name="home_per_app_include">Через VPN: %1$d приложений</string>
     <string name="home_per_app_include_one">Через VPN: %1$d приложение</string>
     <string name="home_per_app_exclude">Без VPN: %1$d приложений</string>
     <string name="home_per_app_exclude_one">Без VPN: %1$d приложение</string>
-    <string name="home_auto_subtitle">Выбор по задержке</string>
+    <string name="home_auto_subtitle">Быстрый доступный сервер</string>
     <string name="home_connect">Подключить</string>
 
     <!-- Servers -->
     <string name="servers_search_hint">Поиск по имени или серверу</string>
     <string name="servers_favorites">Избранное</string>
+    <string name="servers_filters">Фильтры</string>
+    <string name="servers_filter_subscription">Подписка</string>
+    <string name="servers_filter_protocol">Протокол</string>
+    <string name="servers_filter_all">Все</string>
+    <string name="servers_filter_reset">Сбросить</string>
     <string name="servers_test_latency">Проверить задержку</string>
     <string name="servers_latency_via_proxy">через прокси</string>
     <string name="servers_latency_tcp">TCP-подключение</string>
     <string name="servers_no_match">Нет серверов по текущим фильтрам</string>
-    <string name="servers_sort_prefix">Сортировка: %1$s</string>
     <string name="servers_latency_timeout">тайм-аут</string>
     <string name="servers_favorite_remove">Убрать из избранного</string>
     <string name="servers_favorite_add">В избранное</string>

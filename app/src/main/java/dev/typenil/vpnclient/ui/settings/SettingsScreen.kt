@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -22,7 +23,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
 import dev.typenil.vpnclient.ui.theme.AfterglowRadioButton as RadioButton
@@ -90,7 +94,8 @@ fun SettingsScreen(
         modifier =
             modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding(),
     ) {
         SwitchRow(
             title = stringResource(R.string.settings_reconnect_on_change),
@@ -121,6 +126,7 @@ fun SettingsScreen(
                 Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onOpenRouting)
+                    .heightIn(min = AfterglowTokens.touchTarget)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -135,6 +141,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            NavChevron()
         }
         ThemeModeRow(
             mode = ui.themeMode,
@@ -190,6 +197,7 @@ fun SettingsScreen(
                 Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onOpenDiagnostics)
+                    .heightIn(min = AfterglowTokens.touchTarget)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -204,6 +212,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            NavChevron()
         }
 
         InfoRow(title = stringResource(R.string.common_vpn_core), value = CORE_VERSION)
@@ -250,6 +259,7 @@ private fun ThemeModeRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { showDialog = true }
+                .heightIn(min = AfterglowTokens.touchTarget)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -261,6 +271,7 @@ private fun ThemeModeRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        NavChevron()
     }
     if (showDialog) {
         AlertDialog(
@@ -324,6 +335,7 @@ private fun LanguageRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { showDialog = true }
+                .heightIn(min = AfterglowTokens.touchTarget)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -335,6 +347,7 @@ private fun LanguageRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        NavChevron()
     }
     if (showDialog) {
         AlertDialog(
@@ -498,7 +511,8 @@ private fun AlwaysOnRow() {
                     }.onFailure {
                         context.startActivity(Intent(Settings.ACTION_SETTINGS))
                     }
-                }.padding(horizontal = 16.dp, vertical = 8.dp),
+                }.heightIn(min = AfterglowTokens.touchTarget)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -509,7 +523,18 @@ private fun AlwaysOnRow() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        NavChevron()
     }
+}
+
+/** Trailing affordance for rows that open a screen or a picker. */
+@Composable
+private fun NavChevron() {
+    Icon(
+        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

@@ -1,20 +1,22 @@
 package dev.typenil.vpnclient.ui.routing
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -26,13 +28,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
 import dev.typenil.vpnclient.ui.theme.AfterglowRadioButton as RadioButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import dev.typenil.vpnclient.ui.theme.AfterglowSwitch as Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,9 +43,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,7 +57,12 @@ import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.RoutingRule
 import dev.typenil.vpnclient.data.db.RoutingRuleEntity
+import dev.typenil.vpnclient.ui.common.appliedDnsSummary
+import dev.typenil.vpnclient.ui.common.perAppSummary
+import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
+import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -71,7 +80,6 @@ fun RoutingScreen(
     viewModel: RoutingViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val reconnectMessage = stringResource(R.string.settings_snackbar_reconnect_message)
     val reconnectAction = stringResource(R.string.settings_snackbar_reconnect_action)
     LaunchedEffect(ui.reconnectRecommended, reconnectMessage, reconnectAction) {
@@ -85,28 +93,38 @@ fun RoutingScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.routing_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.common_back),
-                        )
-                    }
-                },
-            )
-        },
-    ) { innerPadding ->
+    Column(modifier.fillMaxWidth()) {
+        AfterglowSheetHeader(
+            title = stringResource(R.string.routing_title),
+            closeLabel = stringResource(R.string.common_dismiss),
+            onDismiss = onBack,
+        )
+        SnackbarHost(snackbarHostState) { data ->
+            Snackbar(data, containerColor = AfterglowTheme.colors.ink,
+                contentColor = AfterglowTheme.colors.paper,
+                actionColor = AfterglowTheme.colors.coralLight)
+        }
+        // Pinned above the scrollable policy: the per-app picker is a
+        // primary routing tool, not a footnote after the rules list.
+        PerAppEntry(
+            ui.perAppMode,
+            ui.perAppCount,
+            ui.appliedPerAppMode.takeIf {
+                ui.sessionActive &&
+                    (ui.appliedPerAppMode != ui.perAppMode || ui.appliedPerAppCount != ui.perAppCount)
+            }?.let { perAppSummary(it, ui.appliedPerAppCount ?: 0) },
+            onOpenAppFilter,
+        )
+        HorizontalDivider()
+        // Bound to the sheet's real space — a screen-height fraction ignores
+        // the IME and the actual sheet window.
+        val sheetMax = LocalSheetMaxHeight.current
+            ?: LocalConfiguration.current.screenHeightDp.dp
         Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .verticalScroll(rememberScrollState()),
+            Modifier.fillMaxWidth()
+                .heightIn(max = sheetMax * .68f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
         ) {
             RouteModeRow(
                 mode = ui.routeMode,
@@ -135,7 +153,7 @@ fun RoutingScreen(
                         ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
             }
             DnsModeRow(
@@ -149,10 +167,10 @@ fun RoutingScreen(
             if (ui.sessionActive && ui.appliedDnsSummary != null) {
                 Text(
                     text =
-                        stringResource(R.string.routing_dns_applied, ui.appliedDnsSummary ?: ""),
+                        stringResource(R.string.routing_dns_applied, appliedDnsSummary(ui.appliedDnsSummary)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
             }
 
@@ -170,28 +188,58 @@ fun RoutingScreen(
                 onDelete = viewModel::deleteRule,
             )
 
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Row(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onOpenAppFilter)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.common_per_app_vpn),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Text(
-                        stringResource(R.string.settings_per_app_sub),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+        }
+    }
+}
+
+/** Pinned per-app entry — a bordered row that names the feature and shows
+ *  the saved policy, so it can't hide below the scroll fold. */
+@Composable
+private fun PerAppEntry(
+    mode: dev.typenil.vpnclient.core.vpn.PerAppMode,
+    count: Int,
+    appliedLabel: String? = null,
+    onClick: () -> Unit,
+) {
+    val colors = AfterglowTheme.colors
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .border(AfterglowTokens.border, colors.border, AfterglowTokens.cardShape)
+                .background(colors.paperSecondary, AfterglowTokens.cardShape)
+                .semantics { role = Role.Button }
+                .clickable(onClick = onClick)
+                .heightIn(min = AfterglowTokens.rowHeight)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.common_per_app_vpn),
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.ink,
+            )
+            Text(
+                perAppSummary(mode, count),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (appliedLabel != null) {
+                Text(
+                    stringResource(R.string.routing_saved_applied,
+                        perAppSummary(mode, count), appliedLabel),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = colors.coral,
+        )
     }
 }
 
@@ -208,7 +256,7 @@ private fun SwitchRow(
                 .fillMaxWidth()
                 .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
                 .heightIn(min = AfterglowTokens.rowHeight)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -237,7 +285,7 @@ private fun RouteModeRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { showDialog = true }
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -349,7 +397,7 @@ private fun DnsModeRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { showDialog = true }
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -448,7 +496,7 @@ private fun DnsUpstreamRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { showDialog = true }
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -588,7 +636,7 @@ private fun RulesSection(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -606,7 +654,7 @@ private fun RulesSection(
             stringResource(R.string.routing_rules_empty),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = 20.dp),
         )
     }
     rules.forEach { rule ->
@@ -614,7 +662,7 @@ private fun RulesSection(
             modifier =
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {

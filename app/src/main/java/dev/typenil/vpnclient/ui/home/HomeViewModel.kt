@@ -30,7 +30,7 @@ data class HomeUiState(
     val connection: VpnConnectionState = VpnConnectionState.Idle,
     val selectedNodeName: String? = null,
     val selectedNodeProtocol: String? = null,
-    /** The persisted pick is "Auto / Fastest" — no concrete node exists. */
+    /** The persisted pick is Auto — no concrete node exists. */
     val autoSelected: Boolean = false,
     /** Best measured latency node name from urltest (if tested). Does NOT claim
      *  to be the guaranteed active egress when tolerance is in effect. */
@@ -38,9 +38,6 @@ data class HomeUiState(
     val bestLatencyNodeProtocol: String? = null,
     /** Measured delay for the selected node, or Auto's best measured candidate. */
     val selectedDelayMs: Int? = null,
-    /** Resource for the persisted pick when no concrete node name exists
-     *  (the Auto sentinel) — the screen resolves it to the localized label. */
-    @param:StringRes val selectedNodeNameRes: Int? = null,
     val subscriptionName: String? = null,
     val routingMode: RouteMode? = RouteMode.ALL,
     val routingPending: Boolean = false,
@@ -90,7 +87,7 @@ data class SessionDetails(
      *  "auto"), which the UI must not render. */
     val activeOutbound: String?,
     /** Resource for [activeOutbound] when the tag is the Auto sentinel —
-     *  resolves to the localized "Auto · Fastest" label at render. */
+     *  resolves to the localized Auto label at render. */
     @param:StringRes val activeOutboundRes: Int? = null,
     /** The routing/per-app plan the live engine actually runs — null until
      *  the service reports one; never guessed from the current settings. */
@@ -208,8 +205,8 @@ class HomeViewModel
 
                 HomeUiState(
                     connection = connection,
-                    // The Auto pick resolves to a node only at the engine — while
-                    // disconnected (or during a session) the label stands alone.
+                    // Auto resolves to a member only at the engine; the UI keeps
+                    // the mode label stable and reports a measured winner separately.
                     // Custom name applies to the header too — same presentation
                     // rule as the picker.
                     selectedNodeName =
@@ -217,8 +214,6 @@ class HomeViewModel
                             prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() }
                                 ?: it.name
                         },
-                    selectedNodeNameRes =
-                        if (!auto || selected != null) null else R.string.afterglow_auto_select,
                     selectedNodeProtocol = selected?.protocol,
                     autoSelected = auto,
                     bestLatencyNodeName = if (auto) bestLatencyNodeName else null,
@@ -292,7 +287,7 @@ class HomeViewModel
                                 // switch, so the group's selected tag is authoritative.
                                 // The tag itself is a raw outbound id (hash) — resolve
                                 // it to the node's name; "auto" means the urltest group
-                                // is the egress (Auto · Fastest), a member tag resolves
+                                // is the egress (Auto), a member tag resolves
                                 // through the node table.
                                 activeOutbound =
                                     groups
@@ -310,7 +305,7 @@ class HomeViewModel
                                             .firstOrNull { it.selectable }
                                             ?.selected == NodeSelection.AUTO_ID
                                     ) {
-                                        R.string.afterglow_auto_select
+                                        R.string.common_auto_fastest
                                     } else {
                                         null
                                     },

@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +48,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -58,15 +62,20 @@ import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.core.vpn.VpnError
 import dev.typenil.vpnclient.ui.common.CORE_VERSION
 import dev.typenil.vpnclient.ui.common.DetailRow
+import dev.typenil.vpnclient.ui.common.appliedDnsSummary
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
 import dev.typenil.vpnclient.ui.common.perAppSummary
 import dev.typenil.vpnclient.ui.common.routeModeSummary
+import dev.typenil.vpnclient.ui.common.underlayLabel
 import dev.typenil.vpnclient.ui.common.uptimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowSheet
 import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
+import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
+import kotlinx.coroutines.delay
+import java.time.Instant
 
 @Composable
 fun HomeScreen(
@@ -136,7 +145,7 @@ private fun errorText(error: VpnError): String =
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ServerPickerSheet(
+internal fun ServerPickerSheet(
     options: List<ServerOption>,
     selectedId: String?,
     onPick: (String) -> Unit,
@@ -166,6 +175,11 @@ private fun ServerPickerSheet(
 
     val colors = AfterglowTheme.colors
     AfterglowSheet(onDismiss = onDismiss) {
+        // Bound to the sheet's real space (readable only inside the sheet
+        // content) so the list shrinks with the IME — not a fixed height
+        // behind the keyboard.
+        val sheetMax = LocalSheetMaxHeight.current
+        val listCap = sheetMax?.let { minOf(420.dp, it * 0.6f) } ?: 420.dp
         Column(Modifier.padding(bottom = 12.dp)) {
             AfterglowSheetHeader(
                 title = stringResource(R.string.home_picker_title),
@@ -211,7 +225,7 @@ private fun ServerPickerSheet(
             ) {
                 Text(stringResource(R.string.home_picker_all_servers), color = colors.coral)
             }
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+            LazyColumn(Modifier.heightIn(max = listCap)) {
                 // Auto is the picker's first-class choice — shown on an
                 // empty query or when its own label/tag matches the search.
                 if (autoMatches) {
@@ -232,7 +246,9 @@ private fun ServerPickerSheet(
                         onClick = { onPick(option.id) },
                     )
                 }
-                if (matches.isEmpty()) {
+                // A query that hits only the Auto row is still a match —
+                // don't pair the result with a "no match" caption.
+                if (matches.isEmpty() && !(autoMatches && auto != null)) {
                     item(key = "no-match") {
                         Text(
                             text = stringResource(R.string.home_picker_no_match, trimmed),
@@ -275,7 +291,7 @@ private fun PickerRow(
                             ?.let { stringResource(it) }
                             .orEmpty(),
                 style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             val optionSubtitle = option.subtitle ?: option.subtitleRes?.let { stringResource(it) }
@@ -306,11 +322,20 @@ private fun PickerRow(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionDetailsSheet(
+internal fun SessionDetailsSheet(
     state: VpnConnectionState.Connected,
     details: SessionDetails?,
     onDismiss: () -> Unit,
 ) {
+    // Uptime reads live: a 1 Hz ticker keeps the sheet's "now" current while
+    // it's open, gated by lifecycle like the home stats ticker.
+    var now by remember { mutableStateOf(Instant.now()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { now = Instant.now(); delay(1_000) }
+        }
+    }
     AfterglowSheet(onDismiss = onDismiss) {
         AfterglowSheetHeader(
             title = stringResource(R.string.home_details_title),
@@ -347,7 +372,7 @@ private fun SessionDetailsSheet(
             )
             DetailRow(
                 stringResource(R.string.routing_dns_upstream),
-                details?.applied?.dnsProfileSummary ?: none,
+                appliedDnsSummary(details?.applied?.dnsProfileSummary),
             )
             // Named, not silently ignored: these are changed-but-unapplied.
             details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {
@@ -357,8 +382,11 @@ private fun SessionDetailsSheet(
                     pendingLabels.joinToString(", "),
                 )
             }
-            DetailRow(stringResource(R.string.home_details_underlay), details?.underlay?.label ?: none)
-            DetailRow(stringResource(R.string.home_details_uptime), uptimeText(state.since))
+            DetailRow(
+                stringResource(R.string.home_details_underlay),
+                details?.underlay?.let { underlayLabel(it) } ?: none,
+            )
+            DetailRow(stringResource(R.string.home_details_uptime), uptimeText(state.since, now))
             state.stats?.let { stats ->
                 DetailRow(
                     stringResource(R.string.home_details_data_used),
