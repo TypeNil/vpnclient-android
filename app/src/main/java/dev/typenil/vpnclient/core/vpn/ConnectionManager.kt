@@ -650,7 +650,7 @@ class ConnectionManager
             var summary = configProvider.nodeSummary(id) ?: return
             if (summary.id == NodeSelection.AUTO_ID) {
                 // No member is impersonated: until the urltest group reports a
-                // pick the label stays the generic "Auto · Fastest".
+                // pick the label stays the generic "Auto".
                 val resolved = resolvedTag?.let { configProvider.nodeSummary(it) }
                 if (resolved != null) {
                     summary =

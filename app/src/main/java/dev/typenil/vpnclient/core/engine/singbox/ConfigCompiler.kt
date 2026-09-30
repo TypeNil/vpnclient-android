@@ -219,9 +219,7 @@ class ConfigCompiler
                             // upstream — no dns.rules entry may point at `local`
                             // for user traffic; `local` exists solely as the
                             // bootstrap resolver (its own hostname, node names).
-                            dnsProfile.mode == DnsMode.PROXY_ONLY -> {
-                                Unit
-                            }
+                            dnsProfile.mode == DnsMode.PROXY_ONLY -> {}
 
                             // RU domains resolve via the ISP resolver so the direct
                             // route gets CDN-local answers; everything else keeps the
@@ -252,9 +250,7 @@ class ConfigCompiler
                                 }
                             }
 
-                            else -> {
-                                Unit
-                            }
+                            else -> {}
                         }
                         put(
                             "final",
@@ -400,9 +396,7 @@ class ConfigCompiler
                                     }
                                 }
 
-                                RouteMode.ALL -> {
-                                    Unit
-                                }
+                                RouteMode.ALL -> {}
                             }
                         }
                         put("final", if (routeMode == RouteMode.PROXY_BLOCKED) "direct" else SELECTOR_TAG)
@@ -449,12 +443,12 @@ class ConfigCompiler
             const val TUN_V4 = "172.18.0.1/30"
             const val TUN_V6 = "fdfe:dcba:9877::1/126"
 
-            /** Session-label summary for the Auto pick — stands for the urltest
-             *  group itself, never for one of its members. */
+            /** Session-label summary for Auto — stands for the urltest group
+             *  itself, never for one of its members. */
             val AUTO_NODE_SUMMARY =
                 NodeSummary(
                     id = AUTO_TAG,
-                    name = "Auto · Fastest",
+                    name = "Auto",
                     protocol = ProtocolType.OTHER,
                     server = "",
                 )

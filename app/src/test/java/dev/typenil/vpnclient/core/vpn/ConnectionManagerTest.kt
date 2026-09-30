@@ -937,7 +937,7 @@ class ConnectionManagerTest {
             val state = manager.state.value as VpnConnectionState.Connected
             assertEquals(NodeSelection.AUTO_ID, state.node.id)
             // No winner reported yet — the label stays generic.
-            assertEquals("Auto · Fastest", state.node.name)
+            assertEquals("Auto", state.node.name)
             assertEquals(0, serviceControl.disconnectStarts)
 
             // The urltest group's measured winner is surfaced once reported —
@@ -951,7 +951,7 @@ class ConnectionManagerTest {
 
             val updated = manager.state.value as VpnConnectionState.Connected
             assertEquals(NodeSelection.AUTO_ID, updated.node.id)
-            assertEquals("Auto · Fastest → Second Node", updated.node.name)
+            assertEquals("Auto → Second Node", updated.node.name)
             assertEquals(node2.server, updated.node.server)
         }
 
@@ -972,7 +972,7 @@ class ConnectionManagerTest {
             assertEquals(listOf("proxy" to "auto"), engine.selections)
             val state = manager.state.value as VpnConnectionState.Connected
             assertEquals(NodeSelection.AUTO_ID, state.node.id)
-            assertEquals("Auto · Fastest", state.node.name)
+            assertEquals("Auto", state.node.name)
         }
 
     @Test
