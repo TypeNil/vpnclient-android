@@ -4,6 +4,8 @@ import android.content.ComponentName
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assume
+import org.junit.Before
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -13,12 +15,14 @@ import org.junit.runner.RunWith
 
 /**
  * Restore-only recovery path and policy check for `VpnTestRunner`'s
- * unconditional BootReceiver isolation. Runnable under the runner's normal
- * invocation (it needs
- * only app-context `PackageManager`, never touches a Hilt component):
+ * unconditional BootReceiver isolation. Gated on `-e r04 1` like the sibling
+ * research test: in a plain suite run it would otherwise `restore()` the
+ * runner's live record mid-run and silently drop the isolation protection
+ * for the remainder — harmless but wrong-scoped. It needs only app-context
+ * `PackageManager` and never touches a Hilt component:
  *
  *   am instrument -w -e class dev.typenil.vpnclient.R04ReceiverIsolationRestoreTest \
- *     dev.typenil.vpnclient.test/dev.typenil.vpnclient.VpnTestRunner
+ *     -e r04 1 dev.typenil.vpnclient.test/dev.typenil.vpnclient.VpnTestRunner
  *
  * Parent invokes it after a hard-killed isolated run: a residue record's
  * recorded original state must be applied verbatim, and the record policy
@@ -30,6 +34,16 @@ class R04ReceiverIsolationRestoreTest {
 
     private val context
         get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Before
+    fun requireExclusiveRun() {
+        Assume.assumeTrue(
+            "R04 isolation checks are exclusive-run only — pass -e " +
+                R04ReceiverIsolation.RUN_ARG + " 1",
+            "1" == InstrumentationRegistry.getArguments()
+                .getString(R04ReceiverIsolation.RUN_ARG),
+        )
+    }
 
     private val receiver
         get() = ComponentName(

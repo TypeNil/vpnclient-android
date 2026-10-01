@@ -31,6 +31,7 @@ import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
+import dev.typenil.vpnclient.R04ReceiverIsolation
 import io.nekohasekai.libbox.WIFIState
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
@@ -121,9 +122,6 @@ class OfflineUrlTestResearchTest {
     companion object {
         private const val TAG = "R04Research"
         private const val SOCKS_TAG = "r04-socks"
-        /** `am instrument -e` key opting into this exclusive process-global
-         *  run; absent → the whole class is skipped (see [setupNative]). */
-        private const val R04_RUN_ARG = "r04"
         private const val GROUP_TAG = "r04-auto"
         private const val PROBE_PATH = "/r04-probe"
         private const val LOOPBACK = "127.0.0.1"
@@ -291,9 +289,10 @@ class OfflineUrlTestResearchTest {
             // runner arg the class skips before any process-global JNI state
             // is touched, so suite runs stay side-effect free.
             Assume.assumeTrue(
-                "R04 gate: exclusive run only — pass -e $R04_RUN_ARG 1",
+                "R04 gate: exclusive run only — pass -e " +
+                    R04ReceiverIsolation.RUN_ARG + " 1",
                 "1" == InstrumentationRegistry.getArguments()
-                    .getString(R04_RUN_ARG),
+                    .getString(R04ReceiverIsolation.RUN_ARG),
             )
             val appContext = InstrumentationRegistry.getInstrumentation().targetContext
             nativeRoot = File(

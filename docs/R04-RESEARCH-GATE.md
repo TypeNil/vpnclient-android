@@ -88,6 +88,10 @@ If the run crashes pre-test with a `Hilt_BootReceiver` stack, re-run the
 same command — the residue left by the crashed bootstrap is exactly what
 makes the retry succeed.
 
+`R04ReceiverIsolationRestoreTest` (record-recovery policy checks) is gated
+by the same `-e r04 1` flag — run it after a hard-killed isolated run when
+residue needs verifying.
+
 ## Raw device evidence
 
 Gate phases (logcat `R04Research`, run of 2026-10-02 00:23):

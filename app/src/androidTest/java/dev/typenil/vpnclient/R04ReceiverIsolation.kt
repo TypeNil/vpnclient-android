@@ -49,6 +49,11 @@ import java.io.File
  */
 object R04ReceiverIsolation {
 
+    /** `am instrument -e` key opting into exclusive R04 runs; without it the
+     *  gated test classes skip so plain suite runs never touch the runner's
+     *  live record (or process-global libbox state). */
+    internal const val RUN_ARG = "r04"
+
     private const val RECEIVER = "dev.typenil.vpnclient.core.vpn.BootReceiver"
     private const val RECORD_NAME = "r04_receiver_isolation_state"
     private const val FLAGS = PackageManager.DONT_KILL_APP
