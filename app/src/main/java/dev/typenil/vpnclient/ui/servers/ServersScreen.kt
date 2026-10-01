@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Star
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.Button
@@ -55,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
@@ -65,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
@@ -512,6 +515,7 @@ private fun ServerCard(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    var showTlsDetails by remember { mutableStateOf(false) }
     val colors = AfterglowTheme.colors
     Card(
         onClick = onClick,
@@ -576,6 +580,13 @@ private fun ServerCard(
                         onDismissRequest = { menuOpen = false },
                     ) {
                         DropdownMenuItem(
+                            text = { Text(stringResource(R.string.servers_tls_details)) },
+                            onClick = {
+                                menuOpen = false
+                                showTlsDetails = true
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text(stringResource(R.string.servers_rename)) },
                             onClick = {
                                 menuOpen = false
@@ -630,6 +641,24 @@ private fun ServerCard(
             }
             // Disabled / hidden are honest state — the card stays rendered
             // (the user manages it), but neither is engine-pickable.
+            // An insecure TLS config is a risk the user must see even before
+            // connecting — the details dialog carries the full picture.
+            if (node.tls.insecure) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        stringResource(R.string.servers_tls_insecure_warning),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             if (!node.enabled) {
                 Text(
                     stringResource(R.string.servers_disabled_label),
@@ -685,6 +714,108 @@ private fun ServerCard(
                     Text(stringResource(R.string.common_cancel))
                 }
             },
+        )
+    }
+    if (showTlsDetails) {
+        NodeTlsDialog(node = node, onDismiss = { showTlsDetails = false })
+    }
+}
+
+/**
+ * Read-only TLS posture of the stored node config — provenance (share link
+ * vs imported config; the original format isn't stored, so it is never
+ * guessed), authentication mode, and sanitized SNI/ALPN. Reachable from the
+ * node menu while connected or disconnected; values describe the imported
+ * config, never an observed handshake.
+ */
+@Composable
+private fun NodeTlsDialog(
+    node: ServerNode,
+    onDismiss: () -> Unit,
+) {
+    val tls = node.tls
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.servers_tls_details)) },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                TlsDetailRow(
+                    label = stringResource(R.string.servers_tls_origin),
+                    value =
+                        stringResource(
+                            if (node.entity.rawUri != null) {
+                                R.string.servers_tls_origin_sharelink
+                            } else {
+                                R.string.servers_tls_origin_subscription
+                            },
+                        ),
+                )
+                TlsDetailRow(
+                    label = stringResource(R.string.servers_tls_mode),
+                    value =
+                        stringResource(
+                            when (tls.mode) {
+                                NodeTlsSummary.Mode.NONE -> R.string.servers_tls_mode_none
+                                NodeTlsSummary.Mode.CERTIFICATE ->
+                                    R.string.servers_tls_mode_certificate
+                                NodeTlsSummary.Mode.REALITY -> R.string.servers_tls_mode_reality
+                                NodeTlsSummary.Mode.UNKNOWN -> R.string.servers_tls_mode_unknown
+                            },
+                        ),
+                )
+                if (tls.insecure) {
+                    TlsDetailRow(
+                        label = stringResource(R.string.servers_tls_insecure_row),
+                        value = stringResource(R.string.servers_tls_insecure_disabled),
+                        warning = true,
+                    )
+                }
+                tls.serverName?.let {
+                    TlsDetailRow(label = stringResource(R.string.servers_tls_sni), value = it)
+                }
+                if (tls.alpn.isNotEmpty()) {
+                    TlsDetailRow(
+                        label = stringResource(R.string.servers_tls_alpn),
+                        value = tls.alpn.joinToString(", "),
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.servers_tls_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_done))
+            }
+        },
+    )
+}
+
+@Composable
+private fun TlsDetailRow(
+    label: String,
+    value: String,
+    warning: Boolean = false,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color =
+                if (warning) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    Color.Unspecified
+                },
         )
     }
 }

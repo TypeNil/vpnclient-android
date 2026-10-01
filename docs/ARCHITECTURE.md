@@ -32,6 +32,15 @@ SubscriptionRepository.refresh(id)
 
 A failed refresh never touches stored nodes (last-known-good).
 
+The stored `outboundJson` stays opaque outside `core.engine.singbox`, but
+the Servers UI surfaces a read-only TLS posture via
+`NodeTlsSummary.fromOutboundJson` (same package): the TLS authentication
+category (none / certificate-based / Reality / unrecognized — a category,
+not a claim that the CA chain was verified), the `insecure` flag, and
+sanitized SNI/ALPN — never keys, short ids, ECH config, or raw JSON, and
+never a claim about the live handshake. Wrong-typed or malformed `tls`
+shapes report `UNKNOWN` rather than a false verified/insecure claim.
+
 ### Auto-refresh (WorkManager)
 
 - One unique `PeriodicWorkRequest` per subscription (`subscription-refresh-<id>`),

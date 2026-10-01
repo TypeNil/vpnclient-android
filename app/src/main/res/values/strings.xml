@@ -274,6 +274,21 @@
     <string name="servers_favorite_remove">Remove from favorites</string>
     <string name="servers_favorite_add">Add to favorites</string>
     <string name="servers_latency_ms">%1$d ms</string>
+    <string name="servers_tls_insecure_warning">TLS certificate check disabled</string>
+    <string name="servers_tls_details">TLS details</string>
+    <string name="servers_tls_origin">Source</string>
+    <string name="servers_tls_origin_sharelink">Added from a share link</string>
+    <string name="servers_tls_origin_subscription">Imported subscription config</string>
+    <string name="servers_tls_mode">TLS authentication</string>
+    <string name="servers_tls_mode_none">No TLS configured</string>
+    <string name="servers_tls_mode_certificate">Certificate-based TLS</string>
+    <string name="servers_tls_mode_reality">Reality handshake</string>
+    <string name="servers_tls_mode_unknown">Unrecognized TLS config</string>
+    <string name="servers_tls_insecure_row">Certificate verification</string>
+    <string name="servers_tls_insecure_disabled">Disabled by the node config (insecure)</string>
+    <string name="servers_tls_sni">Server name (SNI)</string>
+    <string name="servers_tls_alpn">ALPN</string>
+    <string name="servers_tls_note">Read from the stored node config — the live handshake is not verified here.</string>
 
     <!-- Settings -->
     <string name="settings_snackbar_reconnect_message">Reconnect the VPN to apply the new settings</string>

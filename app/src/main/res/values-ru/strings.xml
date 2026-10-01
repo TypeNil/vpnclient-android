@@ -274,6 +274,21 @@
     <string name="servers_favorite_remove">Убрать из избранного</string>
     <string name="servers_favorite_add">В избранное</string>
     <string name="servers_latency_ms">%1$d мс</string>
+    <string name="servers_tls_insecure_warning">Проверка TLS-сертификата отключена</string>
+    <string name="servers_tls_details">Детали TLS</string>
+    <string name="servers_tls_origin">Источник</string>
+    <string name="servers_tls_origin_sharelink">Добавлено по share-ссылке</string>
+    <string name="servers_tls_origin_subscription">Импортировано из конфигурации подписки</string>
+    <string name="servers_tls_mode">Аутентификация TLS</string>
+    <string name="servers_tls_mode_none">TLS не настроен</string>
+    <string name="servers_tls_mode_certificate">TLS с сертификатом</string>
+    <string name="servers_tls_mode_reality">Reality-рукопожатие</string>
+    <string name="servers_tls_mode_unknown">Нераспознанная конфигурация TLS</string>
+    <string name="servers_tls_insecure_row">Проверка сертификата</string>
+    <string name="servers_tls_insecure_disabled">Отключена в конфигурации узла (insecure)</string>
+    <string name="servers_tls_sni">Имя сервера (SNI)</string>
+    <string name="servers_tls_alpn">ALPN</string>
+    <string name="servers_tls_note">Прочитано из сохранённой конфигурации узла — фактическое TLS-рукопожатие здесь не проверяется.</string>
 
     <!-- Settings -->
     <string name="settings_snackbar_reconnect_message">Переподключите VPN, чтобы применить новые настройки</string>

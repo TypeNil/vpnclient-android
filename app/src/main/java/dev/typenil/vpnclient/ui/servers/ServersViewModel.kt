@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.LatencyProbe
+import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
@@ -50,6 +51,9 @@ data class ServerNode(
     val enabled: Boolean = true,
     val hidden: Boolean = false,
     val customName: String? = null,
+    /** Read-only TLS posture of the stored outbound — computed at the
+     *  engine-boundary layer so the UI never parses outbound JSON. */
+    val tls: NodeTlsSummary = NodeTlsSummary.fromOutboundJson(entity.outboundJson),
 )
 
 val ServerNode.id: String get() = entity.id
