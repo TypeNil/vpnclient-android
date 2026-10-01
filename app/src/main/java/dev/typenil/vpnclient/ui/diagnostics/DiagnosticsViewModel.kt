@@ -4,12 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
+import dev.typenil.vpnclient.core.vpn.ConnectionHealth
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.IpCheckResult
 import dev.typenil.vpnclient.core.vpn.IpProbe
 import dev.typenil.vpnclient.core.vpn.UnderlyingTransport
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +41,7 @@ data class DiagnosticsUiState(
     val applied: AppliedSessionConfig? = null,
     /** Physical underlay reported by the service's network tracker. */
     val underlay: UnderlyingTransport = UnderlyingTransport.UNKNOWN,
+    val health: ConnectionHealth = ConnectionHealth(),
     val ipCheckStatus: IpCheckStatus = IpCheckStatus.Idle,
     /** Result of the last probe, kept after completion for display. */
     val ipCheck: IpCheckResult? = null,
@@ -54,29 +58,39 @@ class DiagnosticsViewModel
         private val ipCheck = MutableStateFlow<IpCheckResult?>(null)
         private var probeJob: Job? = null
 
+        // Cold ticker: collected only while Diagnostics has a visible subscriber.
+        private val health = combine(connectionManager.health, flow {
+            while (true) {
+                emit(System.nanoTime() / 1_000_000)
+                delay(1_000)
+            }
+        }) { evidence, tick -> evidence.at(maxOf(tick, System.nanoTime() / 1_000_000)) }
+
+        private val session = combine(
+            connectionManager.state,
+            connectionManager.appliedSessionConfig,
+            connectionManager.underlyingTransport,
+            health,
+        ) { connection, applied, underlay, evidence ->
+            DiagnosticsUiState(connection = connection, applied = applied, underlay = underlay, health = evidence)
+        }
+
         val uiState: StateFlow<DiagnosticsUiState> =
             combine(
-                connectionManager.state,
-                connectionManager.appliedSessionConfig,
-                connectionManager.underlyingTransport,
+                session,
                 ipCheckStatus,
                 ipCheck,
-            ) { connection, applied, underlay, status, result ->
-                DiagnosticsUiState(
-                    connection = connection,
-                    applied = applied,
-                    underlay = underlay,
-                    ipCheckStatus = status,
-                    ipCheck = result,
-                )
+            ) { session, status, result ->
+                session.copy(ipCheckStatus = status, ipCheck = result)
             }.stateIn(
                 scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5_000),
+                started = SharingStarted.WhileSubscribed(0),
                 initialValue = DiagnosticsUiState(connection = connectionManager.state.value),
             )
 
-        /** Run the through-tunnel IP echo probe. One at a time — a new tap while
-         *  a probe is in flight is ignored rather than stacking requests. */
+        /** Run the app-HTTP IP echo probe — its route stays unverified. One at
+         *  a time: a new tap while a probe is in flight is ignored rather than
+         *  stacking requests. */
         fun checkIp() {
             if (probeJob?.isActive == true) return
             probeJob =

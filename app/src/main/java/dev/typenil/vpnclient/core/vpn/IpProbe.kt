@@ -1,126 +1,132 @@
 package dev.typenil.vpnclient.core.vpn
 
-import dev.typenil.vpnclient.core.common.log.Redactor
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.ConnectionPool
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Result of a through-tunnel IP echo probe. Never carries raw exception
- * text — [error] is a short category the UI maps to a string resource.
- */
+/** Sanitized IP-echo result. An HTTP response does not prove its proxy route. */
 data class IpCheckResult(
-    /** The address the endpoint saw — the tunnel's egress IP while
-     *  connected, the device's own when not. Null on failure. */
+    /** Address seen by the endpoint, not proof of the selected outbound. */
     val ip: String?,
-    /** Whole-request wall time in milliseconds, null on failure. */
     val latencyMs: Long?,
-    /** Failure category ("timeout", "http 403", "network") — already
-     *  sanitized, null on success. */
+    /** Stable categories: timeout, http N, network, unexpected response. */
     val error: String?,
 ) {
     val ok: Boolean get() = ip != null && error == null
 }
 
-/**
- * Lightweight connectivity check: fetch an IP-echo endpoint and report what
- * egress address it sees. The request deliberately uses a plain OkHttp call
- * — the app's own package rides the tunnel in every per-app mode
- * (`resolvePerAppPlan` always include/never-disallows self), so while
- * connected this probe travels through the TUN like any other app traffic.
- * It is a real connectivity signal, not a promise of what a given app does.
- *
- * Bounded by a per-call timeout: a dedicated short-deadline client is used
- * instead of the shared one so the check can't stall behind the 60 s
- * callTimeout the subscription fetcher tolerates.
+/** App HTTP request: never protected, never reuses a pre-VPN connection.
+ * Cancellation aborts the call even while its response body is being read.
  */
 @Singleton
-class IpProbe
-    @Inject
-    constructor(
-        private val baseClient: OkHttpClient,
-    ) {
-        /** GET [endpoint], parse the echoed address, measure latency. Runs on
-         *  IO; caller decides threading. */
-        suspend fun check(
-            endpoint: String = DEFAULT_ENDPOINT,
-            timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-        ): IpCheckResult =
-            withContext(Dispatchers.IO) {
-                val client =
-                    baseClient
-                        .newBuilder()
-                        .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                        .build()
-                val request =
-                    Request
-                        .Builder()
-                        .url(endpoint)
-                        .get()
-                        .build()
-                val start = System.nanoTime()
-                try {
-                    client.newCall(request).execute().use { response ->
-                        val latency = (System.nanoTime() - start) / 1_000_000L
-                        if (!response.isSuccessful) {
-                            return@withContext IpCheckResult(
-                                ip = null,
-                                latencyMs = null,
-                                error = "http ${response.code}",
-                            )
-                        }
-                        // Bounded read (256 bytes max): echo endpoints return
-                        // a short address line, so there is no reason to buffer
-                        // a hostile/unbounded body into memory. A single read()
-                        // may return a partial chunk, so loop until EOF or the
-                        // cap; MAX_IP_LEN trims any trailing garbage afterwards.
-                        // (minSdk 26 — no readNBytes without desugaring.) The
-                        // response's use block closes the body; closing the
-                        // stream again is a no-op.
-                        val bytes =
-                            response.body?.byteStream()?.use { stream ->
-                                val out = java.io.ByteArrayOutputStream(MAX_READ_BYTES)
-                                val buf = ByteArray(256)
-                                var remaining = MAX_READ_BYTES
-                                while (remaining > 0) {
-                                    val n = stream.read(buf, 0, minOf(buf.size, remaining))
-                                    if (n < 0) break
-                                    out.write(buf, 0, n)
-                                    remaining -= n
-                                }
-                                out.toByteArray()
-                            }
-                        val body = bytes?.let { String(it, Charsets.UTF_8) }.orEmpty().trim()
-                        val ip = body.takeIf { isPlausibleIp(it) }
-                        IpCheckResult(
-                            ip = ip,
-                            latencyMs = latency,
-                            error = if (ip == null) "unexpected response" else null,
-                        )
-                    }
-                } catch (e: java.net.SocketTimeoutException) {
-                    IpCheckResult(null, null, "timeout")
-                } catch (e: java.io.InterruptedIOException) {
-                    // callTimeout expiry surfaces as InterruptedIOException too.
-                    IpCheckResult(null, null, "timeout")
-                } catch (e: IOException) {
-                    // Exception text can echo request details — sanitize it anyway.
-                    IpCheckResult(null, null, Redactor.redact(e.javaClass.simpleName))
+class IpProbe @Inject constructor(private val baseClient: OkHttpClient) {
+    suspend fun check(
+        endpoint: String = DEFAULT_ENDPOINT,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ): IpCheckResult {
+        val deadline = timeoutMs.coerceIn(1, DEFAULT_TIMEOUT_MS)
+        val pool = ConnectionPool()
+        val client = baseClient.newBuilder()
+            .connectionPool(pool)
+            .cache(null)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .callTimeout(deadline, TimeUnit.MILLISECONDS)
+            .build()
+        val call = client.newCall(Request.Builder().url(endpoint).get().build())
+        val start = System.nanoTime()
+        try {
+            // Includes time queued behind other calls on the shared OkHttp dispatcher.
+            return withTimeoutOrNull(deadline) {
+                suspendCancellableCoroutine<IpCheckResult> { continuation ->
+                // This handler runs on the cancelling thread — call.cancel()
+                // closes the TLS socket, a guarded network op on Android's
+                // main thread. Plain dispatch has no Job to inherit, so the
+                // cancelled Job can't suppress it; IO keeps close off Main.
+                continuation.invokeOnCancellation {
+                    Dispatchers.IO.dispatch(EmptyCoroutineContext) { call.cancel() }
                 }
-            }
+                call.enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        continuation.resumeWith(Result.success(failure(e)))
+                    }
 
-        private fun isPlausibleIp(text: String): Boolean = text.length <= MAX_IP_LEN && IP_REGEX.matches(text)
-
-        companion object {
-            const val DEFAULT_ENDPOINT = "https://api.ipify.org"
-            const val DEFAULT_TIMEOUT_MS = 8_000L
-            private const val MAX_IP_LEN = 45 // longest textual IPv6
-            private const val MAX_READ_BYTES = 256
-            private val IP_REGEX = Regex("[0-9a-fA-F.:]+")
+                    override fun onResponse(call: Call, response: Response) {
+                        val result = try {
+                            response.use {
+                                if (!it.isSuccessful) {
+                                    IpCheckResult(null, null, "http ${it.code}")
+                                } else {
+                                    // One extra byte distinguishes a bounded body from a truncated prefix.
+                                    val bytes = it.body?.byteStream()?.use { stream ->
+                                        val buffer = ByteArray(MAX_READ_BYTES + 1)
+                                        var size = 0
+                                        while (size < buffer.size) {
+                                            val count = stream.read(buffer, size, buffer.size - size)
+                                            if (count < 0) break
+                                            size += count
+                                        }
+                                        buffer.copyOf(size)
+                                    }
+                                    val text = bytes?.toString(Charsets.UTF_8)?.trim().orEmpty()
+                                    val ip = text.takeIf { address -> bytes != null && bytes.size <= MAX_READ_BYTES && isNumericIp(address) }
+                                    IpCheckResult(ip, if (ip != null) (System.nanoTime() - start) / 1_000_000 else null,
+                                        if (ip == null) "unexpected response" else null)
+                                }
+                            }
+                        } catch (e: IOException) {
+                            failure(e)
+                        }
+                        continuation.resumeWith(Result.success(result))
+                    }
+                })
+                }
+            } ?: IpCheckResult(null, null, "timeout")
+        } finally {
+            // Evicting closes the pooled socket — for TLS, SSLSocket.close()
+            // writes close_notify, which Android's main-thread network policy
+            // kills (NetworkOnMainThreadException). Run it off the caller's
+            // dispatcher; NonCancellable so a cancelled probe still evicts.
+            withContext(NonCancellable + Dispatchers.IO) { pool.evictAll() }
         }
     }
+
+    private fun failure(error: IOException) =
+        IpCheckResult(null, null, if (error is InterruptedIOException) "timeout" else "network")
+
+    private fun isNumericIp(text: String): Boolean {
+        if (text.isEmpty() || text.length > 45) return false
+        if (':' in text) {
+            // HttpUrl parses IPv6 numerically; it performs no DNS resolution.
+            return text.all { it in "0123456789abcdefABCDEF:." } &&
+                "http://[$text]/".toHttpUrlOrNull() != null
+        }
+        val octets = text.split('.')
+        return octets.size == 4 && octets.all {
+            it.isNotEmpty() && it.length <= 3 && it.all { c -> c in '0'..'9' } &&
+                (it.length == 1 || it[0] != '0') && (it.toIntOrNull() ?: -1) in 0..255
+        }
+    }
+
+    companion object {
+        const val DEFAULT_ENDPOINT = "https://api.ipify.org"
+        const val DEFAULT_TIMEOUT_MS = 8_000L
+        private const val MAX_READ_BYTES = 256
+    }
+}

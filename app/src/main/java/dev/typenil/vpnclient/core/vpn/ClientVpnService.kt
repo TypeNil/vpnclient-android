@@ -168,6 +168,7 @@ class ClientVpnService :
      *  into the next session's first compile. */
     private var underlayEpoch: Long = -1L
     private var lastUnderlyingNetwork: Network? = null
+    private var lastUnderlyingLinkProperties: LinkProperties? = null
 
     /** Flags an underlay IPv6 flip that must recompile the routing — the
      *  compiled config bakes the ip_version:6 decision in. Main-thread
@@ -807,10 +808,11 @@ class ClientVpnService :
             activeGeneration = generation
         }
         connectionManager.onServiceStarted(generation)
+        connectionManager.reportHealthUnderlay(lastUnderlyingNetwork != null, generation)
         // A network loss during start() left no further callbacks —
         // re-evaluate so we don't publish Connected while offline.
         if (lastUnderlyingNetwork == null) {
-            connectionManager.onUnderlyingNetworkLost()
+            connectionManager.onUnderlyingNetworkLost(generation)
         }
     }
 
@@ -1013,7 +1015,7 @@ class ClientVpnService :
         } else {
             config = activeConfig ?: return
         }
-        connectionManager.onTunnelRebuildStarted()
+        connectionManager.onTunnelRebuildStarted(generation)
         val old = engine
         engine = null
         if (old != null) {
@@ -1041,6 +1043,7 @@ class ClientVpnService :
         }
         if (!launchEngine(config, generation)) return
         connectionManager.onTunnelRebuilt(generation, config.node)
+        connectionManager.reportHealthUnderlay(lastUnderlyingNetwork != null, generation)
         // A rebuilt engine never saw the current Doze state — the receiver
         // only forwards transitions.
         if (dozePowerSave) {
@@ -1050,7 +1053,7 @@ class ClientVpnService :
         // A network loss during the rebuild left no further callbacks —
         // re-evaluate so we don't publish Connected while offline.
         if (lastUnderlyingNetwork == null) {
-            connectionManager.onUnderlyingNetworkLost()
+            connectionManager.onUnderlyingNetworkLost(generation)
         }
     }
 
@@ -1143,6 +1146,7 @@ class ClientVpnService :
         val current = engine
         engine = null
         val generation = activeGeneration
+        connectionManager.onHealthStopping(generation)
         activeGeneration = -1L
         if (generation >= 0) {
             // The notification Disconnect action reaches here directly,
@@ -1276,7 +1280,9 @@ class ClientVpnService :
     // region EnginePlatform
 
     override fun openTun(request: TunRequest): Int {
+        val generation = activeGeneration
         if (tunProvider.prepare(this) != null) error("android: missing vpn permission")
+        connectionManager.reportHealthConsent(generation)
 
         val builder =
             Builder()
@@ -1496,6 +1502,7 @@ class ClientVpnService :
         }
         underlyingCallback = null
         lastUnderlyingNetwork = null
+        lastUnderlyingLinkProperties = null
         underlayIpv6Tracker.reset()
         // Drop the snapshot this epoch pushed — the next session's first
         // compile must re-probe the physical network (it may have changed
@@ -1519,6 +1526,7 @@ class ClientVpnService :
         eventNetwork: Network? = null,
         eventProps: LinkProperties? = null,
     ) {
+        val generation = activeGeneration
         // activeNetwork can be the VPN interface itself, or capabilities can
         // temporarily be unavailable during teardown. Only choose a network
         // with known INTERNET + NOT_VPN evidence; otherwise fall back to any
@@ -1534,6 +1542,13 @@ class ClientVpnService :
                         .getNetworkCapabilities(network)
                         ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
                 } ?: usable.firstOrNull()
+        val linkProperties = active?.let { network ->
+            if (network == eventNetwork && eventProps != null) eventProps else connectivity.getLinkProperties(network)
+        }
+        val pathChanged = active != lastUnderlyingNetwork || linkProperties != lastUnderlyingLinkProperties
+        // Platform query/callback snapshots are retained for equality only; never mutated here.
+        lastUnderlyingLinkProperties = linkProperties
+        connectionManager.reportHealthUnderlay(active != null, generation, pathChanged = pathChanged)
         // Report the transport on every evaluation — caps changes (wifi
         // hand-off without a Network change) keep the label honest.
         connectionManager.reportUnderlyingTransport(
@@ -1575,9 +1590,9 @@ class ClientVpnService :
             }
         }
         if (active == null) {
-            connectionManager.onUnderlyingNetworkLost()
+            connectionManager.onUnderlyingNetworkLost(generation)
         } else {
-            connectionManager.onUnderlyingNetworkAvailable()
+            connectionManager.onUnderlyingNetworkAvailable(generation)
         }
         if (reconnectOnChange) notifyEngineNetworkChanged()
     }

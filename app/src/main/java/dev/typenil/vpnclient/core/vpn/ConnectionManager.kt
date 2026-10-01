@@ -10,6 +10,7 @@ import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.VpnEngine
 import dev.typenil.vpnclient.core.engine.resolveSelectionTarget
+import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import kotlinx.coroutines.CancellationException
@@ -27,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -134,6 +136,7 @@ class ConnectionManager
     constructor(
         private val serviceControl: ServiceControl,
         private val configProvider: NodeConfigProvider,
+        private val postStartProbe: PostStartHealthProbe,
     ) {
         /** Engine config + session generation handed to the service (too big for extras). */
         class PendingSession(
@@ -146,6 +149,86 @@ class ConnectionManager
 
         private val _state = MutableStateFlow<VpnConnectionState>(VpnConnectionState.Idle)
         val state: StateFlow<VpnConnectionState> = _state
+
+        private var postStartJob: Job? = null
+        private var postStartTokens: List<HealthEvidenceToken> = emptyList()
+        private var checkedEngine: VpnEngine? = null
+        private var checkedGeneration = -1L
+        private val healthStore = ConnectionHealthStore()
+        val health: StateFlow<ConnectionHealth> = healthStore.state
+
+        private fun recordConsent(status: HealthStatus, reason: HealthReason) {
+            healthStore.record(sessionGeneration, HealthLevel.VpnConsent, status, reason, HealthSource.VpnConsent, HealthScope.LocalRuntime)
+        }
+
+        private fun recordRuntimeStarted(generation: Long) {
+            for (level in listOf(HealthLevel.TunEstablished, HealthLevel.EngineRunning)) {
+                healthStore.record(generation, level, HealthStatus.Ok, HealthReason.Started, HealthSource.ServiceLifecycle, HealthScope.LocalRuntime)
+            }
+            schedulePostStartCheck(generation)
+        }
+
+        private fun schedulePostStartCheck(generation: Long) {
+            val runtime = engine ?: return
+            if (checkedGeneration == generation && checkedEngine === runtime) return
+            checkedGeneration = generation
+            checkedEngine = runtime
+            postStartJob?.cancel()
+            postStartTokens = emptyList()
+            postStartJob = scope.launch {
+                // Let start/rebuild publish Connected and the service's initial underlay report land.
+                yield()
+                // Bounded initialization barrier: no retries and no endless wait for a silent core.
+                withTimeoutOrNull(GROUPS_WAIT_MS + 100) {
+                    runtime.groups.first { it.isNotEmpty() }
+                    selectionMutex.withLock { }
+                }
+                yield()
+                if (generation != sessionGeneration || engine !== runtime || teardownRequested ||
+                    _state.value !is VpnConnectionState.Connected
+                ) return@launch
+                val trafficToken = healthStore.token(HealthLevel.TrafficForwarding) ?: return@launch
+                val successToken = healthStore.token(HealthLevel.LastSuccessfulCheck) ?: return@launch
+                postStartTokens = listOf(trafficToken, successToken)
+                val checked = System.nanoTime() / 1_000_000
+                val result = try {
+                    withTimeoutOrNull(IpProbe.DEFAULT_TIMEOUT_MS) { postStartProbe.check() }
+                        ?: IpCheckResult(null, null, "timeout")
+                } catch (e: CancellationException) {
+                    // Session teardown/network loss cancelled the job — not a check result.
+                    throw e
+                } catch (e: Exception) {
+                    // A throwing probe is degraded evidence, never a session
+                    // failure. The exception itself stays unlogged — it can
+                    // embed endpoint details.
+                    SecureLog.w(TAG, "post-start check threw")
+                    IpCheckResult(null, null, "network")
+                }
+                val reason = when {
+                    result.ok -> HealthReason.HttpResponseRouteUnverified
+                    result.error == "timeout" -> HealthReason.HttpTimeout
+                    result.error?.startsWith("http ") == true -> HealthReason.HttpError
+                    result.error == "unexpected response" -> HealthReason.HttpUnexpectedResponse
+                    else -> HealthReason.HttpNetworkError
+                }
+                val displayTime = Instant.now()
+                healthStore.observe(
+                    HealthObservation(HealthLevel.TrafficForwarding,
+                        if (result.ok) HealthStatus.Unverified else HealthStatus.Degraded,
+                        reason, HealthSource.IpEcho, HealthScope.AppHttpRouteUnverified,
+                        generation, checked, displayTime),
+                    trafficToken,
+                )
+                if (result.ok) {
+                    healthStore.observe(
+                        HealthObservation(HealthLevel.LastSuccessfulCheck, HealthStatus.Ok,
+                            reason, HealthSource.IpEcho, HealthScope.AppHttpRouteUnverified,
+                            generation, checked, displayTime),
+                        successToken,
+                    )
+                }
+            }
+        }
 
         /** Consent intent the UI must launch. */
         private val _prepareIntent = MutableStateFlow<Intent?>(null)
@@ -176,6 +259,16 @@ class ConnectionManager
         private var lastFailureError: VpnError? = null
 
         init {
+            scope.launch {
+                health.collect { evidence ->
+                    // Revisions emit even when invalidated slots were already Unverified.
+                    // Preparation tolerates initial path reports; an actual request never does.
+                    val runtime = evidence.observations.first { it.level == HealthLevel.EngineRunning }
+                    if (runtime.status != HealthStatus.Ok || healthStore.token(HealthLevel.EngineRunning) == null ||
+                        postStartTokens.any { !healthStore.isCurrent(it) }
+                    ) postStartJob?.cancel()
+                }
+            }
             // The persisted pick is the desired outbound for any live session:
             // a tap in Servers lands here and is applied to the running engine.
             scope.launch {
@@ -273,6 +366,7 @@ class ConnectionManager
                 return
             }
             val generation = ++sessionGeneration
+            healthStore.begin(generation)
             pendingSession = PendingSession(config, generation)
             sessionNode = config.node
             compiledNodeId = config.node.id
@@ -280,10 +374,12 @@ class ConnectionManager
 
             val prepare = serviceControl.prepareVpn()
             if (prepare != null) {
+                recordConsent(HealthStatus.Unverified, HealthReason.ConsentRequired)
                 _prepareIntent.value = prepare
                 publish(VpnConnectionState.PermissionRequired)
                 return
             }
+            recordConsent(HealthStatus.Ok, HealthReason.ConsentGranted)
             launchService(config)
         }
 
@@ -299,6 +395,7 @@ class ConnectionManager
                     }
                     val session = pendingSession
                     if (!granted) {
+                        healthStore.end(sessionGeneration, HealthReason.ConsentDenied)
                         pendingSession = null
                         publish(
                             VpnConnectionState.Error(
@@ -312,6 +409,7 @@ class ConnectionManager
                         publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
                         return@withLock
                     }
+                    recordConsent(HealthStatus.Ok, HealthReason.ConsentGranted)
                     launchService(session.config)
                 }
             }
@@ -446,6 +544,7 @@ class ConnectionManager
                 SecureLog.w(TAG, "attachEngine with stale generation — ignored")
                 return
             }
+            healthStore.invalidate(generation, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
             this.engine = engine
             statsJob?.cancel()
             eventsJob?.cancel()
@@ -455,6 +554,9 @@ class ConnectionManager
                 scope.launch {
                     engine.groups.collect { groups ->
                         if (generation != sessionGeneration) return@collect
+                        if (effectiveOutboundChain(_groups.value) != effectiveOutboundChain(groups)) {
+                            healthStore.invalidate(generation, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
+                        }
                         _groups.value = groups
                         // While Auto is selected, the urltest group's measured
                         // winner is what Home should name — refresh the label as
@@ -559,6 +661,9 @@ class ConnectionManager
             selectionMutex.withLock {
                 val eng = engine ?: return@withLock
                 val desired = configProvider.selectedNodeId.first()
+                if (desired != sessionNode?.id) {
+                    healthStore.invalidate(sessionGeneration, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
+                }
                 val selection = NodeSelection.fromId(desired) ?: return@withLock
                 if (_state.value !is VpnConnectionState.Connected &&
                     _state.value !is VpnConnectionState.Reconnecting
@@ -638,6 +743,25 @@ class ConnectionManager
             return autoGroup.selected?.takeIf { it.isNotBlank() }
         }
 
+        /**
+         * The outbound chain session traffic actually rides: the "proxy"
+         * selector's pick, plus the urltest winner only when the selector
+         * routes through Auto. Report order and background re-measurements of
+         * a group that isn't carrying the tunnel (the urltest winner while a
+         * manual node is selected) move no traffic, so they must not
+         * invalidate path evidence.
+         */
+        private fun effectiveOutboundChain(groups: List<OutboundGroupInfo>): Pair<String?, String?> {
+            val selector = groups.firstOrNull { it.tag == ConfigCompiler.SELECTOR_TAG }?.selected
+            val winner =
+                if (selector == NodeSelection.AUTO_ID) {
+                    groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }?.selected
+                } else {
+                    null
+                }
+            return selector to winner
+        }
+
         /** Point the session's displayed node at [id] — the engine's
          *  selector is the source of truth, so the label follows the switch.
          *  [resolvedTag] is the node the urltest group currently prefers; when
@@ -710,6 +834,7 @@ class ConnectionManager
                 else -> Unit
             }
             val generation = ++sessionGeneration
+            healthStore.begin(generation)
             sessionNode = node
             compiledNodeId = node.id
             teardownRequested = false
@@ -911,6 +1036,7 @@ class ConnectionManager
             val node = sessionNode ?: pendingSession?.config?.node ?: return
             pendingSession = null
             teardownRequested = false
+            recordRuntimeStarted(generation)
             publish(VpnConnectionState.Connected(node, Instant.now(), null))
             // Fresh session — the label below is re-published by the next
             // underlay evaluation; reset so a previous session's transport
@@ -939,7 +1065,7 @@ class ConnectionManager
             detachEngine()
             pendingSession = null
             clearSessionObservations()
-            publish(VpnConnectionState.Error(error, sessionNode))
+            publish(VpnConnectionState.Error(error, sessionNode), healthGeneration = generation)
         }
 
         /**
@@ -995,16 +1121,19 @@ class ConnectionManager
                     // practice because the retry republishes immediately.
                     else -> VpnConnectionState.Idle
                 }
-            publish(next)
+            publish(next, healthGeneration = generation)
         }
 
         /**
          * Physical network lost while Connected → Reconnecting (the tunnel is up
          * but starved). Called by the service's single network observer.
          */
-        fun onUnderlyingNetworkLost() {
+        fun onUnderlyingNetworkLost(generation: Long = sessionGeneration) {
             scope.launch {
                 mutex.withLock {
+                    if (generation != sessionGeneration) return@withLock
+                    healthStore.invalidate(generation, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
+                    healthStore.record(generation, HealthLevel.UnderlyingNetwork, HealthStatus.Failed, HealthReason.NetworkLost, HealthSource.PlatformUnderlay, HealthScope.PhysicalUnderlay)
                     _underlyingTransport.value = UnderlyingTransport.UNKNOWN
                     val current = _state.value
                     if (current is VpnConnectionState.Connected) {
@@ -1038,6 +1167,29 @@ class ConnectionManager
             _appliedSessionConfig.value = config
         }
 
+        /** Evidence from an actual usable-network evaluation, not transport classification. */
+        fun reportHealthUnderlay(available: Boolean, generation: Long, pathChanged: Boolean = false) {
+            if (pathChanged) {
+                healthStore.invalidate(generation, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
+            }
+            healthStore.record(
+                generation,
+                HealthLevel.UnderlyingNetwork,
+                if (available) HealthStatus.Ok else HealthStatus.Failed,
+                if (available) HealthReason.NetworkAvailable else HealthReason.NetworkLost,
+                HealthSource.PlatformUnderlay,
+                HealthScope.PhysicalUnderlay,
+            )
+        }
+
+        fun onHealthStopping(generation: Long) {
+            healthStore.end(generation)
+        }
+
+        fun reportHealthConsent(generation: Long) {
+            healthStore.record(generation, HealthLevel.VpnConsent, HealthStatus.Ok, HealthReason.ConsentGranted, HealthSource.VpnConsent, HealthScope.LocalRuntime)
+        }
+
         /** Session ended — the live observations describe a tunnel that no longer
          *  exists and must not linger as fake state. */
         private fun clearSessionObservations() {
@@ -1049,9 +1201,12 @@ class ConnectionManager
          *  when the Reconnecting was caused by the network loss itself. A
          *  rebuild or core-failure reconnect isn't resolved by the underlay
          *  coming back. */
-        fun onUnderlyingNetworkAvailable() {
+        fun onUnderlyingNetworkAvailable(generation: Long = sessionGeneration) {
             scope.launch {
                 mutex.withLock {
+                    if (generation != sessionGeneration) return@withLock
+                    healthStore.invalidate(generation, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
+                    reportHealthUnderlay(true, generation)
                     val current = _state.value
                     // teardownRequested marks a failure-reconnect — the engine is
                     // dead and teardown is in flight, so Connected would be fake.
@@ -1071,9 +1226,11 @@ class ConnectionManager
          * change needs a fresh establish). Surface it as a brief Reconnecting —
          * [onTunnelRebuilt] flips back once the new engine is up.
          */
-        fun onTunnelRebuildStarted() {
+        fun onTunnelRebuildStarted(generation: Long = sessionGeneration) {
             scope.launch {
                 mutex.withLock {
+                    if (generation != sessionGeneration) return@withLock
+                    healthStore.invalidate(generation, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
                     val current = _state.value
                     if (current is VpnConnectionState.Connected) {
                         publish(
@@ -1115,6 +1272,7 @@ class ConnectionManager
                     // engine is about to be torn down by the pending disconnect
                     // anyway, so Connected would be fake.
                     if (current is VpnConnectionState.Reconnecting && !teardownRequested) {
+                        recordRuntimeStarted(generation)
                         publish(VpnConnectionState.Connected(node ?: current.node, Instant.now(), null))
                     }
                 }
@@ -1133,7 +1291,10 @@ class ConnectionManager
             pendingTerminalError = null
             detachEngine()
             clearSessionObservations()
-            publish(VpnConnectionState.Error(VpnError.PermissionRevoked, sessionNode))
+            // Accepted sessionless callbacks still act on the manager-owned attempt.
+            val healthGeneration = if (generation < 0) sessionGeneration else generation
+            healthStore.end(healthGeneration, HealthReason.Revoked)
+            publish(VpnConnectionState.Error(VpnError.PermissionRevoked, sessionNode), healthGeneration = healthGeneration)
         }
 
         // endregion
@@ -1146,7 +1307,18 @@ class ConnectionManager
          */
         private fun isCurrent(generation: Long): Boolean = if (generation < 0) engine == null else generation == sessionGeneration
 
-        private fun publish(next: VpnConnectionState) {
+        private fun publish(next: VpnConnectionState, healthGeneration: Long = sessionGeneration) {
+            val acceptedHealthGeneration = if (healthGeneration < 0) sessionGeneration else healthGeneration
+            when (next) {
+                is VpnConnectionState.Error -> healthStore.end(acceptedHealthGeneration, HealthReason.StartFailed)
+                VpnConnectionState.Idle, VpnConnectionState.Stopping -> healthStore.end(acceptedHealthGeneration)
+                is VpnConnectionState.Reconnecting -> {
+                    if (next.reason == VpnConnectionState.Reconnecting.Reason.CoreFailure) {
+                        healthStore.invalidate(acceptedHealthGeneration, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
+                    }
+                }
+                else -> Unit
+            }
             val reason = (next as? VpnConnectionState.Reconnecting)?.reason?.name?.let { "($it)" } ?: ""
             SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}$reason")
             _state.value = next

@@ -93,7 +93,8 @@ object AppModule {
     fun provideConnectionManager(
         serviceControl: ServiceControl,
         configProvider: NodeConfigProvider,
-    ): ConnectionManager = ConnectionManager(serviceControl, configProvider)
+        postStartProbe: dev.typenil.vpnclient.core.vpn.PostStartHealthProbe,
+    ): ConnectionManager = ConnectionManager(serviceControl, configProvider, postStartProbe)
 }
 
 @Module

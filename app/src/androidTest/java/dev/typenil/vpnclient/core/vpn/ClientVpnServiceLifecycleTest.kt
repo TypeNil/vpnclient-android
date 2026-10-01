@@ -84,6 +84,10 @@ class ClientVpnServiceLifecycleTest {
     @get:Rule
     val hiltRule = HiltAndroidRule(this)
 
+    @dagger.hilt.android.testing.BindValue
+    @JvmField
+    val postStartProbe = PostStartHealthProbe { IpCheckResult(null, null, "unexpected response") }
+
     private val context: Context
         get() = InstrumentationRegistry.getInstrumentation().targetContext
 

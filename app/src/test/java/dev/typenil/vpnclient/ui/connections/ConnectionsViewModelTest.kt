@@ -148,6 +148,9 @@ class ConnectionsViewModelTest {
             ConnectionManager(
                 FakeServiceControl(),
                 FakeNodeConfigProvider(EngineConfig(configJson = "{}", node = node)),
+                dev.typenil.vpnclient.core.vpn.PostStartHealthProbe {
+                    dev.typenil.vpnclient.core.vpn.IpCheckResult(null, null, "unexpected response")
+                },
             )
         viewModel = ConnectionsViewModel(manager)
     }

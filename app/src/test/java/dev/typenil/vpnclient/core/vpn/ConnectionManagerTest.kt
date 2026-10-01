@@ -51,6 +51,8 @@ class ConnectionManagerTest {
     private lateinit var configProvider: FakeNodeConfigProvider
     private lateinit var engine: FakeEngine
     private lateinit var manager: ConnectionManager
+    private var probeCalls = 0
+    private var probeCheck: suspend () -> IpCheckResult = { IpCheckResult(null, null, "unexpected response") }
 
     private val node =
         NodeSummary(
@@ -220,7 +222,12 @@ class ConnectionManagerTest {
         serviceControl = FakeServiceControl()
         configProvider = FakeNodeConfigProvider(config)
         engine = FakeEngine()
-        manager = ConnectionManager(serviceControl, configProvider)
+        probeCalls = 0
+        probeCheck = { IpCheckResult(null, null, "unexpected response") }
+        manager = ConnectionManager(serviceControl, configProvider, PostStartHealthProbe {
+            probeCalls++
+            probeCheck()
+        })
     }
 
     @After
@@ -242,6 +249,389 @@ class ConnectionManagerTest {
         manager.onServiceStarted(generation)
         assertTrue(manager.state.value is VpnConnectionState.Connected)
         return generation
+    }
+
+    private fun readyForProbe(): Long {
+        configProvider.selected.value = node.id
+        engine.groupsFlow.value = listOf(proxyGroup(node.id))
+        val generation = connectToRunning()
+        testScope.runCurrent()
+        return generation
+    }
+
+    @Test
+    fun `post start HTTP success never verifies selected outbound mixed routing or DNS`() = testScope.runTest {
+        configProvider.config = config.copy(routeMode = RouteMode.PROXY_BLOCKED,
+            configJson = "{\"route\":{\"rules\":[{\"ip_is_private\":true,\"outbound\":\"direct\"}]}}")
+        probeCheck = { IpCheckResult("192.0.2.1", 1, null) }
+        readyForProbe()
+        assertEquals(1, probeCalls)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        val traffic = manager.health.value.observations.first { it.level == HealthLevel.TrafficForwarding }
+        assertEquals(HealthStatus.Unverified, traffic.status)
+        assertEquals(HealthReason.HttpResponseRouteUnverified, traffic.reason)
+        assertEquals(HealthScope.AppHttpRouteUnverified, traffic.scope)
+        val success = manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }
+        assertEquals(HealthStatus.Ok, success.status)
+        assertEquals(HealthSource.IpEcho, success.source)
+        assertTrue(manager.health.value.observations.filter {
+            it.level == HealthLevel.OutboundReachable || it.level == HealthLevel.DnsReachable
+        }.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `failed post start check degrades only evidence and never reconnects`() = testScope.runTest {
+        probeCheck = { IpCheckResult(null, null, "http 503") }
+        readyForProbe()
+        val traffic = manager.health.value.observations.first { it.level == HealthLevel.TrafficForwarding }
+        assertEquals(HealthStatus.Degraded, traffic.status)
+        assertEquals(HealthReason.HttpError, traffic.reason)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `a throwing post start probe degrades evidence without touching the session`() = testScope.runTest {
+        probeCheck = { throw RuntimeException("probe exploded") }
+        readyForProbe()
+        assertEquals(1, probeCalls)
+        val traffic = manager.health.value.observations.first { it.level == HealthLevel.TrafficForwarding }
+        assertEquals(HealthStatus.Degraded, traffic.status)
+        assertEquals(HealthReason.HttpNetworkError, traffic.reason)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `eight second deadline cancels fake request with no retries or lifecycle writes`() = testScope.runTest {
+        var cancelled = false
+        probeCheck = {
+            try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true }
+        }
+        readyForProbe()
+        advanceTimeBy(8_001)
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals(HealthReason.HttpTimeout, manager.health.value.observations.first { it.level == HealthLevel.TrafficForwarding }.reason)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals(1, probeCalls)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `idle and duplicate starts do not stack checks`() = testScope.runTest {
+        runCurrent()
+        assertEquals(0, probeCalls)
+        val result = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { result.await() }
+        val generation = readyForProbe()
+        manager.onServiceStarted(generation)
+        manager.onServiceStarted(generation)
+        runCurrent()
+        assertEquals(1, probeCalls)
+        result.complete(IpCheckResult("192.0.2.1", 1, null))
+        runCurrent()
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+    }
+
+    @Test
+    fun `stop cancels an active check and keeps ended evidence unverified`() = testScope.runTest {
+        var cancelled = false
+        probeCheck = { try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true } }
+        val generation = readyForProbe()
+        manager.onHealthStopping(generation)
+        runCurrent()
+        assertTrue(cancelled)
+        manager.onServiceStopped(generation)
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `underlay change cancels but unchanged reevaluation does not cancel active request`() = testScope.runTest {
+        var cancelled = false
+        probeCheck = { try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true } }
+        val generation = readyForProbe()
+        manager.reportHealthUnderlay(true, generation, pathChanged = false)
+        runCurrent()
+        assertFalse(cancelled)
+        manager.reportHealthUnderlay(true, generation, pathChanged = true)
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals(1, probeCalls)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `start failure and consent revoke each cancel their active request`() = testScope.runTest {
+        var cancelled = false
+        probeCheck = { try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true } }
+        val failedGeneration = readyForProbe()
+        manager.onServiceFailed(VpnError.EngineFailed("test failure"), failedGeneration)
+        runCurrent()
+        assertTrue(cancelled)
+        assertTrue(manager.state.value is VpnConnectionState.Error)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+        cancelled = false
+        val generation = manager.adoptSession(node)
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, generation)
+        manager.onServiceStarted(generation)
+        runCurrent()
+        assertEquals(2, probeCalls)
+        manager.onServiceRevoked(generation)
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals(VpnError.PermissionRevoked, (manager.state.value as VpnConnectionState.Error).error)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+    }
+
+    @Test
+    fun `selection change cancels the check without restarting its HTTP request`() = testScope.runTest {
+        var cancelled = false
+        probeCheck = { try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true } }
+        readyForProbe()
+        configProvider.selected.value = "node-2"
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals(1, probeCalls)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `same generation rebuilt runtime rejects old result and gets one new check`() = testScope.runTest {
+        val oldResult = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { oldResult.await() } }
+        val generation = readyForProbe()
+        manager.onTunnelRebuildStarted(generation)
+        runCurrent()
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, generation)
+        val newResult = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { newResult.await() }
+        manager.onTunnelRebuilt(generation)
+        runCurrent()
+        assertEquals(2, probeCalls)
+        oldResult.complete(IpCheckResult("192.0.2.1", 1, null))
+        runCurrent()
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        newResult.complete(IpCheckResult("192.0.2.2", 1, null))
+        runCurrent()
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `new generation rejects old non cancellable probe completion`() = testScope.runTest {
+        val oldResult = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { oldResult.await() } }
+        val oldGeneration = readyForProbe()
+        manager.onServiceStopped(oldGeneration)
+        val generation = manager.adoptSession(node)
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, generation)
+        val currentResult = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { currentResult.await() }
+        manager.onServiceStarted(generation)
+        runCurrent()
+        oldResult.complete(IpCheckResult("192.0.2.1", 1, null))
+        runCurrent()
+        assertEquals(generation, manager.health.value.generation)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        currentResult.complete(IpCheckResult(null, null, "network"))
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `initial groups and underlay reconcile before tokens are captured`() = testScope.runTest {
+        configProvider.selected.value = node.id
+        val result = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+        probeCheck = { result.await() }
+        val generation = connectToRunning()
+        runCurrent()
+        assertEquals(0, probeCalls)
+        manager.onUnderlyingNetworkAvailable(generation)
+        engine.groupsFlow.value = listOf(proxyGroup(node.id))
+        runCurrent()
+        assertEquals(1, probeCalls)
+        result.complete(IpCheckResult("192.0.2.1", 1, null))
+        runCurrent()
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+    }
+
+    @Test
+    fun `silent groups do not indefinitely postpone the single check`() = testScope.runTest {
+        probeCheck = { IpCheckResult("192.0.2.1", 1, null) }
+        connectToRunning()
+        runCurrent()
+        assertEquals(0, probeCalls)
+        advanceTimeBy(ConnectionManager.GROUPS_WAIT_MS + 101)
+        runCurrent()
+        assertEquals(1, probeCalls)
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+    }
+
+    @Test
+    fun `late rebuild completion after core failure cannot restore runtime health`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.onTunnelRebuildStarted(generation)
+        runCurrent()
+        engine.eventsFlow.emit(EngineEvent.Failed(EngineError.CoreError("test failure")))
+        runCurrent()
+        val failedState = manager.state.value as VpnConnectionState.Reconnecting
+        assertEquals(VpnConnectionState.Reconnecting.Reason.CoreFailure, failedState.reason)
+        manager.onTunnelRebuilt(generation)
+        runCurrent()
+        assertEquals(failedState, manager.state.value)
+        assertTrue(manager.health.value.observations.filter { it.level in ConnectionHealthStore.RUNTIME_LEVELS }
+            .all { it.status == HealthStatus.Unverified })
+        manager.onServiceStopped(generation)
+        manager.disconnect()
+        runCurrent()
+    }
+
+    @Test
+    fun `accepted sessionless revoke clears pending attempt health`() = testScope.runTest {
+        manager.connect()
+        runCurrent()
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.VpnConsent }.status)
+        manager.onServiceRevoked(-1)
+        assertEquals(VpnError.PermissionRevoked, (manager.state.value as VpnConnectionState.Error).error)
+        val consent = manager.health.value.observations.first { it.level == HealthLevel.VpnConsent }
+        assertEquals(HealthStatus.Failed, consent.status)
+        assertEquals(HealthReason.Revoked, consent.reason)
+        assertTrue(manager.health.value.observations.filter { it.level in ConnectionHealthStore.RUNTIME_LEVELS }
+            .all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `accepted sessionless stop clears pending attempt health`() = testScope.runTest {
+        manager.connect()
+        runCurrent()
+        manager.onServiceStopped(-1)
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `health does not imply egress or change Connected and Idle`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.reportUnderlyingTransport(UnderlyingTransport.UNKNOWN)
+        manager.onUnderlyingNetworkAvailable(generation)
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        val observations = manager.health.value.observations
+        assertEquals(HealthStatus.Ok, observations.first { it.level == HealthLevel.EngineRunning }.status)
+        assertEquals(HealthStatus.Ok, observations.first { it.level == HealthLevel.UnderlyingNetwork }.status)
+        assertTrue(observations.filter { it.level in ConnectionHealthStore.PATH_LEVELS }.all { it.status == HealthStatus.Unverified })
+        manager.onServiceStopped(generation)
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+        manager.reportHealthUnderlay(true, generation)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `stale queued network and rebuild callbacks cannot alter a newer session`() = testScope.runTest {
+        configProvider.selected.value = node.id
+        val oldGeneration = connectToRunning()
+        manager.onUnderlyingNetworkLost(oldGeneration) // queued before the new session exists
+        manager.onTunnelRebuildStarted(oldGeneration)
+        manager.onServiceStopped(oldGeneration)
+        val generation = manager.adoptSession(node)
+        engine = FakeEngine()
+        manager.attachEngine(engine, generation)
+        manager.onServiceStarted(generation)
+        manager.reportUnderlyingTransport(UnderlyingTransport.WIFI)
+        val connected = manager.state.value
+        val health = manager.health.value
+        runCurrent()
+        assertEquals(connected, manager.state.value)
+        assertEquals(health, manager.health.value)
+        assertEquals(UnderlyingTransport.WIFI, manager.underlyingTransport.value)
+
+        manager.onUnderlyingNetworkLost(generation)
+        runCurrent()
+        val reconnecting = manager.state.value
+        val lostHealth = manager.health.value
+        assertTrue(reconnecting is VpnConnectionState.Reconnecting)
+        manager.onUnderlyingNetworkAvailable(oldGeneration)
+        manager.onUnderlyingNetworkAvailable(-1)
+        runCurrent()
+        assertEquals(reconnecting, manager.state.value)
+        assertEquals(lostHealth, manager.health.value)
+        manager.onUnderlyingNetworkAvailable(generation)
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `underlay reevaluation without path changes leaves path invalidation untouched`() = testScope.runTest {
+        configProvider.selected.value = node.id
+        val generation = connectToRunning()
+        val path = manager.health.value.observations.filter { it.level in ConnectionHealthStore.PATH_LEVELS }
+        assertTrue(path.all { it.reason == HealthReason.RuntimeInvalidated })
+        manager.reportHealthUnderlay(true, generation, pathChanged = false)
+        assertEquals(path, manager.health.value.observations.filter { it.level in ConnectionHealthStore.PATH_LEVELS })
+        manager.reportHealthUnderlay(true, generation, pathChanged = true)
+        assertTrue(manager.health.value.observations.filter { it.level in ConnectionHealthStore.PATH_LEVELS }.all {
+            it.reason == HealthReason.PathChanged && it.status == HealthStatus.Unverified
+        })
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+    }
+
+    @Test
+    fun `consent denial and revoke keep safe failed consent while clearing runtime`() = testScope.runTest {
+        serviceControl.permissionIntent = Intent()
+        manager.connect()
+        runCurrent()
+        manager.onPermissionResult(false)
+        runCurrent()
+        assertEquals(HealthReason.ConsentDenied, manager.health.value.observations.first { it.level == HealthLevel.VpnConsent }.reason)
+        assertEquals(HealthStatus.Failed, manager.health.value.observations.first { it.level == HealthLevel.VpnConsent }.status)
+        serviceControl.permissionIntent = null
+        manager.connect()
+        runCurrent()
+        val generation = manager.pendingSession!!.generation
+        manager.attachEngine(engine, generation)
+        manager.onServiceStarted(generation)
+        manager.onServiceRevoked(generation)
+        assertTrue(manager.state.value is VpnConnectionState.Error)
+        assertEquals(HealthReason.Revoked, manager.health.value.observations.first { it.level == HealthLevel.VpnConsent }.reason)
+        assertTrue(manager.health.value.observations.filter { it.level in ConnectionHealthStore.RUNTIME_LEVELS }.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `adopt and start failure clear evidence without guessing egress`() = testScope.runTest {
+        val generation = manager.adoptSession(node)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+        manager.attachEngine(engine, generation)
+        manager.onServiceStarted(generation)
+        manager.reportHealthUnderlay(true, generation, pathChanged = true)
+        manager.onServiceFailed(VpnError.EngineFailed("test failure"), generation)
+        assertTrue(manager.state.value is VpnConnectionState.Error)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified && it.checkedAt == null })
+        manager.reportHealthUnderlay(true, generation)
+        assertTrue(manager.health.value.observations.all { it.status == HealthStatus.Unverified })
+    }
+
+    @Test
+    fun `same generation rebuild clears runtime and stale health callbacks cannot repopulate`() = testScope.runTest {
+        val generation = connectToRunning()
+        manager.onTunnelRebuildStarted(generation)
+        runCurrent()
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.EngineRunning }.status)
+        manager.onTunnelRebuilt(generation)
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        manager.reportHealthUnderlay(true, generation - 1)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.UnderlyingNetwork }.status)
+        assertTrue(manager.health.value.observations.filter { it.level in ConnectionHealthStore.PATH_LEVELS }.all { it.status == HealthStatus.Unverified })
     }
 
     @Test
@@ -1136,5 +1526,93 @@ class ConnectionManagerTest {
             // new session (the fake always returns an intent).
             assertTrue(manager.state.value is VpnConnectionState.PermissionRequired)
             assertTrue(manager.pendingSession != null)
+        }
+
+    @Test
+    fun `unused auto winner changes and group reorder neither cancel nor erase path evidence`() =
+        testScope.runTest {
+            var cancelled = false
+            val result = kotlinx.coroutines.CompletableDeferred<IpCheckResult>()
+            probeCheck = {
+                try {
+                    result.await()
+                } finally {
+                    cancelled = true
+                }
+            }
+            configProvider.selected.value = node.id
+            // The compiled layout: a manual pick rides the "proxy" selector
+            // while the urltest group keeps re-measuring in the background.
+            engine.groupsFlow.value =
+                listOf(autoProxyGroup(selected = node.id), urltestGroup(selected = "node-2"))
+            connectToRunning()
+            runCurrent()
+            assertEquals(1, probeCalls)
+
+            // A new unused urltest winner carries no traffic — the live check
+            // must not be cancelled.
+            engine.groupsFlow.value =
+                listOf(autoProxyGroup(selected = node.id), urltestGroup(selected = "node-1"))
+            runCurrent()
+            assertFalse(cancelled)
+
+            // Same selections, different report order — still no path change.
+            engine.groupsFlow.value =
+                listOf(urltestGroup(selected = "node-1"), autoProxyGroup(selected = node.id))
+            runCurrent()
+            assertFalse(cancelled)
+
+            result.complete(IpCheckResult("192.0.2.1", 1, null))
+            runCurrent()
+            val success = manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }
+            assertEquals(HealthStatus.Ok, success.status)
+
+            // Unused churn after evidence landed must not erase it either.
+            engine.groupsFlow.value =
+                listOf(autoProxyGroup(selected = node.id), urltestGroup(selected = "node-2"))
+            runCurrent()
+            val after = manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }
+            assertEquals(HealthStatus.Ok, after.status)
+            assertEquals(HealthReason.HttpResponseRouteUnverified, after.reason)
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+        }
+
+    @Test
+    fun `an active auto winner change invalidates path evidence and cancels the live check`() =
+        testScope.runTest {
+            var cancelled = false
+            probeCheck = {
+                try {
+                    kotlinx.coroutines.awaitCancellation()
+                } finally {
+                    cancelled = true
+                }
+            }
+            configProvider.config = config.copy(node = ConfigCompiler.AUTO_NODE_SUMMARY)
+            configProvider.selected.value = NodeSelection.AUTO_ID
+            configProvider.summaries = summariesWithAuto(node2)
+            engine.groupsFlow.value =
+                listOf(autoProxyGroup(selected = NodeSelection.AUTO_ID), urltestGroup(selected = "node-1"))
+            connectToRunning()
+            runCurrent()
+            assertEquals(1, probeCalls)
+
+            // The selector actually rides the urltest group — a new measured
+            // winner IS a different outbound.
+            engine.groupsFlow.value =
+                listOf(autoProxyGroup(selected = NodeSelection.AUTO_ID), urltestGroup(selected = "node-2"))
+            runCurrent()
+
+            assertTrue(cancelled)
+            assertTrue(
+                manager.health.value.observations
+                    .filter { it.level in ConnectionHealthStore.PATH_LEVELS }
+                    .all { it.status == HealthStatus.Unverified && it.reason == HealthReason.PathChanged },
+            )
+            // Path invalidation is evidence-only — the session stays up and
+            // the single-shot check is not restarted.
+            assertTrue(manager.state.value is VpnConnectionState.Connected)
+            assertEquals(0, serviceControl.disconnectStarts)
+            assertEquals(1, probeCalls)
         }
 }
