@@ -178,6 +178,91 @@ class MigrationTest {
         }
     }
 
+    @Test
+    fun migrate6To7AddsRefreshPolicyColumns() {
+        helper.createDatabase(TEST_DB, 6).use { db ->
+            db.execSQL(
+                """INSERT INTO subscriptions
+                    (name, url, createdAtEpochMs, lastUpdatedAtEpochMs,
+                     lastAttemptAtEpochMs, lastError, enabled, userInfoJson,
+                     supportUrl, updateIntervalMinutes, allowInsecureHttp,
+                     announce, updateAlways, fallbackUrl)
+                   VALUES ('sub', ?, 1, NULL, NULL, NULL, 1, NULL, NULL, 12, 0,
+                           NULL, 1, NULL)""",
+                arrayOf("https://127.0.0.1:9/sub"),
+            )
+            // Node rows, per-node prefs, and routing rules must survive the
+            // subscription-table ALTER unchanged.
+            db.execSQL(
+                """INSERT INTO nodes
+                    (id, subscriptionId, name, protocol, server, port,
+                     outboundJson, rawUri, position)
+                   VALUES ('n1', 1, 'n', 'VLESS', '127.0.0.1', 443, '{}',
+                           NULL, 0)""",
+            )
+            db.execSQL(
+                """INSERT INTO node_preferences
+                    (nodeId, isFavorite, isEnabled, customName, isHidden)
+                   VALUES ('n1', 1, 1, 'fav', 0)""",
+            )
+            db.execSQL(
+                """INSERT INTO routing_rules
+                    (kind, pattern, action, orderIndex, isEnabled)
+                   VALUES ('domain', 'example.com', 'proxy', 0, 1)""",
+            )
+        }
+        helper.runMigrationsAndValidate(
+            TEST_DB, 7, true, AppDatabase.MIGRATION_6_7,
+        ).use { db ->
+            db.query(
+                "SELECT refreshPolicy, refreshFixedMinutes, updateAlways " +
+                    "FROM subscriptions",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                // Legacy rows inherit — the same behavior they had pre-v7.
+                assertEquals("inherit", c.getString(0))
+                assertTrue(c.isNull(1))
+                // Unrelated columns survive the migration untouched.
+                assertEquals(1, c.getInt(2))
+            }
+            // Payload in the other tables is preserved, not just counted.
+            db.query(
+                "SELECT server, port FROM nodes WHERE id = 'n1'",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("127.0.0.1", c.getString(0))
+                assertEquals(443, c.getInt(1))
+            }
+            db.query(
+                "SELECT isFavorite, customName FROM node_preferences " +
+                    "WHERE nodeId = 'n1'",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(1, c.getInt(0))
+                assertEquals("fav", c.getString(1))
+            }
+            db.query(
+                "SELECT pattern, action FROM routing_rules",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("example.com", c.getString(0))
+                assertEquals("proxy", c.getString(1))
+            }
+            // The new columns are writable — a fixed policy persists.
+            db.execSQL(
+                "UPDATE subscriptions SET refreshPolicy = 'fixed', " +
+                    "refreshFixedMinutes = 30",
+            )
+            db.query(
+                "SELECT refreshPolicy, refreshFixedMinutes FROM subscriptions",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("fixed", c.getString(0))
+                assertEquals(30, c.getInt(1))
+            }
+        }
+    }
+
     private companion object {
         const val TEST_DB = "migration-test"
     }

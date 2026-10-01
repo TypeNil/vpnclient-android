@@ -4,6 +4,7 @@ import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.RefreshOutcome
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
@@ -11,10 +12,12 @@ import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -65,6 +68,15 @@ class SubscriptionRepositoryTest {
         }
         override suspend fun updateName(id: Long, name: String) {
             subs[id]?.let { subs[id] = it.copy(name = name) }
+        }
+        override suspend fun updateRefreshPolicy(
+            id: Long,
+            policy: String,
+            fixedMinutes: Int?,
+        ) {
+            subs[id]?.let {
+                subs[id] = it.copy(refreshPolicy = policy, refreshFixedMinutes = fixedMinutes)
+            }
         }
         var urlSuccessCalls = 0
         override suspend fun updateUrlAndMarkSuccess(
@@ -203,7 +215,24 @@ class SubscriptionRepositoryTest {
         override suspend fun clearSelectedNodeIdIf(expected: String) {
             if (selected.value == expected) selected.value = null
         }
-        override val autoRefreshMinutes: Flow<Int> get() = autoRefresh
+        /** Reads after this many successes throw [autoRefreshReadError] —
+         *  a periodic refresh reads it at admission AND at the commit
+         *  re-gate, so `1` fails exactly the second check. -1 = never. */
+        var autoRefreshReadsUntilFailure = -1
+        var autoRefreshReadError: () -> Throwable = {
+            IllegalStateException("datastore read failed")
+        }
+        private var autoRefreshReads = 0
+        override val autoRefreshMinutes: Flow<Int>
+            get() =
+                flow {
+                    if (autoRefreshReadsUntilFailure >= 0 &&
+                        ++autoRefreshReads > autoRefreshReadsUntilFailure
+                    ) {
+                        throw autoRefreshReadError()
+                    }
+                    emit(autoRefresh.value)
+                }
         val alerted = MutableStateFlow<Set<String>>(emptySet())
         override val expiryAlerted: Flow<Set<String>> get() = alerted
         override suspend fun markExpiryAlerted(key: String) {
@@ -215,21 +244,48 @@ class SubscriptionRepositoryTest {
         data class Call(
             val id: Long,
             val providerMinutes: Int?,
+            val policy: RefreshPolicy,
             val userOverride: Int,
             val enabled: Boolean,
         )
         val scheduled = mutableListOf<Call>()
         val cancelled = mutableListOf<Long>()
+        /** When set, schedule() throws — simulates a WorkManager failure. */
+        var failure: Exception? = null
+        /** schedule() throws only for these ids — a reconcile that fails on
+         *  one row while the rest succeed. */
+        var failForIds: Set<Long> = emptySet()
+        /** Simulated live WorkManager jobs the orphan prune inspects — each id
+         *  is checked through the callback and pruned when no CURRENT row
+         *  exists. */
+        val pendingWorkIds = mutableSetOf<Long>()
+        /** Ids the prune actually asked the callback about. */
+        val existenceChecks = mutableListOf<Long>()
+        /** Runs inside reconcile() before the per-id checks — lets a test
+         *  mutate rows between the caller's list read and the prune. */
+        var onReconcile: (() -> Unit)? = null
+        /** When set, reconcile() throws — simulates a failed queue query. */
+        var reconcileFailure: Exception? = null
         override suspend fun schedule(
             subscriptionId: Long,
             providerMinutes: Int?,
+            policy: RefreshPolicy,
             userOverrideMinutes: Int,
             enabled: Boolean,
         ) {
-            scheduled.add(Call(subscriptionId, providerMinutes, userOverrideMinutes, enabled))
+            if (subscriptionId in failForIds) throw IllegalStateException("wm down")
+            failure?.let { throw it }
+            scheduled.add(Call(subscriptionId, providerMinutes, policy, userOverrideMinutes, enabled))
         }
         override fun cancel(subscriptionId: Long) { cancelled.add(subscriptionId) }
-        override suspend fun reconcile(activeSubscriptionIds: Set<Long>) = Unit
+        override suspend fun reconcile(exists: suspend (Long) -> Boolean) {
+            reconcileFailure?.let { throw it }
+            onReconcile?.invoke()
+            pendingWorkIds.forEach { id ->
+                existenceChecks += id
+                if (!exists(id)) cancelled += id
+            }
+        }
     }
 
     private class FakeExpiryNotifier : SubscriptionExpiryNotifier {
@@ -1349,6 +1405,280 @@ class SubscriptionRepositoryTest {
         assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
     }
 
+    // ---- per-subscription refresh policy ----
+
+    @Test
+    fun `setRefreshPolicy persists and reschedules from the current row`() = runTest {
+        seedSubscription()
+        settings.autoRefresh.value = 0
+
+        repository.setRefreshPolicy(1, RefreshPolicy.Fixed(60))
+
+        assertEquals("fixed", subscriptionDao.subs[1]!!.refreshPolicy)
+        assertEquals(60, subscriptionDao.subs[1]!!.refreshFixedMinutes)
+        val call = scheduler.scheduled.last()
+        assertEquals(1L, call.id)
+        assertEquals(RefreshPolicy.Fixed(60), call.policy)
+        assertEquals(0, call.userOverride)
+    }
+
+    @Test
+    fun `setRefreshPolicy on the manual sentinel is refused`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val id = manualSubId()
+
+        repository.setRefreshPolicy(id, RefreshPolicy.Disabled)
+
+        // The row is untouched — no policy write, no schedule.
+        assertEquals("inherit", subscriptionDao.subs[id]!!.refreshPolicy)
+        assertTrue(scheduler.scheduled.isEmpty())
+        assertTrue(scheduler.cancelled.isEmpty())
+    }
+
+    @Test
+    fun `successful refresh re-registers under the stored policy`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] =
+            subscriptionDao.subs[1]!!.copy(refreshPolicy = "disabled")
+        server.enqueue(
+            MockResponse()
+                .setBody(uri("a.example.com", "A"))
+                .setHeader("profile-update-interval", "2"),
+        )
+
+        assertTrue(repository.refresh(1).isSuccess)
+        // The post-commit reschedule re-read the row — Disabled survives a
+        // refresh instead of being overwritten by the provider hint.
+        val call = scheduler.scheduled.last()
+        assertEquals(RefreshPolicy.Disabled, call.policy)
+        assertEquals(120, call.providerMinutes)
+    }
+
+    @Test
+    fun `editUrl retains the stored policy when rescheduling`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] =
+            subscriptionDao.subs[1]!!.copy(refreshPolicy = "fixed", refreshFixedMinutes = 90)
+        val newServer = MockWebServer()
+        try {
+            newServer.start()
+            newServer.enqueue(MockResponse().setBody(uri("new.example.com", "N")))
+
+            assertTrue(
+                repository.editUrl(1, newServer.url("/sub").toString()).isSuccess,
+            )
+        } finally {
+            newServer.shutdown()
+        }
+        assertEquals(RefreshPolicy.Fixed(90), scheduler.scheduled.last().policy)
+    }
+
+    @Test
+    fun `setEnabled reschedules under the stored policy`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] =
+            subscriptionDao.subs[1]!!.copy(refreshPolicy = "fixed", refreshFixedMinutes = 45)
+
+        repository.setEnabled(1, false)
+        scheduler.scheduled.last().let {
+            assertEquals(RefreshPolicy.Fixed(45), it.policy)
+            assertFalse(it.enabled)
+        }
+        repository.setEnabled(1, true)
+        scheduler.scheduled.last().let {
+            assertEquals(RefreshPolicy.Fixed(45), it.policy)
+            assertTrue(it.enabled)
+        }
+    }
+
+    @Test
+    fun `a policy write during an in-flight refresh wins the reschedule`() = runTest {
+        // Refresh parks in phase-1 validation (no lock held); the user's
+        // Disabled write lands first. Phase 2's re-read must schedule under
+        // Disabled — the stale pre-write row can't resurrect a job.
+        seedSubscription()
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        validator.gate = CompletableDeferred()
+        var outcome: Result<RefreshOutcome>? = null
+        val job = launch { outcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+
+        validator.gate!!.complete(Unit)
+        job.join()
+
+        assertTrue(outcome!!.isSuccess)
+        assertEquals("disabled", subscriptionDao.subs[1]!!.refreshPolicy)
+        assertEquals(RefreshPolicy.Disabled, scheduler.scheduled.last().policy)
+    }
+
+    @Test
+    fun `reconcileRefreshSchedules re-reads row and settings under the lock`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] =
+            subscriptionDao.subs[1]!!.copy(refreshPolicy = "provider")
+        settings.autoRefresh.value = 120
+
+        repository.reconcileRefreshSchedules(inheritingOnly = false)
+
+        // Explicit PROVIDER sees the current row — the global override is
+        // passed along for inheriting rows, not applied to this one.
+        scheduler.scheduled.last().let {
+            assertEquals(1L, it.id)
+            assertEquals(RefreshPolicy.Provider, it.policy)
+            assertEquals(120, it.userOverride)
+        }
+    }
+
+    @Test
+    fun `global-change reconcile touches only inheriting rows`() = runTest {
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        seedSubscription(id = 3, url = server.url("/third").toString())
+        subscriptionDao.subs[2] = subscriptionDao.subs[2]!!.copy(refreshPolicy = "provider")
+        subscriptionDao.subs[3] =
+            subscriptionDao.subs[3]!!.copy(refreshPolicy = "fixed", refreshFixedMinutes = 90)
+
+        repository.reconcileRefreshSchedules(inheritingOnly = true)
+
+        // Only the inheriting row was re-resolved — explicit policies can't
+        // observe the global value, so a global change leaves them alone.
+        assertEquals(listOf(1L), scheduler.scheduled.map { it.id })
+        assertEquals(
+            RefreshPolicy.InheritGlobal,
+            scheduler.scheduled.single().policy,
+        )
+
+        // The startup pass still covers every row.
+        scheduler.scheduled.clear()
+        repository.reconcileRefreshSchedules(inheritingOnly = false)
+        assertEquals(setOf(1L, 2L, 3L), scheduler.scheduled.map { it.id }.toSet())
+    }
+
+    @Test
+    fun `a user policy change survives a reconcile that listed before it`() = runTest {
+        // The reconcile reads each row again under its own lock — a policy
+        // written between the reconcile's list read and the lock is what
+        // actually gets scheduled, never the stale list entry.
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        subscriptionDao.subs[2] = subscriptionDao.subs[2]!!.copy(refreshPolicy = "provider")
+
+        // User sets Disabled on sub 1, then a global reconcile runs.
+        repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+        repository.reconcileRefreshSchedules(inheritingOnly = false)
+
+        val calls1 = scheduler.scheduled.filter { it.id == 1L }
+        // Both the setter's reschedule and the reconcile see Disabled — the
+        // earlier inherit snapshot can't resurrect a job.
+        assertTrue(calls1.isNotEmpty())
+        assertTrue(calls1.all { it.policy == RefreshPolicy.Disabled })
+        assertEquals(RefreshPolicy.Provider, scheduler.scheduled.last { it.id == 2L }.policy)
+    }
+
+    @Test
+    fun `the manual sentinel is never scheduled by a reconcile`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val id = manualSubId()
+        settings.autoRefresh.value = 60
+
+        repository.reconcileRefreshSchedules(inheritingOnly = false)
+
+        assertTrue(scheduler.scheduled.isEmpty())
+        assertEquals(listOf(id), scheduler.cancelled)
+    }
+
+    @Test
+    fun `setRefreshPolicy propagates a scheduler failure`() = runTest {
+        seedSubscription()
+        scheduler.failure = IllegalStateException("workmanager down")
+
+        var thrown: Throwable? = null
+        try {
+            repository.setRefreshPolicy(1, RefreshPolicy.Fixed(30))
+        } catch (e: Throwable) {
+            thrown = e
+        }
+
+        assertTrue(thrown is IllegalStateException)
+        // The write itself persisted — the failure is only about the
+        // reschedule, and the UI must be told instead of showing success.
+        assertEquals("fixed", subscriptionDao.subs[1]!!.refreshPolicy)
+        assertEquals(30, subscriptionDao.subs[1]!!.refreshFixedMinutes)
+    }
+
+    @Test
+    fun `refreshOnLaunch skips a row disabled after the launch snapshot`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] = subscriptionDao.subs[1]!!.copy(updateAlways = true)
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        // First queued launch refresh runs normally.
+        assertTrue(repository.refreshOnLaunch(1).isSuccess)
+        assertEquals(1, server.requestCount)
+
+        // The user flips the policy to Disabled before a second launch pass
+        // — the gate re-reads the row at fetch entry, so no network runs.
+        repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+        val skipped = repository.refreshOnLaunch(1)
+
+        assertTrue(skipped.isFailure)
+        assertEquals(SubscriptionError.Superseded, skipped.exceptionOrNull())
+        assertEquals(1, server.requestCount)
+
+        // Manual refresh stays unconditional — Disabled blocks scheduled
+        // work, not the user's explicit pull.
+        server.enqueue(MockResponse().setBody(uri("b.example.com", "B")))
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a skipped launch refresh does not supersede a parked manual refresh`() = runTest {
+        // Regression: the gate ran AFTER nextRefreshSeq, so a skipped launch
+        // bump made the parked manual's commit stale and it was dropped.
+        seedSubscription()
+        subscriptionDao.subs[1] = subscriptionDao.subs[1]!!.copy(updateAlways = true)
+        // Exactly one fetchable body — a second fetch would hang/fail.
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        validator.gate = CompletableDeferred()
+        var manualOutcome: Result<RefreshOutcome>? = null
+        val manualJob = launch { manualOutcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // User flips the policy to Disabled while the manual refresh is
+        // parked; a queued launch refresh is then skipped at the gate.
+        repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+        val skipped = repository.refreshOnLaunch(1)
+        assertTrue(skipped.isFailure)
+        assertEquals(SubscriptionError.Superseded, skipped.exceptionOrNull())
+        assertEquals(1, server.requestCount)
+
+        // The parked manual refresh is NOT stale — the skipped launch took
+        // no ticket, so its candidate commits normally.
+        validator.gate!!.complete(Unit)
+        manualJob.join()
+        assertTrue(manualOutcome!!.isSuccess)
+        assertEquals(listOf("a.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(1, server.requestCount)
+        assertEquals("disabled", subscriptionDao.subs[1]!!.refreshPolicy)
+    }
+
+    @Test
+    fun `refreshOnLaunch skips a disabled subscription`() = runTest {
+        seedSubscription()
+        subscriptionDao.subs[1] = subscriptionDao.subs[1]!!.copy(updateAlways = true)
+        repository.setEnabled(1, false)
+
+        val result = repository.refreshOnLaunch(1)
+
+        assertTrue(result.isFailure)
+        assertEquals(0, server.requestCount)
+    }
+
     @Test
     fun `same-url editUrl supersedes an in-flight refresh`() = runTest {
         // A refresh tickets seq=1 and parks in validation; an editUrl to the
@@ -1384,5 +1714,364 @@ class SubscriptionRepositoryTest {
         assertEquals(listOf("fresh.example.com"), nodeDao.forSubscription(1).map { it.server })
         // A's late failure after editUrl's success must not write lastError.
         assertNull(subscriptionDao.subs[1]!!.lastError)
+    }
+
+    // ---- periodic refresh entry (WorkManager) ----
+
+    @Test
+    fun `periodic refresh fetches an eligible row without update-always`() = runTest {
+        // updateAlways gates only the launch pass — a periodic slot exists on
+        // the resolved interval alone and must not require it.
+        seedSubscription()
+        settings.autoRefresh.value = 60
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+        assertTrue(repository.refreshPeriodic(1).isSuccess)
+        assertEquals(1, server.requestCount)
+        assertEquals(1, subscriptionDao.successCalls)
+    }
+
+    @Test
+    fun `periodic refresh skips a Disabled policy without fetching`() = runTest {
+        seedSubscription()
+        repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+
+        val result = repository.refreshPeriodic(1)
+
+        assertTrue(result.isFailure)
+        assertEquals(SubscriptionError.Superseded, result.exceptionOrNull())
+        // The gate ran before the ticket AND the fetch: no network ran and
+        // no attempt was recorded against the row.
+        assertEquals(0, server.requestCount)
+        assertEquals(0, subscriptionDao.successCalls)
+        assertEquals(0, subscriptionDao.attemptCalls)
+    }
+
+    @Test
+    fun `periodic refresh skips an enabled=false row without fetching`() = runTest {
+        seedSubscription()
+        repository.setEnabled(1, false)
+
+        val result = repository.refreshPeriodic(1)
+
+        assertTrue(result.isFailure)
+        assertEquals(SubscriptionError.Superseded, result.exceptionOrNull())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `periodic refresh skips when no interval resolves`() = runTest {
+        // Inherit + global off — the row can't observe a schedule.
+        seedSubscription()
+        settings.autoRefresh.value = -1
+        // Explicit Provider without a usable hint is manual-only — not a
+        // global fallback.
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        subscriptionDao.subs[2] = subscriptionDao.subs[2]!!.copy(refreshPolicy = "provider")
+
+        assertEquals(
+            SubscriptionError.Superseded,
+            repository.refreshPeriodic(1).exceptionOrNull(),
+        )
+        assertEquals(
+            SubscriptionError.Superseded,
+            repository.refreshPeriodic(2).exceptionOrNull(),
+        )
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `periodic refresh on a deleted row reports NotFound`() = runTest {
+        // NotFound — not Superseded: the worker reads it as "row deleted" and
+        // cancels its own job. Superseded would keep the job alive forever.
+        val result = repository.refreshPeriodic(42)
+
+        assertTrue(result.isFailure)
+        assertEquals(SubscriptionError.NotFound, result.exceptionOrNull())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `periodic refresh skips the manual sentinel`() = runTest {
+        repository.importShareLink(uri("a.example.com", "A"))
+        val id = manualSubId()
+
+        val result = repository.refreshPeriodic(id)
+
+        // Superseded, not NotFound — the row exists; it's just not fetchable.
+        assertEquals(SubscriptionError.Superseded, result.exceptionOrNull())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a skipped periodic refresh does not supersede a parked manual refresh`() =
+        runTest {
+            // Same contract as the launch gate: the periodic gate runs BEFORE
+            // nextRefreshSeq — a skipped run takes no ticket, so a manual
+            // refresh parked in validation still owns the commit.
+            seedSubscription()
+            settings.autoRefresh.value = 60
+            server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+            validator.gate = CompletableDeferred()
+            var manualOutcome: Result<RefreshOutcome>? = null
+            val manualJob = launch { manualOutcome = repository.refresh(1) }
+            parkInValidate(expectedCalls = 1)
+
+            repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+            val skipped = repository.refreshPeriodic(1)
+            assertEquals(SubscriptionError.Superseded, skipped.exceptionOrNull())
+            assertEquals(1, server.requestCount)
+
+            validator.gate!!.complete(Unit)
+            manualJob.join()
+            assertTrue(manualOutcome!!.isSuccess)
+            assertEquals(listOf("a.example.com"), nodeDao.forSubscription(1).map { it.server })
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun `a periodic refresh does not commit after the policy is disabled mid-flight`() =
+        runTest {
+            // The gate re-runs inside the commit lock: a row eligible at
+            // ticket time but Disabled while the fetch was parked must keep
+            // last-known-good — the candidate is dropped, not committed.
+            seedSubscription()
+            settings.autoRefresh.value = 60
+            val old = nodeEntity(uri("old.example.com", "Old"), 1)
+            nodeDao.nodes[old.id] = old
+            server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+            validator.gate = CompletableDeferred()
+            var outcome: Result<RefreshOutcome>? = null
+            val job = launch { outcome = repository.refreshPeriodic(1) }
+            parkInValidate(expectedCalls = 1)
+
+            repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+            validator.gate!!.complete(Unit)
+            job.join()
+
+            assertTrue(outcome!!.isFailure)
+            assertEquals(SubscriptionError.Superseded, outcome!!.exceptionOrNull())
+            assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
+            assertEquals(0, subscriptionDao.successCalls)
+        }
+
+    @Test
+    fun `a manual refresh still commits after the policy is disabled mid-flight`() =
+        runTest {
+            // Sibling of the periodic re-gate: Disabled blocks scheduled work,
+            // never the user's explicit pull — the parked manual refresh
+            // commits normally.
+            seedSubscription()
+            val old = nodeEntity(uri("old.example.com", "Old"), 1)
+            nodeDao.nodes[old.id] = old
+            server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+
+            validator.gate = CompletableDeferred()
+            var outcome: Result<RefreshOutcome>? = null
+            val job = launch { outcome = repository.refresh(1) }
+            parkInValidate(expectedCalls = 1)
+
+            repository.setRefreshPolicy(1, RefreshPolicy.Disabled)
+            validator.gate!!.complete(Unit)
+            job.join()
+
+            assertTrue(outcome!!.isSuccess)
+            assertEquals(listOf("a.example.com"), nodeDao.forSubscription(1).map { it.server })
+            assertEquals(1, subscriptionDao.successCalls)
+        }
+
+    // ---- reconcile aggregate result + current-row orphan prune ----
+
+    @Test
+    fun `reconcile reports incomplete when a row reschedule fails`() = runTest {
+        seedSubscription()
+        seedSubscription(id = 2, url = server.url("/other").toString())
+        scheduler.failForIds = setOf(2L)
+
+        assertFalse(repository.reconcileRefreshSchedules(inheritingOnly = false))
+        // Row 1 rescheduled fine; only 2's job is missing.
+        assertEquals(listOf(1L), scheduler.scheduled.map { it.id })
+
+        // The next full pass repairs the missing job and reports complete.
+        scheduler.failForIds = emptySet()
+        assertTrue(repository.reconcileRefreshSchedules(inheritingOnly = false))
+        assertEquals(setOf(1L, 2L), scheduler.scheduled.map { it.id }.toSet())
+    }
+
+    @Test
+    fun `reconcile reports incomplete when the orphan prune fails`() = runTest {
+        seedSubscription()
+        scheduler.reconcileFailure = IllegalStateException("wm query failed")
+
+        assertFalse(repository.reconcileRefreshSchedules(inheritingOnly = false))
+        // The row pass still ran — the failure is reported, not hidden.
+        assertEquals(listOf(1L), scheduler.scheduled.map { it.id })
+    }
+
+    @Test
+    fun `orphan prune checks the current row, not the reconcile snapshot`() = runTest {
+        seedSubscription()
+        // Live jobs for 1 (row exists), 5 (genuine orphan) and 99 — where 99's
+        // row is only inserted between the reconcile's list read and the
+        // scheduler's existence check.
+        scheduler.pendingWorkIds += listOf(1L, 5L, 99L)
+        scheduler.onReconcile = {
+            seedSubscription(id = 99, url = server.url("/late").toString())
+        }
+
+        assertTrue(repository.reconcileRefreshSchedules(inheritingOnly = false))
+
+        // Every candidate went through the callback; a stale id snapshot
+        // would have pruned 99's job — only the real orphan 5 was cancelled.
+        assertEquals(setOf(1L, 5L, 99L), scheduler.existenceChecks.toSet())
+        assertEquals(listOf(5L), scheduler.cancelled)
+    }
+
+    @Test
+    fun `a periodic commit-gate read failure is a typed failure, commits nothing`() =
+        runTest {
+            // The commit re-gate re-reads row + settings inside the lock — a
+            // DataStore failure there must land as Result.failure, not escape
+            // the refresh() contract as a thrown exception.
+            seedSubscription()
+            settings.autoRefresh.value = 60
+            val old = nodeEntity(uri("old.example.com", "Old"), 1)
+            nodeDao.nodes[old.id] = old
+            server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+            // Read #1 is the admission gate (passes, interval resolves);
+            // read #2 is the commit re-gate and throws.
+            settings.autoRefreshReadsUntilFailure = 1
+
+            val result = repository.refreshPeriodic(1)
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull() is SubscriptionError)
+            // Fetch ran (admission passed) but nothing committed — nodes and
+            // success metadata untouched, attempt recorded as typed failure.
+            assertEquals(1, server.requestCount)
+            assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
+            assertEquals(0, subscriptionDao.successCalls)
+        }
+
+    @Test
+    fun `a cancelled commit-gate eligibility check propagates without commit`() =
+        runTest {
+            // Same injection point: a CancellationException at the re-gate
+            // must propagate (structured cancellation), not collapse into a
+            // typed refresh failure.
+            seedSubscription()
+            settings.autoRefresh.value = 60
+            server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+            settings.autoRefreshReadsUntilFailure = 1
+            settings.autoRefreshReadError = { CancellationException() }
+
+            var outcome: Result<RefreshOutcome>? = null
+            val job = launch { outcome = repository.refreshPeriodic(1) }
+            job.join()
+
+            assertTrue(job.isCancelled)
+            assertNull(outcome)
+            assertEquals(0, nodeDao.replaceCalls)
+            assertEquals(0, subscriptionDao.successCalls)
+        }
+
+    @Test
+    fun `a periodic url-change re-pass re-gates before committing`() = runTest {
+        // Regression: the url-changed replacement commit used to skip the
+        // periodic gate — a global-off write during the under-lock
+        // replacement fetch (a DataStore write takes no subscription lock)
+        // let a stale candidate commit into an unschedulable row.
+        seedSubscription()
+        settings.autoRefresh.value = 60
+        // 1: periodic's initial fetch of /sub; 2: editUrl's /sub2 fetch;
+        // 3: the periodic run's replacement fetch of /sub2 under the lock.
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        server.enqueue(MockResponse().setBody(uri("c.example.com", "C")))
+        server.enqueue(MockResponse().setBody(uri("d.example.com", "D")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var periodicOutcome: Result<RefreshOutcome>? = null
+        var editOutcome: Result<RefreshOutcome>? = null
+        val periodicJob = launch { periodicOutcome = repository.refreshPeriodic(1) }
+        parkInValidate(expectedCalls = 1)
+
+        // Swap the gate BEFORE editUrl reaches validate() — the in-flight
+        // call already captured gateA, a new call needs its own deferred.
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        // editUrl takes the subscription lock across its own fetch+commit —
+        // when it finishes, the row points at /sub2 and the periodic run's
+        // phase 2 re-fetches under the held lock.
+        val editJob =
+            launch { editOutcome = repository.editUrl(1, server.url("/sub2").toString()) }
+        parkInValidate(expectedCalls = 2)
+        gateB.complete(Unit)
+        editJob.join()
+        assertTrue(editOutcome!!.isSuccess)
+        assertEquals(server.url("/sub2").toString(), subscriptionDao.subs[1]!!.url)
+        assertEquals(listOf("c.example.com"), nodeDao.forSubscription(1).map { it.server })
+
+        // Release the periodic run's parked first validation — it commits
+        // nothing until the under-lock replacement fetch of /sub2 validates.
+        val gateC = CompletableDeferred<Unit>()
+        validator.gate = gateC
+        gateA.complete(Unit)
+        parkInValidate(expectedCalls = 3)
+        // Global "off" lands mid-replacement — a DataStore write needs no
+        // subscription lock, so it can interleave even under lockFor.
+        settings.autoRefresh.value = -1
+        gateC.complete(Unit)
+        periodicJob.join()
+
+        assertTrue(periodicOutcome!!.isFailure)
+        assertEquals(SubscriptionError.Superseded, periodicOutcome!!.exceptionOrNull())
+        // editUrl's commit stands — the dropped replacement wrote nothing.
+        assertEquals(listOf("c.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(server.url("/sub2").toString(), subscriptionDao.subs[1]!!.url)
+        assertEquals(1, subscriptionDao.urlSuccessCalls)
+        assertEquals(0, subscriptionDao.successCalls)
+    }
+
+    @Test
+    fun `a manual url-change re-pass commits even with global refresh off`() = runTest {
+        // Sibling of the periodic case: the manual pull is never re-gated —
+        // its replacement commit lands even after global auto-refresh is off.
+        seedSubscription()
+        settings.autoRefresh.value = 60
+        server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))
+        server.enqueue(MockResponse().setBody(uri("c.example.com", "C")))
+        server.enqueue(MockResponse().setBody(uri("d.example.com", "D")))
+
+        val gateA = CompletableDeferred<Unit>()
+        validator.gate = gateA
+        var refreshOutcome: Result<RefreshOutcome>? = null
+        var editOutcome: Result<RefreshOutcome>? = null
+        val refreshJob = launch { refreshOutcome = repository.refresh(1) }
+        parkInValidate(expectedCalls = 1)
+
+        val gateB = CompletableDeferred<Unit>()
+        validator.gate = gateB
+        val editJob =
+            launch { editOutcome = repository.editUrl(1, server.url("/sub2").toString()) }
+        parkInValidate(expectedCalls = 2)
+        gateB.complete(Unit)
+        editJob.join()
+        assertTrue(editOutcome!!.isSuccess)
+
+        val gateC = CompletableDeferred<Unit>()
+        validator.gate = gateC
+        gateA.complete(Unit)
+        parkInValidate(expectedCalls = 3)
+        settings.autoRefresh.value = -1
+        gateC.complete(Unit)
+        refreshJob.join()
+
+        assertTrue(refreshOutcome!!.isSuccess)
+        // The manual run's replacement candidate committed — unconditional.
+        assertEquals(listOf("d.example.com"), nodeDao.forSubscription(1).map { it.server })
+        assertEquals(1, subscriptionDao.successCalls)
     }
 }

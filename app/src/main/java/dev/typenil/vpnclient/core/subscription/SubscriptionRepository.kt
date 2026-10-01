@@ -4,6 +4,7 @@ import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.RefreshOutcome
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionFormat
@@ -151,26 +152,29 @@ class SubscriptionRepository
             val id = subscriptionDao.insert(entity)
             val result = refresh(id)
             if (result.isFailure) {
-                // A failed first refresh still gets a periodic job when the user
-                // pinned a fixed interval — otherwise the subscription could never
-                // recover on its own. Provider-following mode stays unscheduled:
-                // there is no interval until a success supplies one.
-                runCatching {
-                    val override = settings.autoRefreshMinutes.first()
-                    if (override > 0) {
-                        scheduler.schedule(
-                            subscriptionId = id,
-                            providerMinutes = null,
-                            userOverrideMinutes = override,
-                            enabled = entity.enabled,
-                        )
+                // A failed first refresh still gets a periodic job when a fixed
+                // interval is in effect — otherwise the subscription could never
+                // recover on its own. New rows are InheritGlobal, so only a
+                // positive global override produces a job; provider mode stays
+                // unscheduled until a success supplies a hint.
+                try {
+                    if (settings.autoRefreshMinutes.first() > 0) {
+                        lockFor(id).withLock {
+                            rescheduleLocked(subscriptionDao.get(id) ?: return@withLock)
+                        }
                     }
-                }.onFailure {
-                    SecureLog.w(TAG, "post-add scheduling failed sub=$id: ${it.javaClass.simpleName}")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    SecureLog.w(TAG, "post-add scheduling failed sub=$id: ${e.javaClass.simpleName}")
                 }
             }
             return result
         }
+
+        /** Which entry point asked for the refresh — the pre-fetch gate and
+         *  the pre-commit re-check differ per trigger. */
+        private enum class RefreshTrigger { Manual, Launch, Periodic }
 
         /**
          * Refresh one subscription in two phases: everything slow (fetch,
@@ -178,13 +182,146 @@ class SubscriptionRepository
          * [prepareRefresh]; only the commit + post-commit bookkeeping hold
          * this subscription's lock in [commitRefresh]. A slow provider
          * therefore never blocks other subscriptions or user operations.
+         *
+         * Manual refresh is unconditional: even a Disabled-policy row may be
+         * pulled explicitly by the user, and a manual commit is never
+         * re-gated.
          */
-        suspend fun refresh(id: Long): Result<RefreshOutcome> {
+        suspend fun refresh(id: Long): Result<RefreshOutcome> =
+            refresh(id, RefreshTrigger.Manual)
+
+        /**
+         * Launch-triggered refresh (`update-always` startup pass): re-checks
+         * eligibility on the CURRENT row at fetch entry — the caller's
+         * `getAll()` snapshot can be seconds stale while this refresh queued
+         * behind earlier ones, so a subscription disabled (enabled=false or
+         * policy Disabled) after the snapshot must not fetch. Only the
+         * manual refresh stays unconditional — Disabled policy allows
+         * explicit user pulls; the periodic worker is gated by
+         * [periodicSkipReasonLocked]. A skipped row reports
+         * [SubscriptionError.Superseded]: a typed "nothing was written, row
+         * lives on" result, not a row deletion.
+         */
+        suspend fun refreshOnLaunch(id: Long): Result<RefreshOutcome> =
+            refresh(id, RefreshTrigger.Launch)
+
+        /**
+         * Periodic refresh (`SubscriptionRefreshWorker` slot): eligibility is
+         * the same interval resolution the scheduler used — re-checked on
+         * the CURRENT row under the subscription lock BEFORE any ticket or
+         * fetch, because a periodic job can outlive the change that made it
+         * obsolete (policy Disabled, enabled=false, a global off the row
+         * inherits, a provider hint that no longer resolves). Unlike the
+         * launch gate, `updateAlways` is irrelevant — a periodic slot exists
+         * on interval alone.
+         *
+         * Skip results: [SubscriptionError.NotFound] when the row is gone
+         * (the worker may drop its job); [SubscriptionError.Superseded] for
+         * every "skipped, nothing written, job stays" case — never treated
+         * as a deletion. The commit path re-gates at [commitRefresh] entry
+         * too: a policy or global interval flipped while any fetch was in
+         * flight (including the under-lock replacement fetch of the
+         * url-changed re-pass) must not see its stale candidate committed.
+         */
+        suspend fun refreshPeriodic(id: Long): Result<RefreshOutcome> =
+            refresh(id, RefreshTrigger.Periodic)
+
+        /** Launch eligibility on the CURRENT row — see [refreshOnLaunch]. */
+        private suspend fun isLaunchEligible(id: Long): Boolean =
+            subscriptionDao.get(id)?.let { sub ->
+                !isManualSubscription(sub.url) && sub.enabled && sub.updateAlways &&
+                    RefreshPolicy.fromStorage(sub.refreshPolicy, sub.refreshFixedMinutes) !=
+                        RefreshPolicy.Disabled
+            } == true
+
+        /**
+         * Periodic-run eligibility on the CURRENT row — caller holds
+         * [lockFor]. Returns the typed skip result: [SubscriptionError.NotFound]
+         * when the row is gone, [SubscriptionError.Superseded] when nothing
+         * should fetch (manual sentinel, enabled=false, Disabled policy, or
+         * no resolvable interval — the exact predicate the scheduler used to
+         * enqueue), null when the run may proceed.
+         */
+        private suspend fun periodicSkipReasonLocked(id: Long): SubscriptionError? {
+            val sub = subscriptionDao.get(id) ?: return SubscriptionError.NotFound
+            if (isManualSubscription(sub.url)) return SubscriptionError.Superseded
+            val scheduled =
+                resolveRefreshIntervalMinutes(
+                    policy =
+                        RefreshPolicy.fromStorage(
+                            sub.refreshPolicy,
+                            sub.refreshFixedMinutes,
+                        ),
+                    userOverrideMinutes = settings.autoRefreshMinutes.first(),
+                    providerMinutes = sub.updateIntervalMinutes,
+                    enabled = sub.enabled,
+                )
+            return if (scheduled == null) SubscriptionError.Superseded else null
+        }
+
+        private suspend fun refresh(
+            id: Long,
+            trigger: RefreshTrigger,
+        ): Result<RefreshOutcome> {
             val attemptAt = Instant.now().toEpochMilli()
-            val seq = nextRefreshSeq(id)
             // Phase 1 — no lock held. The fetch is cancellable (OkHttp call
             // cancellation propagates), so a cancelled caller frees nothing
             // because it never held anything.
+            // Gated launches and periodic runs re-read eligibility on the
+            // CURRENT row immediately before the fetch — the caller's
+            // snapshot can be seconds stale while this run queued behind
+            // earlier refreshes. These gates run BEFORE taking a refresh
+            // ticket: a skipped scheduled run must not supersede a manual
+            // refresh parked in validation — Disabled blocks scheduled work,
+            // never the user's explicit pull.
+            val seq =
+                when (trigger) {
+                    RefreshTrigger.Manual -> nextRefreshSeq(id)
+                    RefreshTrigger.Launch -> {
+                        val eligible =
+                            try {
+                                isLaunchEligible(id)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // Same typed-failure contract as a phase-1 error.
+                                return lockFor(id).withLock {
+                                    Result.failure(failRefresh(id, attemptAt, e))
+                                }
+                            }
+                        if (!eligible) {
+                            // Superseded, not NotFound: nothing was fetched or
+                            // written and the row lives on — a skipped run,
+                            // not a deletion.
+                            SecureLog.i(TAG, "launch refresh skipped — row no longer eligible sub=$id")
+                            return Result.failure(SubscriptionError.Superseded)
+                        }
+                        nextRefreshSeq(id)
+                    }
+                    RefreshTrigger.Periodic ->
+                        // Admission is atomic: the eligibility re-read and the
+                        // sequence ticket happen under one lock hold — a
+                        // skipped run allocates no ticket, and a ticketed
+                        // run was eligible at ticket time.
+                        try {
+                            lockFor(id).withLock {
+                                periodicSkipReasonLocked(id)?.let { skip ->
+                                    SecureLog.i(
+                                        TAG,
+                                        "periodic refresh skipped sub=$id: ${skip.safeMessage()}",
+                                    )
+                                    return Result.failure(skip)
+                                }
+                                nextRefreshSeq(id)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            return lockFor(id).withLock {
+                                Result.failure(failRefresh(id, attemptAt, e))
+                            }
+                        }
+                }
             val prepared =
                 try {
                     prepareRefresh(id, attemptAt)
@@ -218,7 +355,10 @@ class SubscriptionRepository
                     return@withLock Result.failure(SubscriptionError.Superseded)
                 }
                 try {
-                    commitRefresh(id, prepared)
+                    // The periodic re-gate lives inside commitRefresh so the
+                    // url-changed re-pass can't bypass it; a DAO/DataStore
+                    // failure there lands in this catch as a typed failure.
+                    commitRefresh(id, prepared, trigger)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -232,7 +372,10 @@ class SubscriptionRepository
          * of [commitRefresh] and [editUrl]'s same-URL delegation land here.
          * Failure logging stays "refresh failed" in both callers.
          */
-        private suspend fun refreshLocked(id: Long): Result<RefreshOutcome> {
+        private suspend fun refreshLocked(
+            id: Long,
+            trigger: RefreshTrigger,
+        ): Result<RefreshOutcome> {
             val attemptAt = Instant.now().toEpochMilli()
             // Take the same generation ticket refresh() takes: a caller that
             // reached here through the stale re-pass already proved the URL
@@ -242,7 +385,7 @@ class SubscriptionRepository
                 return Result.failure(SubscriptionError.Superseded)
             }
             return try {
-                commitRefresh(id, prepareRefresh(id, attemptAt))
+                commitRefresh(id, prepareRefresh(id, attemptAt), trigger)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -357,15 +500,32 @@ class SubscriptionRepository
          * stale and the whole refresh re-runs under the held lock (editUrl
          * holds the same lock across its own fetch + commit, so the URL
          * cannot change again). Throws on failure; callers map to Result.
+         *
+         * A periodic run is re-gated HERE, at the single commit entry, rather
+         * than only in [refresh]'s phase 2: eligibility was checked at
+         * admission, but policy/enabled can flip while a fetch is in flight —
+         * and a global-interval flip needs no subscription lock at all, so
+         * it can land even during this method's under-lock replacement fetch.
+         * The re-gate therefore also guards the url-changed re-pass's second
+         * entry. A skip returns the typed failure without writing; a
+         * DAO/DataStore read failure escapes to the caller's [failRefresh]
+         * catch. Manual commits are never re-gated.
          */
         private suspend fun commitRefresh(
             id: Long,
             prepared: PreparedRefresh,
+            trigger: RefreshTrigger,
         ): Result<RefreshOutcome> {
+            if (trigger == RefreshTrigger.Periodic) {
+                periodicSkipReasonLocked(id)?.let { skip ->
+                    SecureLog.i(TAG, "dropping periodic refresh — no longer eligible sub=$id")
+                    return Result.failure(skip)
+                }
+            }
             val current = subscriptionDao.get(id) ?: throw SubscriptionError.NotFound
             if (current.url != prepared.fetchedUrl) {
                 SecureLog.i(TAG, "url changed mid-refresh sub=$id — re-fetching under lock")
-                return refreshLocked(id)
+                return refreshLocked(id, trigger)
             }
             // Node swap + success metadata commit atomically — a crash between
             // them can't leave nodes updated but the subscription flagged stale.
@@ -464,14 +624,11 @@ class SubscriptionRepository
                     subscriptionDao.update(sub.copy(name = committed.profileTitle))
                     sub = sub.copy(name = committed.profileTitle)
                 }
-                // (Re)register background refresh — the provider interval may
-                // have changed, and a removed/re-added job must be reconciled.
-                scheduler.schedule(
-                    subscriptionId = id,
-                    providerMinutes = committed.updateIntervalMinutes,
-                    userOverrideMinutes = settings.autoRefreshMinutes.first(),
-                    enabled = sub.enabled,
-                )
+                // (Re)register background refresh — the provider interval or
+                // the user's policy may have changed mid-flight; `sub` was
+                // re-read (and possibly repointed) after commit, so it is the
+                // freshest snapshot held under the lock.
+                rescheduleLocked(sub)
                 // Expiry alert: once per expiry value, inside the warning
                 // window. The alerted-key embeds the expiry so a renewal
                 // re-arms the alert. The check→notify→mark sequence is
@@ -686,7 +843,7 @@ class SubscriptionRepository
             id: Long,
             enabled: Boolean,
         ) = lockFor(id).withLock {
-            val sub = subscriptionDao.get(id) ?: return@withLock
+            subscriptionDao.get(id) ?: return@withLock
             subscriptionDao.setEnabled(id, enabled)
             if (!enabled) {
                 prefsMutex.withLock {
@@ -698,16 +855,114 @@ class SubscriptionRepository
                     }
                 }
             }
-            runCatching {
-                scheduler.schedule(
-                    subscriptionId = id,
-                    providerMinutes = sub.updateIntervalMinutes,
-                    userOverrideMinutes = settings.autoRefreshMinutes.first(),
-                    enabled = enabled,
-                )
-            }.onFailure {
-                SecureLog.w(TAG, "reschedule after toggle failed sub=$id: ${it.javaClass.simpleName}")
+            try {
+                rescheduleLocked(subscriptionDao.get(id) ?: return@withLock)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SecureLog.w(TAG, "reschedule after toggle failed sub=$id: ${e.javaClass.simpleName}")
             }
+        }
+
+        /**
+         * (Re)register the refresh job described by [sub] — callers hold
+         * [lockFor] and pass a row read inside that lock, so a stale entity
+         * snapshot can't schedule over a newer user override. The manual
+         * sentinel row is never schedulable; a stray job for it is cancelled
+         * instead.
+         */
+        private suspend fun rescheduleLocked(sub: SubscriptionEntity) {
+            if (isManualSubscription(sub.url)) {
+                scheduler.cancel(sub.id)
+                return
+            }
+            scheduler.schedule(
+                subscriptionId = sub.id,
+                providerMinutes = sub.updateIntervalMinutes,
+                policy = RefreshPolicy.fromStorage(sub.refreshPolicy, sub.refreshFixedMinutes),
+                userOverrideMinutes = settings.autoRefreshMinutes.first(),
+                enabled = sub.enabled,
+            )
+        }
+
+        /**
+         * Persist a per-subscription refresh policy and re-resolve its job —
+         * the write and the reschedule run under the row's own lock, so an
+         * in-flight refresh's post-commit re-registration reads the NEW
+         * policy, never the pre-write snapshot. The manual sentinel refuses:
+         * it is local-only and never scheduled.
+         *
+         * A scheduler failure propagates: the persisted policy stays (it IS
+         * saved — no fake success), but the caller must surface that the
+         * reschedule didn't happen; the next reconcile repairs the job.
+         */
+        suspend fun setRefreshPolicy(
+            id: Long,
+            policy: RefreshPolicy,
+        ) = lockFor(id).withLock {
+            val sub = subscriptionDao.get(id) ?: return@withLock
+            if (isManualSubscription(sub.url)) return@withLock
+            subscriptionDao.updateRefreshPolicy(
+                id,
+                policy.storageKey,
+                policy.storageFixedMinutes,
+            )
+            rescheduleLocked(subscriptionDao.get(id)!!)
+        }
+
+        /**
+         * Reconcile scheduled work against current rows — the app's startup
+         * (`inheritingOnly = false`) and global-change (`= true`) passes both
+         * land here. Every row is re-read under its own lock before any
+         * schedule call, so a reconcile can never overwrite a newer override
+         * that landed between the list read and the lock; the inherit filter
+         * is checked on that fresh row too, not on the caller's snapshot.
+         * Orphan pruning runs after the pass.
+         *
+         * Returns true only when every listed row rescheduled AND the prune
+         * completed. Any per-row or prune failure is logged and reported as
+         * `false` — the caller must not treat the pass as done (the app
+         * keeps its full-pass flag so the next emission retries a full
+         * reconcile). Cancellation propagates.
+         */
+        suspend fun reconcileRefreshSchedules(inheritingOnly: Boolean): Boolean {
+            var complete = true
+            val ids = subscriptionDao.getAll().map { it.id }.toSet()
+            ids.forEach { id ->
+                lockFor(id).withLock {
+                    try {
+                        val current = subscriptionDao.get(id) ?: return@withLock
+                        // Only inheriting rows can observe a global change.
+                        if (inheritingOnly &&
+                            RefreshPolicy.fromStorage(
+                                current.refreshPolicy,
+                                current.refreshFixedMinutes,
+                            ) != RefreshPolicy.InheritGlobal
+                        ) {
+                            return@withLock
+                        }
+                        rescheduleLocked(current)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        complete = false
+                        SecureLog.w(TAG, "reconcile failed sub=$id: ${e.javaClass.simpleName}")
+                    }
+                }
+            }
+            try {
+                // Per-candidate existence is re-checked inside the scheduler
+                // against the CURRENT row — `ids` is already a stale snapshot
+                // by the time its queue is queried, and a subscription added
+                // since must not be pruned as an orphan.
+                scheduler.reconcile { subscriptionDao.get(it) != null }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                complete = false
+                SecureLog.w(TAG, "refresh orphan reconcile failed: ${e.javaClass.simpleName}")
+            }
+            return complete
         }
 
         /** User-visible name; blank input keeps the current one. */
@@ -753,7 +1008,8 @@ class SubscriptionRepository
                             throw SubscriptionError.InsecureTransport
                         }
                         if (trimmed == sub.url) {
-                            return@withLock refreshLocked(id)
+                            // Same-URL edit is a manual refresh — never gated.
+                            return@withLock refreshLocked(id, RefreshTrigger.Manual)
                         }
                         val body = fetcher.fetch(trimmed, settings.getOrCreateHwid(), sub.allowInsecureHttp)
                         val parsed = parseAndValidate(id, body.body, body.contentType)
@@ -804,15 +1060,7 @@ class SubscriptionRepository
                                 settings.clearSelectedNodeIdIf(selected)
                             }
                         }
-                        val sub = subscriptionDao.get(id)
-                        if (sub != null) {
-                            scheduler.schedule(
-                                subscriptionId = id,
-                                providerMinutes = sub.updateIntervalMinutes,
-                                userOverrideMinutes = settings.autoRefreshMinutes.first(),
-                                enabled = sub.enabled,
-                            )
-                        }
+                        subscriptionDao.get(id)?.let { rescheduleLocked(it) }
                     }.onFailure {
                         SecureLog.w(TAG, "post-editUrl bookkeeping failed sub=$id: ${it.javaClass.simpleName}")
                     }
@@ -1022,6 +1270,8 @@ class SubscriptionRepository
                 announce = announce,
                 updateAlways = updateAlways,
                 allowInsecureHttp = allowInsecureHttp,
+                refreshPolicy =
+                    RefreshPolicy.fromStorage(refreshPolicy, refreshFixedMinutes),
             )
 
         companion object {

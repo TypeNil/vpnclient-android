@@ -39,6 +39,14 @@ data class SubscriptionEntity(
     @ColumnInfo(defaultValue = "0") val updateAlways: Boolean = false,
     /** Alternate fetch URL tried when the primary is unreachable. */
     val fallbackUrl: String?,
+    /**
+     * Per-subscription auto-refresh policy token — decoded via
+     * `RefreshPolicy.fromStorage` ("inherit"/"provider"/"disabled"/"fixed").
+     * Pre-v7 rows carry the default "inherit": the old app-wide behavior.
+     */
+    @ColumnInfo(defaultValue = "inherit") val refreshPolicy: String = "inherit",
+    /** Fixed interval in minutes — only meaningful while policy is "fixed". */
+    val refreshFixedMinutes: Int? = null,
 )
 
 @Entity(
@@ -90,6 +98,20 @@ interface SubscriptionDao {
     suspend fun updateName(
         id: Long,
         name: String,
+    )
+
+    /** Policy columns only — a user override must not touch refresh metadata
+     *  or the URL; rescheduling is the caller's job (under the row lock). */
+    @Query(
+        """UPDATE subscriptions SET
+            refreshPolicy = :policy,
+            refreshFixedMinutes = :fixedMinutes
+        WHERE id = :id""",
+    )
+    suspend fun updateRefreshPolicy(
+        id: Long,
+        policy: String,
+        fixedMinutes: Int?,
     )
 
     @Query("DELETE FROM subscriptions WHERE id = :id")
@@ -384,7 +406,7 @@ interface RoutingRuleDao {
         NodePreferenceEntity::class,
         RoutingRuleEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -452,6 +474,25 @@ abstract class AppDatabase : RoomDatabase() {
                             `isEnabled` INTEGER NOT NULL DEFAULT 1,
                             `customName` TEXT,
                             `isHidden` INTEGER NOT NULL DEFAULT 0)""",
+                    )
+                }
+            }
+
+        /**
+         * v7: per-subscription auto-refresh policy. Existing rows get the
+         * "inherit" default — identical to the global-int behavior they
+         * already had — and no fixed minutes.
+         */
+        val MIGRATION_6_7 =
+            object : androidx.room.migration.Migration(6, 7) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "ALTER TABLE subscriptions " +
+                            "ADD COLUMN refreshPolicy TEXT NOT NULL DEFAULT 'inherit'",
+                    )
+                    db.execSQL(
+                        "ALTER TABLE subscriptions " +
+                            "ADD COLUMN refreshFixedMinutes INTEGER",
                     )
                 }
             }

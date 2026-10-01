@@ -23,6 +23,8 @@ data class SubscriptionProfile(
     val updateAlways: Boolean,
     /** User opted this source into cleartext HTTP fetches. */
     val allowInsecureHttp: Boolean,
+    /** Per-subscription auto-refresh policy (decoded from the stored token). */
+    val refreshPolicy: RefreshPolicy,
 )
 
 /** `subscription-userinfo` header data (bytes; expire is epoch seconds). */

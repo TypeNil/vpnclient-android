@@ -18,7 +18,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -35,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowRadioButton as RadioButton
 import dev.typenil.vpnclient.ui.theme.AfterglowSheet
 import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
@@ -56,11 +61,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -70,7 +77,9 @@ import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor.ExtractedImport
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
+import dev.typenil.vpnclient.core.subscription.resolveRefreshIntervalMinutes
 import dev.typenil.vpnclient.ui.common.DetailRow
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatDate
@@ -100,6 +109,7 @@ fun SubscriptionsScreen(
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val globalAutoRefresh by viewModel.globalAutoRefreshMinutes.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     // Dialog fields are hoisted, not keyed to the prefill: a QR result must
@@ -248,11 +258,13 @@ fun SubscriptionsScreen(
             nodeCount = ui.nodeCounts[profile.id] ?: 0,
             manualNodes = ui.manualNodes,
             refreshing = profile.id in ui.refreshingIds,
+            globalAutoRefreshMinutes = globalAutoRefresh,
             onDismiss = { detailId = null },
             onToggle = { enabled -> viewModel.setEnabled(profile.id, enabled) },
             onRefresh = { viewModel.refresh(profile.id) },
             onRename = { name -> viewModel.rename(profile.id, name) },
             onEditUrl = { url -> viewModel.editUrl(profile.id, url) },
+            onPolicyChange = { policy -> viewModel.setRefreshPolicy(profile.id, policy) },
             onRemoveNode = viewModel::removeManualNode,
             onDelete = {
                 detailId = null
@@ -371,7 +383,12 @@ private fun SubscriptionCard(
                     nodeCount,
                     formatRelativeTime(profile.lastUpdatedAt),
                 ) +
-                    (if (profile.updateAlways) {
+                    // Suppressed when the row can't actually launch-refresh:
+                    // disabled subscription or Disabled refresh policy.
+                    (if (profile.updateAlways &&
+                        profile.enabled &&
+                        profile.refreshPolicy != RefreshPolicy.Disabled
+                    ) {
                         stringResource(R.string.subs_card_updates_on_launch)
                     } else {
                         ""
@@ -564,16 +581,19 @@ private fun SubscriptionDetailSheet(
     nodeCount: Int,
     manualNodes: List<NodeEntity>,
     refreshing: Boolean,
+    globalAutoRefreshMinutes: Int,
     onDismiss: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onRename: (String) -> Unit,
     onEditUrl: (String) -> Unit,
+    onPolicyChange: (RefreshPolicy) -> Unit,
     onRemoveNode: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
     var editingUrl by remember { mutableStateOf(false) }
+    var showPolicyDialog by remember { mutableStateOf(false) }
     var nameField by rememberSaveable(profile.id) { mutableStateOf(profile.name) }
     var urlField by rememberSaveable(profile.id) { mutableStateOf("") }
     val manual = SubscriptionRepository.isManualSubscription(profile.url)
@@ -626,6 +646,8 @@ private fun SubscriptionDetailSheet(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 )
             }
+            // What the provider PUBLISHED — a raw recommendation. What the
+            // app actually schedules is the policy row right below.
             DetailRow(
                 label = stringResource(R.string.subs_update_interval),
                 value = when {
@@ -640,6 +662,29 @@ private fun SubscriptionDetailSheet(
                 },
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
+            // Per-subscription auto-refresh policy — the manual row is
+            // local-only and never scheduled, so it hides the control.
+            if (!manual) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showPolicyDialog = true }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.subs_policy_title),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            refreshPolicySummary(profile, globalAutoRefreshMinutes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             profile.announce?.let {
                 DetailRow(
                     label = stringResource(R.string.subs_announcement),
@@ -838,4 +883,171 @@ private fun SubscriptionDetailSheet(
             }
         }
     }
+
+    if (showPolicyDialog) {
+        RefreshPolicyDialog(
+            profile = profile,
+            onDismiss = { showPolicyDialog = false },
+            onSelect = { policy ->
+                showPolicyDialog = false
+                onPolicyChange(policy)
+            },
+        )
+    }
+}
+
+/** Short summary under the policy row: mode label + what it resolves to
+ *  right now (global value, provider hint, enabled flag included). */
+@Composable
+private fun refreshPolicySummary(
+    profile: SubscriptionProfile,
+    globalAutoRefreshMinutes: Int,
+): String {
+    val label =
+        when (profile.refreshPolicy) {
+            RefreshPolicy.InheritGlobal -> stringResource(R.string.subs_policy_inherit)
+            RefreshPolicy.Provider -> stringResource(R.string.subs_policy_provider)
+            RefreshPolicy.Disabled -> stringResource(R.string.subs_policy_disabled)
+            is RefreshPolicy.Fixed -> stringResource(R.string.subs_policy_fixed)
+        }
+    val effective =
+        resolveRefreshIntervalMinutes(
+            profile.refreshPolicy,
+            globalAutoRefreshMinutes,
+            profile.updateIntervalMinutes,
+            profile.enabled,
+        )
+    val effectiveText =
+        effective?.let { stringResource(R.string.subs_interval_minutes, it) }
+            ?: stringResource(R.string.subs_interval_manual)
+    return "$label · $effectiveText"
+}
+
+private enum class PolicyMode { Inherit, Provider, Disabled, Fixed }
+
+private fun policyMode(policy: RefreshPolicy): PolicyMode =
+    when (policy) {
+        RefreshPolicy.InheritGlobal -> PolicyMode.Inherit
+        RefreshPolicy.Provider -> PolicyMode.Provider
+        RefreshPolicy.Disabled -> PolicyMode.Disabled
+        is RefreshPolicy.Fixed -> PolicyMode.Fixed
+    }
+
+/**
+ * Per-subscription auto-refresh policy picker. Radio rows for the four
+ * modes; [PolicyMode.Fixed] reveals a minutes field that rejects anything
+ * below the platform floor — Save stays disabled instead of silently
+ * clamping the user's number. Save applies through the repository; a
+ * rejected write surfaces as the screen's snackbar, not a quiet success.
+ */
+@Composable
+private fun RefreshPolicyDialog(
+    profile: SubscriptionProfile,
+    onDismiss: () -> Unit,
+    onSelect: (RefreshPolicy) -> Unit,
+) {
+    var mode by remember { mutableStateOf(policyMode(profile.refreshPolicy)) }
+    var fixedText by remember {
+        mutableStateOf((profile.refreshPolicy as? RefreshPolicy.Fixed)?.minutes?.toString() ?: "")
+    }
+    val fixedMinutes = fixedText.toIntOrNull()
+    // toIntOrNull rejects overflow; <15 is below the platform floor.
+    val fixedValid = fixedMinutes != null && fixedMinutes >= RefreshPolicy.MIN_FIXED_MINUTES
+    val focusManager = LocalFocusManager.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.subs_policy_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Column(Modifier.selectableGroup()) {
+                    listOf(
+                        PolicyMode.Inherit to R.string.subs_policy_inherit,
+                        PolicyMode.Provider to R.string.subs_policy_provider,
+                        PolicyMode.Disabled to R.string.subs_policy_disabled,
+                        PolicyMode.Fixed to R.string.subs_policy_fixed,
+                    ).forEach { (option, labelRes) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = option == mode,
+                                    onClick = { mode = option },
+                                    role = Role.RadioButton,
+                                ).padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = option == mode, onClick = null)
+                            Text(
+                                stringResource(labelRes),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
+                if (mode == PolicyMode.Fixed) {
+                    OutlinedTextField(
+                        value = fixedText,
+                        onValueChange = { input ->
+                            fixedText = input.filter { it.isDigit() }
+                        },
+                        label = { Text(stringResource(R.string.settings_interval_label)) },
+                        singleLine = true,
+                        isError = fixedText.isNotEmpty() && !fixedValid,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardActions =
+                            KeyboardActions(onDone = { focusManager.clearFocus() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    )
+                    if (fixedText.isNotEmpty() && !fixedValid) {
+                        Text(
+                            text = stringResource(R.string.subs_policy_fixed_invalid),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        when {
+                            // Provider mode without a usable hint is
+                            // manual-only — never a silent global fallback.
+                            mode == PolicyMode.Provider &&
+                                (profile.updateIntervalMinutes == null ||
+                                    profile.updateIntervalMinutes <= 0) ->
+                                R.string.subs_policy_provider_no_hint
+                            mode == PolicyMode.Disabled ->
+                                R.string.subs_policy_disabled_note
+                            else -> R.string.subs_policy_periodic_note
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSelect(
+                        when (mode) {
+                            PolicyMode.Inherit -> RefreshPolicy.InheritGlobal
+                            PolicyMode.Provider -> RefreshPolicy.Provider
+                            PolicyMode.Disabled -> RefreshPolicy.Disabled
+                            PolicyMode.Fixed -> RefreshPolicy.Fixed(fixedMinutes!!)
+                        },
+                    )
+                },
+                enabled = mode != PolicyMode.Fixed || fixedValid,
+            ) {
+                Text(stringResource(R.string.subs_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
+    )
 }

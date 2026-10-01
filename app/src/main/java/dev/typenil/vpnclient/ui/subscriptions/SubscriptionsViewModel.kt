@@ -6,11 +6,14 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
+import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.ui.common.UserMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +47,7 @@ class SubscriptionsViewModel
     @Inject
     constructor(
         private val repository: SubscriptionRepository,
+        private val settings: SubscriptionSettings,
         nodeDao: NodeDao,
     ) : ViewModel() {
         private val pendingMessage = MutableStateFlow<PendingMessage?>(null)
@@ -70,6 +74,12 @@ class SubscriptionsViewModel
                 started = SharingStarted.WhileSubscribed(5_000),
                 initialValue = SubscriptionsUiState(),
             )
+
+        /** App-wide auto-refresh value — the detail sheet shows it so an
+         *  inherited policy can display what it currently resolves to. */
+        val globalAutoRefreshMinutes: StateFlow<Int> =
+            settings.autoRefreshMinutes
+                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
         /** Queue a snackbar message; a newer failure replaces an unshown one.
          *  IDs come from a monotonic counter — a cleared message can't reuse a
@@ -206,6 +216,9 @@ class SubscriptionsViewModel
             viewModelScope.launch {
                 runCatching { repository.setEnabled(id, enabled) }
                     .onFailure {
+                        // A cancelled coroutine propagates — it must not
+                        // surface a fake "failed" snackbar.
+                        if (it is CancellationException) throw it
                         postMessage(R.string.subs_update_failed, "Failed to update subscription")
                     }
             }
@@ -217,7 +230,10 @@ class SubscriptionsViewModel
         ) {
             viewModelScope.launch {
                 runCatching { repository.rename(id, name) }
-                    .onFailure { postMessage(R.string.subs_rename_failed, "Rename failed") }
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        postMessage(R.string.subs_rename_failed, "Rename failed")
+                    }
             }
         }
 
@@ -251,6 +267,25 @@ class SubscriptionsViewModel
         }
 
         /**
+         * Persist a per-subscription auto-refresh policy. The repository
+         * write+reschedule runs under the row's own lock; a failure surfaces
+         * as a snackbar — the picker never looks like it saved when it
+         * didn't.
+         */
+        fun setRefreshPolicy(
+            id: Long,
+            policy: RefreshPolicy,
+        ) {
+            viewModelScope.launch {
+                runCatching { repository.setRefreshPolicy(id, policy) }
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        postMessage(R.string.subs_update_failed, "Failed to update subscription")
+                    }
+            }
+        }
+
+        /**
          * Delete one manually imported node — the only way to undo a bad paste,
          * since the manual row has no refresh to replace its nodes. The row
          * itself goes with its last node.
@@ -259,6 +294,7 @@ class SubscriptionsViewModel
             viewModelScope.launch {
                 runCatching { repository.removeManualNode(nodeId) }
                     .onFailure {
+                        if (it is CancellationException) throw it
                         postMessage(R.string.subs_remove_node_failed, "Failed to remove server")
                     }
             }

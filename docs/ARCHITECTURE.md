@@ -39,13 +39,44 @@ A failed refresh never touches stored nodes (last-known-good).
   backoff; `Result.retry` only on transient errors (`Network`/`Timeout`),
   bounded at 3 attempts — permanent failures are already recorded by the
   repository's `lastError` metadata.
-- Interval precedence: user override (Settings) > `profile-update-interval`
-  header (hours → minutes) > manual-only. Floored at the 15-min platform
-  minimum. `autoRefreshMinutes`: `-1` = off, `0` = provider, `>0` = override.
-- Re-registration: after every successful refresh (provider hint may change),
-  on `remove()` (cancel), and on app start — `VpnClientApp` collects
-  `autoRefreshMinutes` and reconciles all jobs, so a settings change
-  re-registers everything.
+- Per-subscription policy (Room v7 columns `refreshPolicy` +
+  `refreshFixedMinutes`, decoded via `RefreshPolicy.fromStorage`): `inherit`
+  follows the app-wide `autoRefreshMinutes` — the legacy semantics (`-1` =
+  off, `0` = provider, `>0` = fixed override); `provider` follows only
+  `profile-update-interval` (hours → minutes) — no usable hint means
+  manual-only, never a global fallback; `disabled` suppresses the periodic
+  job AND the `update-always` launch refresh (manual refresh still works);
+  `fixed` uses its own minutes. Invalid stored values decode to `disabled`.
+  Explicit `provider`/`fixed` are unaffected by the global off switch;
+  resolved intervals floor at the 15-min platform minimum, and the UI
+  rejects fixed input below it rather than clamping. A disabled
+  subscription (`enabled = false`) and the manual sentinel never schedule.
+- `SubscriptionRefreshWorker` calls `refreshPeriodic(id)`, not the
+  unconditional `refresh(id)`: the run re-resolves the same interval
+  function on the CURRENT row under the per-subscription lock before
+  fetching — a job that outlived a policy flip to `disabled`/`enabled=false`
+  or a global off reports `Superseded` (skipped, job kept) and a missing
+  row reports `NotFound` (the worker cancels its own job). The gate re-runs
+  inside the commit lock too, so a candidate fetched before a mid-flight
+  `disabled` write is dropped instead of committed. Manual refresh stays
+  unconditional end to end. The interval resolver
+  (`resolveRefreshIntervalMinutes`) lives next to the
+  `SubscriptionRefreshScheduler` contract in `core.subscription`, shared by
+  the scheduler, the gate, and the UI preview — one semantics source.
+- Re-registration: after every successful refresh (provider hint may
+  change), on policy/enabled edits, on `remove()` (cancel), and on app
+  start — `VpnClientApp` collects `autoRefreshMinutes`
+  (`distinctUntilChanged`), reconciles every row until the startup pass
+  reports complete, then only inheriting rows on later emissions (explicit
+  policies can't observe the global value). Per-row/pruning failures make
+  the pass incomplete; the next distinct global-interval emission retries
+  the full startup pass, without a timer retry. All rescheduling goes through
+  the repository's per-subscription lock and re-reads the row + settings, so
+  a stale entity list or in-flight refresh can't overwrite a newer override.
+  Orphan pruning queries work candidates before checking each current row's
+  existence, rather than using the earlier subscription-list snapshot.
+  Completion describes submission/query success, not acknowledgement of
+  asynchronous WorkManager enqueue/cancel operations.
 - The `SubscriptionRefreshScheduler` contract lives in `core.subscription`
   (JVM-testable); `WorkManagerRefreshScheduler`/`SubscriptionRefreshWorker`
   live in `data.work` and reach the repository via a Hilt `EntryPoint`.

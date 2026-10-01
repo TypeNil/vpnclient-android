@@ -56,6 +56,7 @@ object AppModule {
                 AppDatabase.MIGRATION_3_4,
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
             )
             // Last resort only: every version jump must ship a real migration
             // (schema JSONs are committed for exactly this reason). Destructive

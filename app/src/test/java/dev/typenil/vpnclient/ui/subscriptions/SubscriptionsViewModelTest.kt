@@ -12,12 +12,14 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.subscription.UriListParser
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
 import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -87,6 +89,16 @@ class SubscriptionsViewModelTest {
             id: Long,
             name: String,
         ) = Unit
+
+        override suspend fun updateRefreshPolicy(
+            id: Long,
+            policy: String,
+            fixedMinutes: Int?,
+        ) {
+            subs[id]?.let {
+                subs[id] = it.copy(refreshPolicy = policy, refreshFixedMinutes = fixedMinutes)
+            }
+        }
 
         override suspend fun updateUrlAndMarkSuccess(
             id: Long,
@@ -189,6 +201,9 @@ class SubscriptionsViewModelTest {
      *  instance, and the manual-node list is read through the repository. */
     private val nodeDao = FakeNodeDao()
     private val subscriptionDao = FakeSubscriptionDao()
+    /** Shared by repository and view model — one settings instance, same as
+     *  the app graph's SubscriptionSettings binding. */
+    private val settings = FakeSettings()
 
     @Before
     fun setUp() {
@@ -219,13 +234,14 @@ class SubscriptionsViewModelTest {
                         override suspend fun schedule(
                             subscriptionId: Long,
                             providerMinutes: Int?,
+                            policy: RefreshPolicy,
                             userOverrideMinutes: Int,
                             enabled: Boolean,
                         ) = Unit
 
                         override fun cancel(subscriptionId: Long) = Unit
                     },
-                settings = FakeSettings(),
+                settings = settings,
                 expiryNotifier =
                     object : SubscriptionExpiryNotifier {
                         override fun notifyExpiring(
@@ -236,7 +252,7 @@ class SubscriptionsViewModelTest {
                     },
                 uriListParser = UriListParser(),
             )
-        viewModel = SubscriptionsViewModel(repository, nodeDao)
+        viewModel = SubscriptionsViewModel(repository, settings, nodeDao)
     }
 
     @After
@@ -412,7 +428,7 @@ class SubscriptionsViewModelTest {
             val nodeDao = FakeNodeDao()
             // Rebuild a VM whose DAO we can inspect.
             val repo = newRepository(nodeDao)
-            viewModel = SubscriptionsViewModel(repo, nodeDao)
+            viewModel = SubscriptionsViewModel(repo, FakeSettings(), nodeDao)
 
             viewModel.add(
                 "vless://11111111-1111-1111-1111-111111111111@a.example.com:443" +
@@ -437,7 +453,7 @@ class SubscriptionsViewModelTest {
         testScope.runTest {
             collectUi()
             val nodeDao = FakeNodeDao()
-            viewModel = SubscriptionsViewModel(newRepository(nodeDao), nodeDao)
+            viewModel = SubscriptionsViewModel(newRepository(nodeDao), FakeSettings(), nodeDao)
 
             // A http URL (not https) hits InsecureTransport — proving it took the
             // add() path, not importShareLink (which would fail differently).
@@ -452,9 +468,24 @@ class SubscriptionsViewModelTest {
             assertTrue(nodeDao.nodes.isEmpty())
         }
 
-    private fun newRepository(nodeDao: FakeNodeDao): SubscriptionRepository =
+    private fun newRepository(
+        nodeDao: FakeNodeDao,
+        subscriptionDao: SubscriptionDao = FakeSubscriptionDao(),
+        scheduler: SubscriptionRefreshScheduler =
+            object : SubscriptionRefreshScheduler {
+                override suspend fun schedule(
+                    subscriptionId: Long,
+                    providerMinutes: Int?,
+                    policy: RefreshPolicy,
+                    userOverrideMinutes: Int,
+                    enabled: Boolean,
+                ) = Unit
+
+                override fun cancel(subscriptionId: Long) = Unit
+            },
+    ): SubscriptionRepository =
         SubscriptionRepository(
-            subscriptionDao = FakeSubscriptionDao(),
+            subscriptionDao = subscriptionDao,
             nodeDao = nodeDao,
             nodePreferenceDao = FakeNodePreferenceDao(),
             fetcher = SubscriptionFetcher(OkHttpClient()),
@@ -473,17 +504,7 @@ class SubscriptionsViewModelTest {
                 object : DbTransactionRunner {
                     override suspend fun <T> run(block: suspend () -> T): T = block()
                 },
-            scheduler =
-                object : SubscriptionRefreshScheduler {
-                    override suspend fun schedule(
-                        subscriptionId: Long,
-                        providerMinutes: Int?,
-                        userOverrideMinutes: Int,
-                        enabled: Boolean,
-                    ) = Unit
-
-                    override fun cancel(subscriptionId: Long) = Unit
-                },
+            scheduler = scheduler,
             settings = FakeSettings(),
             expiryNotifier =
                 object : SubscriptionExpiryNotifier {
@@ -495,4 +516,109 @@ class SubscriptionsViewModelTest {
                 },
             uriListParser = UriListParser(),
         )
+
+    @Test
+    fun `a rejected policy save surfaces a message instead of looking saved`() =
+        testScope.runTest {
+            collectUi()
+            val dao = FakeSubscriptionDao()
+            dao.subs[1] =
+                SubscriptionEntity(
+                    id = 1,
+                    name = "sub",
+                    url = "https://sub.example.com/feed",
+                    createdAtEpochMs = 1,
+                    lastUpdatedAtEpochMs = null,
+                    lastAttemptAtEpochMs = null,
+                    lastError = null,
+                    enabled = true,
+                    userInfoJson = null,
+                    supportUrl = null,
+                    updateIntervalMinutes = null,
+                    announce = null,
+                    fallbackUrl = null,
+                )
+            val throwingScheduler =
+                object : SubscriptionRefreshScheduler {
+                    override suspend fun schedule(
+                        subscriptionId: Long,
+                        providerMinutes: Int?,
+                        policy: RefreshPolicy,
+                        userOverrideMinutes: Int,
+                        enabled: Boolean,
+                    ) {
+                        throw IllegalStateException("workmanager down")
+                    }
+
+                    override fun cancel(subscriptionId: Long) = Unit
+                }
+            viewModel =
+                SubscriptionsViewModel(
+                    newRepository(nodeDao, dao, throwingScheduler),
+                    FakeSettings(),
+                    nodeDao,
+                )
+
+            viewModel.setRefreshPolicy(1, RefreshPolicy.Fixed(30))
+            advanceUntilIdle()
+
+            // The policy write landed — but the reschedule failed, and the UI
+            // must say so instead of letting the picker look like it saved.
+            assertEquals("fixed", (dao.subs[1] as SubscriptionEntity).refreshPolicy)
+            assertEquals(
+                "Failed to update subscription",
+                viewModel.uiState.value.pendingMessage
+                    ?.body?.fallback,
+            )
+        }
+
+    @Test
+    fun `a cancelled setter propagates without a fake failure snackbar`() =
+        testScope.runTest {
+            collectUi()
+            val dao = FakeSubscriptionDao()
+            dao.subs[1] =
+                SubscriptionEntity(
+                    id = 1,
+                    name = "sub",
+                    url = "https://sub.example.com/feed",
+                    createdAtEpochMs = 1,
+                    lastUpdatedAtEpochMs = null,
+                    lastAttemptAtEpochMs = null,
+                    lastError = null,
+                    enabled = true,
+                    userInfoJson = null,
+                    supportUrl = null,
+                    updateIntervalMinutes = null,
+                    announce = null,
+                    fallbackUrl = null,
+                )
+            // The reschedule throws CancellationException — the runCatching
+            // failure path must rethrow it (cancelling the coroutine) instead
+            // of posting a "Failed to update" snackbar for a call that was
+            // never allowed to finish.
+            val cancellingScheduler =
+                object : SubscriptionRefreshScheduler {
+                    override suspend fun schedule(
+                        subscriptionId: Long,
+                        providerMinutes: Int?,
+                        policy: RefreshPolicy,
+                        userOverrideMinutes: Int,
+                        enabled: Boolean,
+                    ): Unit = throw CancellationException()
+
+                    override fun cancel(subscriptionId: Long) = Unit
+                }
+            viewModel =
+                SubscriptionsViewModel(
+                    newRepository(nodeDao, dao, cancellingScheduler),
+                    FakeSettings(),
+                    nodeDao,
+                )
+
+            viewModel.setEnabled(1, false)
+            advanceUntilIdle()
+
+            assertNull(viewModel.uiState.value.pendingMessage)
+        }
 }

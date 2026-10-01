@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import dagger.hilt.android.HiltAndroidApp
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.singbox.LibboxRuntime
-import dev.typenil.vpnclient.core.subscription.SubscriptionRefreshScheduler
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.vpn.VpnNotification
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -29,9 +28,6 @@ class VpnClientApp : Application() {
     lateinit var settings: SettingsRepository
 
     @Inject
-    lateinit var refreshScheduler: SubscriptionRefreshScheduler
-
-    @Inject
     lateinit var subscriptionRepository: SubscriptionRepository
 
     override fun onCreate() {
@@ -49,32 +45,42 @@ class VpnClientApp : Application() {
 
     /**
      * Reconcile scheduled refresh work with persisted subscriptions — covers
-     * jobs lost to a reinstall/restore, and re-registers them whenever the
-     * user override interval changes (DataStore emits on startup too).
+     * jobs lost to a reinstall/restore, and re-resolves them whenever the
+     * global override changes (DataStore emits on startup too).
+     *
+     * The startup pass touches every row; later passes mean the global value
+     * changed, which only inheriting rows can observe — explicit per-sub
+     * policies don't reference it, so they're left alone. The repository does
+     * the reconcile: every row is re-read under its per-subscription lock, so
+     * an entity snapshot can never schedule over a newer override.
+     *
+     * The full-pass flag is retained until a pass reports complete — a
+     * partial reconcile (a row that failed to reschedule, a failed orphan
+     * prune) means the NEXT emission retries a full pass instead of
+     * switching to inheriting-only on top of missing jobs. No timer retry
+     * is invented: the DataStore flow re-emits on the next settings change.
      */
     private fun reconcileRefreshJobs() {
         applicationScope.launch {
             // distinctUntilChanged: unrelated DataStore writes re-emit the
             // flow — without it every settings write re-enqueues all jobs.
+            var needsFullPass = true
             settings.autoRefreshMinutes
                 .distinctUntilChanged()
-                .collect { userOverride ->
-                    // A throw here must not kill the reconcile loop for the
-                    // rest of the process lifetime.
-                    runCatching {
-                        val subs = subscriptionDao.getAll()
-                        subs.forEach { sub ->
-                            refreshScheduler.schedule(
-                                subscriptionId = sub.id,
-                                providerMinutes = sub.updateIntervalMinutes,
-                                userOverrideMinutes = userOverride,
-                                enabled = sub.enabled,
+                .collect {
+                    try {
+                        if (subscriptionRepository.reconcileRefreshSchedules(
+                                inheritingOnly = !needsFullPass,
                             )
+                        ) {
+                            needsFullPass = false
                         }
-                        // Prune jobs whose subscription no longer exists.
-                        refreshScheduler.reconcile(subs.map { it.id }.toSet())
-                    }.onFailure {
-                        SecureLog.w("VpnClientApp", "refresh reconcile failed", it)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A failure must not kill the reconcile loop for the
+                        // rest of the process lifetime.
+                        SecureLog.w("VpnClientApp", "refresh reconcile failed", e)
                     }
                 }
         }
@@ -87,10 +93,13 @@ class VpnClientApp : Application() {
      */
     private fun refreshUpdateAlwaysSubscriptions() {
         applicationScope.launch {
+            // The filter is a cheap pre-pass only — refreshOnLaunch re-checks
+            // eligibility on the CURRENT row at fetch entry, so a subscription
+            // disabled after this snapshot can never fetch.
             subscriptionDao.getAll()
-                .filter { it.updateAlways && it.enabled }
+                .filter { it.updateAlways }
                 .forEach { sub ->
-                    runCatching { subscriptionRepository.refresh(sub.id) }
+                    runCatching { subscriptionRepository.refreshOnLaunch(sub.id) }
                         .onFailure {
                             SecureLog.w("VpnClientApp", "update-always refresh failed sub=${sub.id}")
                         }

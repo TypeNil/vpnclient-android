@@ -185,6 +185,14 @@ fun SettingsScreen(
                 onMinutes = viewModel::setAutoRefreshMinutes,
             )
         }
+        // This is the default each subscription inherits — per-subscription
+        // policies in the detail sheet can override it.
+        Text(
+            text = stringResource(R.string.settings_auto_refresh_default_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+        )
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
