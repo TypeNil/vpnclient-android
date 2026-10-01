@@ -36,12 +36,16 @@ import dagger.hilt.android.testing.HiltTestApplication
  * act. The receiver is disabled via own-UID `PackageManager` with its
  * original state durably recorded first (see [R04ReceiverIsolation]).
  *
- * Explicit uncertainty: a broadcast record already resolved AND dispatched
- * into the process before `newApplication` still delivers regardless of the
- * disable — the same loud pre-test crash. The recorded procedure therefore
- * launches the production app once after `install -r` so a pending
- * MY_PACKAGE_REPLACED is consumed in a production context (where
- * BootReceiver works) before the instrumentation process exists.
+ * Device-observed limit (OnePlus CPH2449): a broadcast record already
+ * dispatched into the starting process still delivers regardless of the
+ * disable — on this device the enabled check happens at dispatch, not at
+ * delivery, and stale BOOT_COMPLETED records were seen crashing a fresh
+ * instrumentation process with the `Hilt_BootReceiver` stack. The working
+ * procedure is retry: a crashed run leaves the receiver DISABLED plus the
+ * durable record, so the immediate identical re-run resolves broadcasts
+ * without BootReceiver at all, and `finish` then restores the recorded
+ * state. Launching the production app first does NOT reliably help — the
+ * stale record can still be waiting for the next process.
  *
  * Restoration: `finish` restores the exact recorded state and turns a
  * restore failure into a non-passing instrumentation result

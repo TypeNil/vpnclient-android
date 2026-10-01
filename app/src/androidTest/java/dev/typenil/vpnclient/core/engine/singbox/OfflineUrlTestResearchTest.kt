@@ -40,6 +40,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
+import org.junit.Assume
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -71,11 +72,13 @@ import kotlin.concurrent.thread
  * openTun call, entirely on loopback fixtures?
  *
  * Isolation contract (architect gate, supervisor-approved):
- * - Exclusive instrumentation run only: `Libbox.setup()` is process-global
- *   and this class repoints it at unique instrumentation *test-context*
- *   dirs. Do NOT run alongside RuleSetCoreValidationTest/WireGuardEndpointTest
- *   (they call LibboxRuntime.init on target-context dirs) or any VPN-path
- *   class in the same process/session.
+ * - Exclusive instrumentation run only, opt-in via `-e r04 1` — without the
+ *   argument the whole class is skipped by the Assume gate in
+ *   [setupNative] (a plain `connectedDebugAndroidTest` must never share a
+ *   process-global `Libbox.setup` with RuleSetCoreValidationTest /
+ *   WireGuardEndpointTest / any VPN-path class in the same session).
+ *   `Libbox.setup()` is process-global and this class repoints it at unique
+ *   dirs under the target app's `cacheDir`.
  * - No SingBoxEngine/ConnectionManager/VpnService/Activity/Room — raw
  *   CommandServer + CommandClient against the pinned AAR only.
  * - Synthetic config: no inbounds, one no-auth SOCKS5 outbound (loopback),
@@ -118,6 +121,9 @@ class OfflineUrlTestResearchTest {
     companion object {
         private const val TAG = "R04Research"
         private const val SOCKS_TAG = "r04-socks"
+        /** `am instrument -e` key opting into this exclusive process-global
+         *  run; absent → the whole class is skipped (see [setupNative]). */
+        private const val R04_RUN_ARG = "r04"
         private const val GROUP_TAG = "r04-auto"
         private const val PROBE_PATH = "/r04-probe"
         private const val LOOPBACK = "127.0.0.1"
@@ -281,6 +287,14 @@ class OfflineUrlTestResearchTest {
         @BeforeClass
         @JvmStatic
         fun setupNative() {
+            // Exclusivity is enforced, not just documented: without the
+            // runner arg the class skips before any process-global JNI state
+            // is touched, so suite runs stay side-effect free.
+            Assume.assumeTrue(
+                "R04 gate: exclusive run only — pass -e $R04_RUN_ARG 1",
+                "1" == InstrumentationRegistry.getArguments()
+                    .getString(R04_RUN_ARG),
+            )
             val appContext = InstrumentationRegistry.getInstrumentation().targetContext
             nativeRoot = File(
                 appContext.cacheDir,

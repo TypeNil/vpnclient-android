@@ -29,3 +29,6 @@ core-native/
 
 # Local test fixtures containing real subscription URLs — never commit
 vpnclient-test-subscriptions.txt
+
+# Pi agent session/notes (not for the repo)
+.pi/

@@ -37,11 +37,12 @@ import java.io.File
  * an existing record (a previous run died mid-isolation) instead of writing
  * a new one, and never re-enables the component mid-bootstrap.
  *
- * Explicit uncertainty: a broadcast record already *resolved* before the
- * disable could still be delivered if the platform does not re-check enabled
- * state at delivery (com.android.server.am is not verifiable from local SDK
- * sources). That failure is loud — the same pre-test crash — never silent,
- * and the record still allows exact recovery.
+ * Device-observed limit (OnePlus CPH2449): a broadcast record already
+ * dispatched into the process still delivers after this disable — enabled
+ * state was consulted at dispatch, not at delivery. That failure is loud —
+ * the same pre-test crash — never silent; the DISABLED residue plus this
+ * record make the immediate identical retry resolve-time safe, and the
+ * record still allows exact recovery.
  *
  * Errors are fixed-label only: the record's contents are never included in
  * any exception.
