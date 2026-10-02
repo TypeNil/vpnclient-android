@@ -268,6 +268,8 @@
     <string name="servers_filter_reset">Reset</string>
     <string name="servers_test_latency">Test latency</string>
     <string name="servers_latency_via_proxy">via proxy</string>
+    <string name="servers_latency_via_proxy_retained">via proxy · earlier run</string>
+    <string name="servers_latency_mixed">TCP + via proxy</string>
     <string name="servers_latency_tcp">TCP connect</string>
     <string name="servers_no_match">No servers match the current filters</string>
     <string name="servers_latency_timeout">timeout</string>

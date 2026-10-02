@@ -49,6 +49,13 @@ data class OutboundItemInfo(
     val tag: String,
     val type: String,
     val urlTestDelayMs: Int?,
+    /**
+     * Unix-epoch **seconds** of the last urltest measurement, as reported by
+     * the core. Whole-second granularity — only ever compare against a
+     * previously captured value for the same tag, never against an app
+     * clock. `0` = no recorded result.
+     */
+    val urlTestTime: Long = 0,
 )
 
 /**
@@ -141,6 +148,13 @@ interface VpnEngine {
     val stats: Flow<TrafficStats>
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>
+
+    /** Whether the engine currently *wants* status updates — false under
+     *  screen-off suppression, before [start], and after [stop]. `true`
+     *  means "not suppressed", not "channel connected": the command client
+     *  connects asynchronously and reconnects underneath, so fresh urlTest
+     *  results are never guaranteed while this reads true. */
+    val statusUpdatesEnabled: StateFlow<Boolean>
 
     /** Snapshot of live connections through the tunnel; empty while the
      *  control channel is down. Pushed on core connection events. */

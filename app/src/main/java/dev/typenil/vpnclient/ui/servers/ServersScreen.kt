@@ -168,14 +168,19 @@ fun ServersScreen(
                         Text(stringResource(R.string.servers_test_latency))
                     }
                     Text(
-                        // Name the measurement: connected → urltest through the
-                        // proxy chain; disconnected → direct TCP connect.
+                        // Name the measurement honestly: connected → live
+                        // urltest through the proxy chain; disconnected →
+                        // direct TCP, unless the badges carry retained
+                        // urltest verdicts (they must not wear the TCP label).
                         text =
                             stringResource(
-                                if (ui.connected) {
-                                    R.string.servers_latency_via_proxy
-                                } else {
-                                    R.string.servers_latency_tcp
+                                when {
+                                    ui.connected -> R.string.servers_latency_via_proxy
+                                    ui.urlTestResultsShown && ui.tcpResultsShown ->
+                                        R.string.servers_latency_mixed
+                                    ui.urlTestResultsShown ->
+                                        R.string.servers_latency_via_proxy_retained
+                                    else -> R.string.servers_latency_tcp
                                 },
                             ),
                         style = MaterialTheme.typography.labelSmall,

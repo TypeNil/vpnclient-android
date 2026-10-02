@@ -148,10 +148,13 @@ class ConnectionManagerTest {
         val closedConnectionIds = mutableListOf<String>()
         val selections = mutableListOf<Pair<String, String>>()
         var selectOutboundResult = true
+        /** Tests can flip this to emulate screen-off suppression. */
+        val statusUpdatesFlow = MutableStateFlow(true)
         override val stats: Flow<TrafficStats> get() = statsFlow
         override val events: Flow<EngineEvent> get() = eventsFlow
         override val groups: StateFlow<List<OutboundGroupInfo>> get() = groupsFlow
         override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
+        override val statusUpdatesEnabled: StateFlow<Boolean> get() = statusUpdatesFlow
         var stopCalls = 0
 
         override suspend fun validate(config: EngineConfig) = Unit

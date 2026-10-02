@@ -13,15 +13,22 @@ import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
-import dev.typenil.vpnclient.data.settings.SettingsRepository
+import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /** Nodes of one subscription, under its display name. [subscriptionName] is
@@ -81,6 +88,12 @@ data class ServersUiState(
      *  proxy); disconnected → direct TCP-connect probe. Names the
      *  measurement so the UI doesn't imply one means the other. */
     val connected: Boolean = false,
+    /** Displayed badges include retained urltest verdicts from a
+     *  connected-mode run (while disconnected) — never label them TCP. */
+    val urlTestResultsShown: Boolean = false,
+    /** Displayed badges include TCP-connect verdicts (while disconnected) —
+     *  with [urlTestResultsShown] the caption must admit both sources. */
+    val tcpResultsShown: Boolean = false,
     // ---- search / sort / filters ----
     val query: String = "",
     val sortMode: ServerSortMode = ServerSortMode.Default,
@@ -102,19 +115,28 @@ data class ServersUiState(
     val noSubscriptions: Boolean = true,
 )
 
-/** Engine-reported surface: connection state + per-outbound delays. */
+/** Engine-reported surface: connection state + per-outbound delays and the
+ *  covered tags marked by runs of the ATTACHED engine. [urlTested] is
+ *  session-scoped — a previous engine's verdicts must not mark a fresh
+ *  session's unmeasured tags (that would render as a fake timeout). */
 private data class EngineSurface(
     val connected: Boolean,
     val delays: Map<String, Int>,
+    val urlTested: Set<String>,
 )
 
-/** Direct-probe surface: per-node results + the tags a run has covered.
- *  [urlTested] tracks engine-covered tags separately so a connected-mode
- *  badge never borrows a disconnected-mode "tested" mark. */
-private data class ProbeSurface(
+/** Direct-probe surface: per-node results + the tags a run has covered,
+ *  plus retained urltest outcomes kept in their own keys so a proxy-path
+ *  measurement never masquerades as a TCP-connect one. [urlTested] tracks
+ *  engine-run terminal verdicts; [urlTestDelays] preserves their delay
+ *  values across a disconnect that empties the live group surface. Both
+ *  are RETAINED state for the disconnected surface — while connected the
+ *  badges read [UrlTestSession], scoped to the attached engine. */
+internal data class ProbeSurface(
     val delays: Map<String, Int>,
     val tested: Set<String>,
     val urlTested: Set<String> = emptySet(),
+    val urlTestDelays: Map<String, Int> = emptyMap(),
 )
 
 /** The raw inputs filtering/sorting operate on — bundled so the filter
@@ -140,15 +162,17 @@ private data class ListControls(
 class ServersViewModel
     @Inject
     constructor(
-        private val settings: SettingsRepository,
+        private val settings: SubscriptionSettings,
         private val connectionManager: ConnectionManager,
         private val nodeDao: NodeDao,
         private val nodePreferenceDao: NodePreferenceDao,
         private val latencyProbe: LatencyProbe,
         private val subscriptions: SubscriptionRepository,
     ) : ViewModel() {
-        /** Direct TCP probe results — populated when testing while disconnected. */
-        private val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
+        /** Direct TCP probe results — populated when testing while disconnected.
+         *  Internal so teardown-commit tests can observe the cancelled run's
+         *  retained verdicts after the UI surface is dead. */
+        internal val probeSurface = MutableStateFlow(ProbeSurface(emptyMap(), emptySet()))
 
         // Search text — a substring match over name/server, case-insensitive.
         private val query = MutableStateFlow("")
@@ -198,23 +222,56 @@ class ServersViewModel
                     ),
             )
 
+        /** Connected-run state valid only for the engine attach it was
+         *  captured under ([epoch] mirrors [ConnectionManager.engineEpoch]):
+         *  per-tag urlTestTime floors — a covered tag's engine delay may only
+         *  display once its urlTestTime is strictly newer — plus the tags this
+         *  session's runs have marked tested. A reconnect or in-session
+         *  rebuild attaches a fresh engine whose measurement history starts
+         *  empty; state stamped with an older epoch is dead, never merged. */
+        private data class UrlTestSession(
+            val epoch: Long,
+            val floors: Map<String, Long> = emptyMap(),
+            val tested: Set<String> = emptySet(),
+        )
+
+        private val urlTestSession = MutableStateFlow(UrlTestSession(epoch = -1L))
+
         private val engineSurface: StateFlow<EngineSurface> =
             combine(
                 connectionManager.state,
                 connectionManager.groups,
-            ) { state, groups ->
+                connectionManager.engineEpoch,
+                urlTestSession,
+            ) { state, groups, epoch, session ->
+                val current = session.epoch == epoch
                 EngineSurface(
                     connected = state is VpnConnectionState.Connected,
+                    // Connected badges reflect urltest-group members only — a
+                    // selector group's own items are not urltest coverage and
+                    // their delay values must not surface as measurements.
                     delays =
                         groups
-                            .flatMap { it.items }
-                            .mapNotNull { item -> item.urlTestDelayMs?.let { item.tag to it } }
-                            .toMap(),
+                            .asSequence()
+                            .filter { it.type == URLTEST_GROUP_TYPE }
+                            .flatMap { it.items.asSequence() }
+                            .mapNotNull { item ->
+                                val delay = item.urlTestDelayMs
+                                val floor = if (current) session.floors[item.tag] else null
+                                if (delay != null && delay > 0 &&
+                                    (floor == null || item.urlTestTime > floor)
+                                ) {
+                                    item.tag to delay
+                                } else {
+                                    null
+                                }
+                            }.toMap(),
+                    urlTested = if (current) session.tested else emptySet(),
                 )
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = EngineSurface(connected = false, delays = emptyMap()),
+                initialValue = EngineSurface(connected = false, delays = emptyMap(), urlTested = emptySet()),
             )
 
         private val nodeSurface: StateFlow<NodeSurface> =
@@ -253,11 +310,24 @@ class ServersViewModel
                 controls,
             ) { surface, selectedId, engine, probe, ctl ->
                 val names = surface.subscriptionNames
-                // Connected: only engine urltest numbers — a stale direct-probe
-                // value must not be presented as a "via proxy" measurement.
-                // Disconnected: direct TCP probes are the only source.
-                val delays = if (engine.connected) engine.delays else probe.delays
-                val testedIds = if (engine.connected) probe.urlTested else probe.tested
+                // Connected: only live engine urltest numbers — a stale
+                // direct-probe value must not pose as a "via proxy" reading.
+                // Disconnected: TCP results plus retained urltest verdicts
+                // (kept in their own keys — disjoint by construction).
+                val delays =
+                    if (engine.connected) {
+                        engine.delays
+                    } else {
+                        probe.delays + probe.urlTestDelays
+                    }
+                val testedIds =
+                    if (engine.connected) {
+                        // Session-scoped marks only — retained verdicts from
+                        // a dead engine would read as fake timeouts here.
+                        engine.urlTested
+                    } else {
+                        probe.tested + probe.urlTested
+                    }
 
                 val trimmedQuery = ctl.query.trim()
                 val searching = trimmedQuery.isNotEmpty()
@@ -377,6 +447,14 @@ class ServersViewModel
                     protocolOptions = protocolOptions,
                     showHeaders = !flat,
                     noSubscriptions = surface.nodes.isEmpty(),
+                    // Caption provenance: per-source flags over the
+                    // displayed nodes — TCP-only, proxy-retained-only, or
+                    // mixed each get honest wording; never claim one
+                    // source for rows measured by the other.
+                    urlTestResultsShown =
+                        !engine.connected && sorted.any { it.id in probe.urlTested },
+                    tcpResultsShown =
+                        !engine.connected && sorted.any { it.id in probe.tested },
                 )
             }.stateIn(
                 scope = viewModelScope,
@@ -477,28 +555,19 @@ class ServersViewModel
         /**
          * Latency probe. Connected: the engine's urltest measures each node
          * through its own outbound over the real underlay (our sockets never
-         * enter the TUN). Disconnected: a direct TCP-connect probe per node —
-         * same underlay, without needing a running core.
+         * enter the TUN) — the run covers `urltest` group members only and
+         * waits, bounded, for fresh terminal results. Disconnected: a direct
+         * TCP-connect probe per node — same underlay, without a running core.
+         * A second press while a run is active is ignored — no parallel runs.
          */
         fun testLatency() {
-            if (_testing.value) return
+            // Claim the run synchronously — two presses before the launched
+            // coroutine is scheduled must not enqueue parallel runs.
+            if (!_testing.compareAndSet(false, true)) return
             viewModelScope.launch {
-                _testing.value = true
                 try {
                     if (connectionManager.state.value is VpnConnectionState.Connected) {
-                        val groups = connectionManager.groups.value
-                        groups.forEach { connectionManager.urlTest(it.tag) }
-                        val covered = groups.flatMap { g -> g.items.map { item -> item.tag } }
-                        // Mark covered tags now — a node that stays without a
-                        // delay after the run shows "timeout" instead of "—".
-                        // Drop their stale direct-probe delays too: the badge
-                        probeSurface.update {
-                            it.copy(
-                                delays = it.delays - covered,
-                                tested = it.tested + covered,
-                                urlTested = it.urlTested + covered,
-                            )
-                        }
+                        runUrlTest()
                     } else {
                         val nodes = nodeDao.getEnabled()
                         coroutineScope {
@@ -520,6 +589,11 @@ class ServersViewModel
                                                     surface.delays - node.id
                                                 },
                                             tested = surface.tested + node.id,
+                                            // A fresh direct measurement
+                                            // supersedes a retained urltest
+                                            // verdict for this tag.
+                                            urlTested = surface.urlTested - node.id,
+                                            urlTestDelays = surface.urlTestDelays - node.id,
                                         )
                                     }
                                 }
@@ -532,10 +606,213 @@ class ServersViewModel
             }
         }
 
+        /**
+         * One bounded urlTest run over the engine's `urltest` groups.
+         *
+         * Freshness uses per-tag [OutboundItemInfo.urlTestTime] baselines
+         * captured *before* dispatch — never an app clock (libbox reports
+         * whole seconds). Terminal per covered tag:
+         * - success — `urlTestDelayMs > 0 && urlTestTime > baseline`;
+         * - failure — `baseline > 0 && urlTestTime == 0` (the core cleared a
+         *   recorded result = probe failed);
+         * - `baseline == 0 && urlTestTime == 0` stays ambiguous (never
+         *   measured vs failed-without-mark) and rides out the bound.
+         *
+         * Cancellation — any non-Connected state, status-channel suppression
+         * (screen off), or ViewModel teardown — ends the wait immediately:
+         * covered tags with no recorded terminal result revert to untested
+         * ("—"), never "timeout"; results that did arrive are kept. A bound
+         * hit while still Connected marks only the still-pending tags
+         * "timeout".
+         */
+        private suspend fun runUrlTest() {
+            val snapshot = connectionManager.groups.value
+            // tag → urlTestTime baseline; only `urltest` group members are
+            // covered — selector groups and non-member nodes stay "—".
+            val baseline: Map<String, Long> =
+                snapshot.asSequence()
+                    .filter { it.type == URLTEST_GROUP_TYPE }
+                    .flatMap { it.items.asSequence() }
+                    .associate { it.tag to it.urlTestTime }
+            if (baseline.isEmpty()) return
+
+            // The engine attach this run belongs to — floors and verdict
+            // marks are scoped to its measurement history; a mid-run
+            // reconnect must not let this run write into the next session.
+            val epoch = connectionManager.engineEpoch.value
+
+            // Recorded per emission — a disconnect empties the group surface,
+            // so terminal results must be committed as they arrive or a
+            // cancelled run would lose them (and report fake timeouts).
+            val succeeded = mutableMapOf<String, Int>()
+            val failed = mutableSetOf<String>()
+
+            fun observe(groups: List<OutboundGroupInfo>) {
+                for (group in groups) {
+                    if (group.type != URLTEST_GROUP_TYPE) continue
+                    for (item in group.items) {
+                        val tag = item.tag
+                        val base = baseline[tag] ?: continue
+                        if (tag in succeeded || tag in failed) continue
+                        val delay = item.urlTestDelayMs
+                        when {
+                            delay != null && delay > 0 && item.urlTestTime > base ->
+                                succeeded[tag] = delay
+
+                            base > 0L && item.urlTestTime == 0L -> failed += tag
+                            // base == 0 && time == 0 stays pending —
+                            // never-measured and failed-silently are
+                            // indistinguishable at second granularity.
+                        }
+                    }
+                }
+            }
+
+            // Stale values and verdicts for covered tags are invalid the
+            // moment a proxy-path run covers them — clear now; terminal
+            // outcomes re-mark their own tags at commit. The session floor
+            // keeps the connected surface honest the same way: a pre-run
+            // engine delay must not render as this run's result. A re-run
+            // inside one session keeps marks for tags it doesn't cover.
+            urlTestSession.update { session ->
+                UrlTestSession(
+                    epoch = epoch,
+                    floors = baseline,
+                    tested =
+                        if (session.epoch == epoch) {
+                            session.tested - baseline.keys
+                        } else {
+                            emptySet()
+                        },
+                )
+            }
+            probeSurface.update {
+                it.copy(
+                    delays = it.delays - baseline.keys,
+                    tested = it.tested - baseline.keys,
+                    urlTested = it.urlTested - baseline.keys,
+                    urlTestDelays = it.urlTestDelays - baseline.keys,
+                )
+            }
+
+            var cancelled = false
+            try {
+                // The bound covers dispatch + wait. `subscribed` is a real
+                // readiness barrier — dispatch only starts after the watcher
+                // has consumed its first combined frame, so a synchronous
+                // result push (or a groups-clearing disconnect) inside the
+                // first urlTest call is still observed. Dispatch is a
+                // separate child: when the watcher lands terminal/cancel the
+                // child is cancelled immediately — a hanging dispatch call
+                // can't stretch the run to the bound.
+                val frame =
+                    withTimeoutOrNull(URLTEST_RUN_TIMEOUT_MS) {
+                        coroutineScope {
+                            val subscribed = CompletableDeferred<Unit>()
+                            val watcher =
+                                async {
+                                    combine(
+                                        connectionManager.state,
+                                        connectionManager.statusUpdatesEnabled,
+                                        connectionManager.groups,
+                                    ) { state, updatesEnabled, groups ->
+                                        Triple(state, updatesEnabled, groups)
+                                    }.onEach {
+                                        observe(it.third)
+                                        subscribed.complete(Unit)
+                                    }.first { (state, updatesEnabled, _) ->
+                                        state !is VpnConnectionState.Connected ||
+                                            !updatesEnabled ||
+                                            succeeded.size + failed.size == baseline.size
+                                    }
+                                }
+                            val dispatch =
+                                async {
+                                    subscribed.await()
+                                    for (group in snapshot) {
+                                        if (group.type != URLTEST_GROUP_TYPE) continue
+                                        connectionManager.urlTest(group.tag)
+                                    }
+                                }
+                            val f = watcher.await()
+                            // Verdict decided — any in-flight dispatch is
+                            // pointless now; cancel it rather than waiting.
+                            dispatch.cancel()
+                            f
+                        }
+                    }
+                // Cancel semantics latch from the terminating frame — a fast
+                // reconnect must not flip an observed cancel back into a
+                // "timeout". The live reread can only ADD cancellation (a
+                // trigger racing the bound), never remove a latched one.
+                cancelled =
+                    (frame != null &&
+                        (frame.first !is VpnConnectionState.Connected || !frame.second)) ||
+                        connectionManager.state.value !is VpnConnectionState.Connected ||
+                        !connectionManager.statusUpdatesEnabled.value
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            } finally {
+                // Non-suspending commits — run even while the scope dies.
+                // Session marks only land if this run's engine is still the
+                // attached one; a newer attach makes the whole bucket dead.
+                urlTestSession.update { session ->
+                    if (session.epoch == epoch) {
+                        var tested = session.tested
+                        for (tag in baseline.keys) {
+                            if (tag in succeeded || tag in failed || !cancelled) {
+                                tested += tag
+                            } else {
+                                tested -= tag
+                            }
+                        }
+                        session.copy(tested = tested)
+                    } else {
+                        session
+                    }
+                }
+                // Terminal outcomes land on the retained urltest surface
+                // (kept across a disconnect that empties live groups); a
+                // cancelled run's unmeasured tags revert to untested — "—",
+                // never a fake "timeout".
+                probeSurface.update { surface ->
+                    var urlTested = surface.urlTested
+                    var urlTestDelays = surface.urlTestDelays
+                    for (tag in baseline.keys) {
+                        when {
+                            tag in succeeded -> {
+                                urlTestDelays = urlTestDelays + (tag to succeeded.getValue(tag))
+                                urlTested = urlTested + tag
+                            }
+                            tag in failed || !cancelled -> {
+                                urlTested = urlTested + tag
+                            }
+                            else -> {
+                                urlTested = urlTested - tag
+                                urlTestDelays = urlTestDelays - tag
+                            }
+                        }
+                    }
+                    surface.copy(urlTested = urlTested, urlTestDelays = urlTestDelays)
+                }
+            }
+        }
+
         private val _testing = MutableStateFlow(false)
 
         /** True while a latency probe is in flight — drives the button spinner. */
         val testing: StateFlow<Boolean> = _testing
+
+        companion object {
+            /** sing-box outbound group type that performs urltest measurement. */
+            internal const val URLTEST_GROUP_TYPE = "urltest"
+
+            /** Bound on dispatch + wait for one urlTest run — the native probe
+             *  horizon. Nodes still non-terminal at the bound are the only
+             *  ones that get marked "timeout". */
+            internal const val URLTEST_RUN_TIMEOUT_MS = 15_000L
+        }
     }
 
 /** Display label for a stored protocol tag — raw value as fallback. */

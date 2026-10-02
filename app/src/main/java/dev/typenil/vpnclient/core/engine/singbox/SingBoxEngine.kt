@@ -132,10 +132,16 @@ class SingBoxEngine(
     private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
     private val _connections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
 
+    /** Single source of truth for screen-off suppression — the flag the
+     *  client lifecycle checks and the surface the contract publishes.
+     *  Written under [clientMutex]; `.value` reads are lock-free. */
+    private val _statusUpdatesEnabled = MutableStateFlow(false)
+
     override val stats: Flow<TrafficStats> = _stats
     override val events: Flow<EngineEvent> = _events
     override val groups: StateFlow<List<OutboundGroupInfo>> = _groups
     override val connections: StateFlow<List<ConnectionInfo>> = _connections
+    override val statusUpdatesEnabled: StateFlow<Boolean> = _statusUpdatesEnabled
 
     override suspend fun validate(config: EngineConfig) = withContext(Dispatchers.IO) {
         try {
@@ -196,7 +202,7 @@ class SingBoxEngine(
             // start a fresh client — a restart must not inherit a channel
             // bound to the old CommandServer.
             val staleClient = clientMutex.withLock {
-                updatesWanted = true
+                _statusUpdatesEnabled.value = true
                 val stale = invalidateClientLocked()
                 connectClientLocked()
                 stale
@@ -210,11 +216,10 @@ class SingBoxEngine(
      * CommandClient lifecycle is serialized on [clientMutex]: [clientEpoch]
      * is bumped on every disable/stop so a connect() that returns after its
      * job was cancelled can never publish — the stale client is disconnected
-     * instead. [updatesWanted] is the screen-off suppression flag.
+     * instead. [_statusUpdatesEnabled] is the screen-off suppression flag.
      */
     private val clientMutex = Mutex()
     private var clientEpoch = 0L
-    private var updatesWanted = false
     private var clientJob: Job? = null
 
     /** Caller must hold [clientMutex]. Returns the dropped client so the
@@ -231,7 +236,7 @@ class SingBoxEngine(
     /** Caller must hold [clientMutex]. Idempotent: a live client or an
      *  in-flight connect loop is left alone. */
     private fun connectClientLocked() {
-        if (!updatesWanted || closing || commandServer == null) return
+        if (!_statusUpdatesEnabled.value || closing || commandServer == null) return
         // A live client or an in-flight retry loop — don't stack a second.
         if (commandClient != null || clientJob?.isActive == true) return
         val epoch = clientEpoch
@@ -258,7 +263,7 @@ class SingBoxEngine(
                     // die while we were blocked in connect().
                     val publish = try {
                         clientMutex.withLock {
-                            if (epoch == clientEpoch && updatesWanted && !closing &&
+                            if (epoch == clientEpoch && _statusUpdatesEnabled.value && !closing &&
                                 commandServer != null && !handler.dropped
                             ) {
                                 commandClient = client
@@ -267,7 +272,7 @@ class SingBoxEngine(
                                 // The channel died before it could publish —
                                 // reschedule instead of dropping the event.
                                 if (handler.dropped && epoch == clientEpoch &&
-                                    updatesWanted && !closing && commandServer != null
+                                    _statusUpdatesEnabled.value && !closing && commandServer != null
                                 ) {
                                     clientJob = null
                                     connectClientLocked()
@@ -312,7 +317,7 @@ class SingBoxEngine(
         withContext(Dispatchers.IO) {
             SecureLog.d(TAG, "status updates enabled=$enabled")
             val stale = clientMutex.withLock {
-                updatesWanted = enabled
+                _statusUpdatesEnabled.value = enabled
                 if (enabled) {
                     connectClientLocked()
                     null
@@ -332,7 +337,7 @@ class SingBoxEngine(
             closing = true
             commandServer = null
             val client = clientMutex.withLock {
-                updatesWanted = false
+                _statusUpdatesEnabled.value = false
                 invalidateClientLocked()
             }
             networkMonitor.stop()
@@ -368,6 +373,12 @@ class SingBoxEngine(
         withContext(Dispatchers.IO) {
             val client = commandClient ?: return@withContext false
             runCatching { client.selectOutbound(groupTag, outboundTag); true }
+                .onSuccess {
+                    // Success-path line: the live-switch smoke needs observable
+                    // proof; the tag goes through the Redactor like every other
+                    // engine-derived string.
+                    SecureLog.d(TAG, "selectOutbound ok -> ${Redactor.redact(outboundTag)}")
+                }
                 .onFailure { SecureLog.w(TAG, "selectOutbound failed: ${it.message}") }
                 .getOrDefault(false)
         }
@@ -486,6 +497,7 @@ class SingBoxEngine(
                             tag = item.tag,
                             type = item.type,
                             urlTestDelayMs = item.urlTestDelay.takeIf { it > 0 },
+                            urlTestTime = item.urlTestTime,
                         ),
                     )
                 }

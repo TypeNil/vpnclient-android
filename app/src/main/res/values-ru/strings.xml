@@ -268,6 +268,8 @@
     <string name="servers_filter_reset">Сбросить</string>
     <string name="servers_test_latency">Проверить задержку</string>
     <string name="servers_latency_via_proxy">через прокси</string>
+    <string name="servers_latency_via_proxy_retained">через прокси · ранее</string>
+    <string name="servers_latency_mixed">TCP + через прокси</string>
     <string name="servers_latency_tcp">TCP-подключение</string>
     <string name="servers_no_match">Нет серверов по текущим фильтрам</string>
     <string name="servers_latency_timeout">тайм-аут</string>

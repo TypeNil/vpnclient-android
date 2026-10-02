@@ -60,10 +60,15 @@ class FakeVpnEngine(
     val groupsFlow = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
     val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
 
+    /** Mirrors the real engine: false until [start], true while the status
+     *  channel is wanted, off again under [setStatusUpdatesEnabled]/[stop]. */
+    val statusUpdatesFlow = MutableStateFlow(false)
+
     override val stats: Flow<TrafficStats> get() = statsFlow
     override val events: Flow<EngineEvent> get() = eventsFlow
     override val groups: StateFlow<List<OutboundGroupInfo>> get() = groupsFlow
     override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
+    override val statusUpdatesEnabled: StateFlow<Boolean> get() = statusUpdatesFlow
 
     val startCalls = AtomicInteger(0)
     val stopCalls = AtomicInteger(0)
@@ -95,12 +100,14 @@ class FakeVpnEngine(
         openTunCalls.incrementAndGet()
         lastTunFd = fd
         started = true
+        statusUpdatesFlow.value = true
     }
 
     override suspend fun stop() {
         stopMutex.withLock {
             stopCalls.incrementAndGet()
             started = false
+            statusUpdatesFlow.value = false
             platform?.closeTun()
         }
     }
@@ -115,6 +122,7 @@ class FakeVpnEngine(
 
     override suspend fun setStatusUpdatesEnabled(enabled: Boolean) {
         statusEnabledCalls.incrementAndGet()
+        statusUpdatesFlow.value = enabled
     }
 
     override suspend fun selectOutbound(

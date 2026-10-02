@@ -104,6 +104,7 @@ class ConnectionsViewModelTest {
         override val groups: StateFlow<List<OutboundGroupInfo>> =
             MutableStateFlow(emptyList())
         override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
+        override val statusUpdatesEnabled: StateFlow<Boolean> = MutableStateFlow(true)
 
         override suspend fun validate(config: EngineConfig) = Unit
 

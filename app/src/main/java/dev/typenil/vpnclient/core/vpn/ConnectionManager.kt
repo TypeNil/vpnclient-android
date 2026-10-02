@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -294,10 +295,26 @@ class ConnectionManager
         private var eventsJob: Job? = null
         private var groupsJob: Job? = null
         private var connectionsJob: Job? = null
+        private var statusUpdatesJob: Job? = null
 
         /** Live outbound groups from the running engine; empty while detached. */
         private val _groups = MutableStateFlow<List<OutboundGroupInfo>>(emptyList())
         val groups: StateFlow<List<OutboundGroupInfo>> = _groups
+
+        /** Monotonic id of the attached engine — bumped once per [attachEngine].
+         *  An in-session rebuild attaches a fresh engine under the SAME
+         *  [sessionGeneration], but measurement history (urlTestTime, freshness
+         *  floors, run verdicts) belongs to the engine instance — consumers
+         *  scoping per-engine state key on this, not on the generation. */
+        private val _engineEpoch = MutableStateFlow(0L)
+        val engineEpoch: StateFlow<Long> = _engineEpoch
+
+        /** Whether the attached engine wants status updates — false under
+         *  screen-off suppression and whenever no engine is attached. `true`
+         *  means "not suppressed", not "channel connected" — the command
+         *  client (re)connects asynchronously underneath. */
+        private val _statusUpdatesEnabled = MutableStateFlow(false)
+        val statusUpdatesEnabled: StateFlow<Boolean> = _statusUpdatesEnabled
 
         /** Live connections through the tunnel; empty while detached. */
         private val _activeConnections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
@@ -546,10 +563,20 @@ class ConnectionManager
             }
             healthStore.invalidate(generation, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
             this.engine = engine
+            _engineEpoch.update { it + 1 }
             statsJob?.cancel()
             eventsJob?.cancel()
             groupsJob?.cancel()
             connectionsJob?.cancel()
+            statusUpdatesJob?.cancel()
+            statusUpdatesJob =
+                scope.launch {
+                    engine.statusUpdatesEnabled.collect { enabled ->
+                        if (generation == sessionGeneration) {
+                            _statusUpdatesEnabled.value = enabled
+                        }
+                    }
+                }
             groupsJob =
                 scope.launch {
                     engine.groups.collect { groups ->
@@ -635,8 +662,11 @@ class ConnectionManager
             groupsJob = null
             connectionsJob?.cancel()
             connectionsJob = null
+            statusUpdatesJob?.cancel()
+            statusUpdatesJob = null
             _groups.value = emptyList()
             _activeConnections.value = emptyList()
+            _statusUpdatesEnabled.value = false
             engine = null
         }
 
