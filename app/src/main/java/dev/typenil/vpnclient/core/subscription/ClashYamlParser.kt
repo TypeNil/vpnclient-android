@@ -208,9 +208,9 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
     }
 
     private fun clashServerName(m: Map<*, *>, server: String, network: String): String? {
-        val opts = m.map("${network.lowercase()}-opts")
-        val host = opts?.map("headers")?.str("Host") ?: opts?.map("headers")?.str("host")
-            ?: opts?.stringValues("host", "h2-opts.host")?.firstOrNull()
+        // Clash H2 host is request authority, not TLS servername.
+        val opts = if (network.lowercase() in setOf("ws", "httpupgrade")) m.map("${network.lowercase()}-opts") else null
+        val host = opts?.map("headers")?.str("Host") ?: opts?.map("headers")?.str("host") ?: opts?.str("host")
         return tlsServerName(m.str("servername")?.takeIf { it.isNotBlank() } ?: m.str("sni"), host, server, network)
     }
 
@@ -241,8 +241,8 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             }
             "h2" -> {
                 val opts = m.map("h2-opts")
-                val hosts = opts?.stringValues("host", "h2-opts.host")
-                val paths = opts?.stringValues("path", "h2-opts.path")
+                val hosts = opts?.stringValues("host", "h2-opts.host", m.str("name"))
+                val paths = opts?.stringValues("path", "h2-opts.path", m.str("name"))
                 if (paths != null && paths.size != 1) throw SkipNode(m.str("name"), "unsupported h2-opts.path list")
                 buildJsonObject {
                     put("type", "http")
@@ -255,11 +255,11 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             else -> null
         }
 
-    private fun Map<*, *>.stringValues(key: String, field: String): List<String>? = when (val v = this[key]) {
+    private fun Map<*, *>.stringValues(key: String, field: String, name: String?): List<String>? = when (val v = this[key]) {
         null -> null
         is String -> listOf(v)
-        is List<*> -> v.map { it as? String ?: throw SkipNode(str("name"), "malformed $field") }
-        else -> throw SkipNode(str("name"), "malformed $field")
+        is List<*> -> v.map { it as? String ?: throw SkipNode(name, "malformed $field") }
+        else -> throw SkipNode(name, "malformed $field")
     }
 
     private fun Map<*, *>.str(key: String): String? = when (val v = this[key]) {

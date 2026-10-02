@@ -20,7 +20,17 @@ class ClashTransportListTest {
         assertEquals(listOf("first.example", "second.example"),
             transport["host"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals("/tunnel", transport["path"]!!.jsonPrimitive.content)
-        assertEquals("first.example", outbound["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+        assertEquals("server.example", outbound["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun h2HostDoesNotOverrideVlessServerOrExplicitSni() {
+        for (servername in listOf(null, "sni.example")) {
+            val yaml = fixture("h2-host-list").replace("type: vmess", "type: vless") +
+                (servername?.let { "\n    servername: $it\n" } ?: "")
+            val node = ClashYamlParser().parse(yaml, 1).nodes.single()
+            val tls = Json.parseToJsonElement(node.outboundJson).jsonObject["tls"]!!.jsonObject
+            assertEquals(servername ?: "server.example", tls["server_name"]!!.jsonPrimitive.content)
+        }
     }
 
     @Test fun h2ScalarHostAlsoAccepted() {
@@ -51,5 +61,6 @@ class ClashTransportListTest {
         val result = ClashYamlParser().parse(bad + "\n  - name: ordinary" + good, 1)
         assertEquals(1, result.nodes.size)
         assertEquals("malformed h2-opts.host", result.skipped.single().reason)
+        assertEquals("h2-list", result.skipped.single().name)
     }
 }

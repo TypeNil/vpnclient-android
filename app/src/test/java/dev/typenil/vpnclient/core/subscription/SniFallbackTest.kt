@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -26,6 +27,10 @@ class SniFallbackTest {
         Case(network = "ws", host = "host.example", expected = "host.example"),
         Case(network = "httpupgrade", host = "host.example", expected = "host.example"),
         Case(network = "h2", host = "host.example", expected = "host.example"),
+        Case(network = "h2", host = "first.example,second.example", expected = "first.example"),
+        Case(network = "http", host = ", first.example, second.example", expected = "first.example"),
+        Case(network = "h2", sni = "sni.example", host = "first.example,second.example", expected = "sni.example"),
+        Case(network = "h2", host = ", ,"),
         Case(network = "WS", sni = "", host = "host.example", expected = "host.example"),
         Case(host = "ignored.example"),
         Case(server = "192.0.2.1", expected = null),
@@ -85,7 +90,14 @@ class SniFallbackTest {
     }
 
     private fun assertTls(outbound: String, c: Case) {
-        val tls = Json.parseToJsonElement(outbound).jsonObject["tls"] as? JsonObject
+        val obj = Json.parseToJsonElement(outbound).jsonObject
+        if (c.network.lowercase() in setOf("h2", "http") && c.host != null) {
+            val hosts = c.host.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            if (hosts.size > 1) {
+                assertEquals(hosts, obj["transport"]!!.jsonObject["host"]!!.jsonArray.map { it.jsonPrimitive.content })
+            }
+        }
+        val tls = obj["tls"] as? JsonObject
         if (!c.tls) { assertNull(tls); return }
         assertEquals(c.expected, tls?.get("server_name")?.jsonPrimitive?.content)
         assertNull(tls?.get("insecure"))

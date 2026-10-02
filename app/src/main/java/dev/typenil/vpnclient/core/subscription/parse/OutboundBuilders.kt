@@ -72,7 +72,12 @@ internal fun classifyNetwork(network: String?): NetworkClass =
 /** SNI fallback without DNS lookup or weakening certificate verification. */
 internal fun tlsServerName(sni: String?, host: String?, server: String, network: String): String? =
     sni?.takeIf { it.isNotBlank() }
-        ?: host?.takeIf { network.lowercase() in setOf("ws", "httpupgrade", "h2", "http") && it.isNotBlank() }
+        ?: when (network.lowercase()) {
+            "ws", "httpupgrade" -> host?.takeIf { it.isNotBlank() }
+            // URI H2 hosts may be comma-separated; SNI is always one name.
+            "h2", "http" -> commaList(host)?.firstOrNull()
+            else -> null
+        }
         ?: server.takeUnless {
             // A colon denotes an IPv6 literal (including mapped IPv4/zone IDs).
             ':' in it || it.split('.').let { parts ->
@@ -141,7 +146,9 @@ internal fun transportBlock(
     }
     "http", "h2" -> buildJsonObject {
         put("type", "http")
-        if (!host.isNullOrBlank()) put("host", host)
+        val hosts = commaList(host)
+        if (hosts?.size == 1) put("host", hosts.single())
+        else if (!hosts.isNullOrEmpty()) put("host", JsonArray(hosts.map(::JsonPrimitive)))
         if (!path.isNullOrBlank()) put("path", path)
         put("method", "GET")
     }
