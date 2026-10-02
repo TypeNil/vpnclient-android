@@ -9,6 +9,8 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+val vpnCoreVersion = libs.versions.vpnCore.get()
+
 android {
     namespace = "dev.typenil.vpnclient"
     compileSdk {
@@ -21,6 +23,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "VPN_CORE_VERSION", "\"$vpnCoreVersion\"")
 
         // Hilt tests need an Application annotated @HiltAndroidApp in the
         // test APK — VpnTestRunner instantiates VpnTestApp instead of the
@@ -70,7 +73,6 @@ ksp {
 
 // libbox AAR is fetched from the singbox-android/libbox GitHub release and
 // verified against the pinned SHA-256 (see docs/adr/ADR-0001-vpn-core.md).
-val vpnCoreVersion = libs.versions.vpnCore.get()
 val libboxSha256 = "93b2596c4e90df32463a9ade5c89d85f83a16aacd94928ba26fc4bce41eaf2a9"
 val libboxFile = rootProject.file("core-native/libbox-$vpnCoreVersion.aar")
 

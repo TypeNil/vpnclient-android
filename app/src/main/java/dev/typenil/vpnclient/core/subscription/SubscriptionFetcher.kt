@@ -76,7 +76,7 @@ class SubscriptionFetcher @Inject constructor(
          * response rule is configured; otherwise it falls back to a Base64 URI list,
          * which the classifier handles anyway.
          */
-        const val USER_AGENT = "sing-box/1.13.0 (VPNClient; android)"
+        const val USER_AGENT = "sing-box/" + BuildConfig.VPN_CORE_VERSION + " (VPNClient; android)"
     }
 
     // Redirects are followed manually so HWID headers are only sent to the

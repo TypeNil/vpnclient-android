@@ -73,6 +73,20 @@ class SubscriptionFetcherTest {
     }
 
     @Test
+    fun `user agent matches the pinned core version and format`() = runTest {
+        val catalog = listOf(
+            java.io.File("../gradle/libs.versions.toml"),
+            java.io.File("gradle/libs.versions.toml"),
+        ).first { it.isFile }.readText()
+        val version = Regex("""(?m)^vpnCore\s*=\s*"([^"]+)"""").find(catalog)!!.groupValues[1]
+        val expected = "sing-box/$version (VPNClient; android)"
+        server.enqueue(MockResponse().setBody("synthetic response"))
+        fetcher.fetch(server.url("/synthetic").toString(), null, allowInsecure = true)
+        assertEquals(expected, SubscriptionFetcher.USER_AGENT)
+        assertEquals(expected, server.takeRequest().getHeader("User-Agent"))
+    }
+
+    @Test
     fun `transport policy matrix`() {
         val https = "https://panel.example.com/sub".toHttpUrl()
         val http = "http://panel.example.com/sub".toHttpUrl()
