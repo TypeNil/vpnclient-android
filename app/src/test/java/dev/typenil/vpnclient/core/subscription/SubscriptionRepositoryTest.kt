@@ -453,6 +453,28 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    fun `changed TLS identity prunes favorite and name and clears selection`() = runTest {
+        seedSubscription()
+        val original = "vless://00000000-0000-0000-0000-000000000001@server.example:443?security=tls&type=ws&host=host.example"
+        val old = nodeEntity("$original&sni=server.example", 1)
+        val replacement = nodeEntity(original, 1)
+        assertFalse(old.id == replacement.id)
+        nodeDao.nodes[old.id] = old
+        nodePreferenceDao.setFavorite(old.id, true)
+        nodePreferenceDao.setCustomName(old.id, "Personal name")
+        settings.selected.value = old.id
+        // Fake DAO cannot execute the SQL subquery; supply the post-commit table.
+        nodePreferenceDao.liveNodeIds = setOf(replacement.id)
+        server.enqueue(MockResponse().setBody(original))
+
+        assertTrue(repository.refresh(1).isSuccess)
+        assertEquals(listOf(replacement.id), nodeDao.forSubscription(1).map { it.id })
+        assertNull(nodePreferenceDao.get(old.id))
+        assertNull(nodePreferenceDao.get(replacement.id))
+        assertNull(settings.selected.value)
+    }
+
+    @Test
     fun `selection is kept when the selected node survives`() = runTest {
         seedSubscription()
         val old = nodeEntity(uri("a.example.com", "A"), 1)

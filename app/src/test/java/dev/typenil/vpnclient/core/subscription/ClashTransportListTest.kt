@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ClashTransportListTest {
@@ -20,7 +21,7 @@ class ClashTransportListTest {
         assertEquals(listOf("first.example", "second.example"),
             transport["host"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals("/tunnel", transport["path"]!!.jsonPrimitive.content)
-        assertEquals("server.example", outbound["tls"]!!.jsonObject["server_name"]!!.jsonPrimitive.content)
+        assertNull(outbound["tls"]!!.jsonObject["server_name"])
     }
 
     @Test fun h2HostDoesNotOverrideVlessServerOrExplicitSni() {
@@ -29,7 +30,7 @@ class ClashTransportListTest {
                 (servername?.let { "\n    servername: $it\n" } ?: "")
             val node = ClashYamlParser().parse(yaml, 1).nodes.single()
             val tls = Json.parseToJsonElement(node.outboundJson).jsonObject["tls"]!!.jsonObject
-            assertEquals(servername ?: "server.example", tls["server_name"]!!.jsonPrimitive.content)
+            assertEquals(servername, tls["server_name"]?.jsonPrimitive?.content)
         }
     }
 

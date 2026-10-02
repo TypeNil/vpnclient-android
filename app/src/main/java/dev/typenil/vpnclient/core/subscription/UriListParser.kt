@@ -110,7 +110,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val security = p["security"]?.lowercase()
         val tls = when (security) {
             "tls", "reality" -> tlsBlock(
-                serverName = tlsServerName(p["sni"], p["host"], link.host, network),
+                serverName = tlsServerName(p["sni"], p["host"], network),
                 insecure = truthyParam(p.param("allowInsecure", "allow_insecure", "insecure")),
                 alpn = commaList(p["alpn"]),
                 fingerprint = p["fp"],
@@ -163,7 +163,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val security = obj.str("tls")?.lowercase()
         val tls = when (security) {
             "tls", "reality" -> tlsBlock(
-                serverName = tlsServerName(obj.str("sni"), obj.str("host"), server, network),
+                serverName = tlsServerName(obj.str("sni"), obj.str("host"), network),
                 insecure = truthyParam(obj.str("allowInsecure") ?: obj.str("allow_insecure")),
                 alpn = commaList(obj.str("alpn")),
                 fingerprint = obj.str("fp"),

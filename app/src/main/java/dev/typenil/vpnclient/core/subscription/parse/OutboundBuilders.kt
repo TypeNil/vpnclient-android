@@ -69,20 +69,14 @@ internal fun classifyNetwork(network: String?): NetworkClass =
         else -> NetworkClass.Unsupported
     }
 
-/** SNI fallback without DNS lookup or weakening certificate verification. */
-internal fun tlsServerName(sni: String?, host: String?, server: String, network: String): String? =
+/** Explicit SNI or transport host; sing-box defaults to the server address itself. */
+internal fun tlsServerName(sni: String?, host: String?, network: String): String? =
     sni?.takeIf { it.isNotBlank() }
         ?: when (network.lowercase()) {
             "ws", "httpupgrade" -> host?.takeIf { it.isNotBlank() }
             // URI H2 hosts may be comma-separated; SNI is always one name.
             "h2", "http" -> commaList(host)?.firstOrNull()
             else -> null
-        }
-        ?: server.takeUnless {
-            // A colon denotes an IPv6 literal (including mapped IPv4/zone IDs).
-            ':' in it || it.split('.').let { parts ->
-                parts.size == 4 && parts.all { p -> p.isNotEmpty() && p.all(Char::isDigit) && p.toIntOrNull() in 0..255 }
-            }
         }
 
 /** `"tls"` block shared by all TLS-capable outbounds. */

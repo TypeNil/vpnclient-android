@@ -101,7 +101,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 val tlsEnabled = reality != null || m.bool("tls")
                     || m.str("security")?.lowercase() in setOf("tls", "reality")
                 val tls = if (tlsEnabled) tlsBlock(
-                    serverName = clashServerName(m, server, network),
+                    serverName = clashServerName(m, network),
                     insecure = m.bool("skip-cert-verify"),
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
@@ -121,7 +121,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             "vmess" -> {
                 val uuid = m.str("uuid") ?: throw SkipNode(name, "malformed")
                 val tls = if (m.bool("tls")) tlsBlock(
-                    serverName = clashServerName(m, server, network),
+                    serverName = clashServerName(m, network),
                     insecure = m.bool("skip-cert-verify"),
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
@@ -207,11 +207,11 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
         )
     }
 
-    private fun clashServerName(m: Map<*, *>, server: String, network: String): String? {
+    private fun clashServerName(m: Map<*, *>, network: String): String? {
         // Clash H2 host is request authority, not TLS servername.
         val opts = if (network.lowercase() in setOf("ws", "httpupgrade")) m.map("${network.lowercase()}-opts") else null
         val host = opts?.map("headers")?.str("Host") ?: opts?.map("headers")?.str("host") ?: opts?.str("host")
-        return tlsServerName(m.str("servername")?.takeIf { it.isNotBlank() } ?: m.str("sni"), host, server, network)
+        return tlsServerName(m.str("servername")?.takeIf { it.isNotBlank() } ?: m.str("sni"), host, network)
     }
 
     /** Clash `network` + `*-opts` maps → sing-box transport block. */

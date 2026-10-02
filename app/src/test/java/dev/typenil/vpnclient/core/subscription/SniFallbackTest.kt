@@ -18,7 +18,7 @@ class SniFallbackTest {
         val network: String = "tcp",
         val sni: String? = null,
         val host: String? = null,
-        val expected: String? = "server.example",
+        val expected: String? = null,
         val tls: Boolean = true,
     )
 
@@ -64,6 +64,21 @@ class SniFallbackTest {
             val encoded = Base64.getEncoder().encodeToString(payload.toString().toByteArray())
             assertTls(UriListParser().parse("vmess://$encoded", 1).nodes.single().outboundJson, c)
         }
+    }
+
+    // Calculated by executing the original URI parser/builders at 6c1ae2e.
+    @Test fun vlessDomainTlsIdentityMatchesPreWp2() {
+        val node = UriListParser().parse(
+            "vless://00000000-0000-0000-0000-000000000001@server.example:443?security=tls&type=tcp", 1,
+        ).nodes.single()
+        assertEquals("10bf8be153cf5262ac5ea1ad7e769b0c19c8f02207eadcd8b5fe862ea14fb35d", node.id)
+    }
+
+    @Test fun vmessDomainTlsIdentityMatchesPreWp2() {
+        val payload = """{"add":"server.example","port":443,"id":"00000000-0000-0000-0000-000000000001","net":"tcp","tls":"tls"}"""
+        val encoded = Base64.getEncoder().encodeToString(payload.toByteArray())
+        val node = UriListParser().parse("vmess://$encoded", 1).nodes.single()
+        assertEquals("7a3f2bda367997863262ebcc297f16444da094c3fc4e2c632f8e576925ee258c", node.id)
     }
 
     @Test fun clashWsFallbackAndExplicitServername() {
