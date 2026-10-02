@@ -3,20 +3,30 @@ package dev.typenil.vpnclient.core.subscription
 import dev.typenil.vpnclient.core.subscription.parse.percentDecode
 
 /**
- * Maps an incoming share/deep-link intent to a subscription URL.
+ * Classifies paste, QR and incoming share/deep-link text for confirmed import.
  *
  * Recognized sources:
  * - bare `http(s)://` links (ACTION_VIEW on a subscription URL, or a shared
  *   link via ACTION_SEND text/plain);
  * - `sing-box://import-remote-profile?url=…` (sing-box / SFA / husi);
- * - `clash://install-config?url=…` and `clashmeta://install-config?url=…`.
+ * - `clash://install-config?url=…` and `clashmeta://install-config?url=…`;
+ * - single node share links supported by UriListParser.
+ *
+ * Classification is not validation; the repository validates before committing.
  *
  * Pure string parsing — no android.net.Uri so it stays JVM-testable.
  */
 object ImportUrlExtractor {
 
-    /** A subscription URL plus the provider-suggested display name, if any. */
-    data class ExtractedImport(val url: String, val name: String?)
+    enum class Kind { Subscription, ShareLink }
+
+    data class ExtractedImport(val url: String, val name: String?, val kind: Kind = Kind.Subscription)
+
+    /** Schemes UriListParser.parseLine accepts — one list for all entrypoints. */
+    private val shareLinkSchemes = setOf(
+        "vless", "vmess", "trojan", "ss", "hysteria2", "hy2", "tuic", "anytls",
+        "wireguard", "wg", "socks", "socks5",
+    )
 
     private const val ACTION_SEND = "android.intent.action.SEND"
 
@@ -29,7 +39,9 @@ object ImportUrlExtractor {
         // Schemes are case-insensitive per RFC 3986 — OEM browsers and
         // keyboards emit HTTPS://… often enough to matter.
         if (raw.startsWithHttp()) return ExtractedImport(raw, null)
-        return when (raw.substringBefore("://").lowercase()) {
+        val scheme = raw.substringBefore("://", missingDelimiterValue = "").lowercase()
+        if (scheme in shareLinkSchemes) return ExtractedImport(raw, null, Kind.ShareLink)
+        return when (scheme) {
             "sing-box", "clash", "clashmeta" -> extractUrlParam(raw)
             else -> null
         }

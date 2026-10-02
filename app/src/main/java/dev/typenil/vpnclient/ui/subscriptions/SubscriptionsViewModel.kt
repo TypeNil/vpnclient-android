@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
@@ -157,17 +158,16 @@ class SubscriptionsViewModel
         ) {
             viewModelScope.launch {
                 val trimmed = url.trim()
-                // A non-http(s) input that carries a share-link scheme is a single
-                // node import, not a subscription — route it to the manual-import
-                // path. Anything else keeps the existing add() flow and its error.
-                val isSubscriptionUrl =
-                    trimmed.startsWith("https://", ignoreCase = true) ||
-                        trimmed.startsWith("http://", ignoreCase = true)
+                val candidate = ImportUrlExtractor.extract(null, trimmed, null)
                 val result =
-                    if (!isSubscriptionUrl && isShareLink(trimmed)) {
-                        repository.importShareLink(trimmed)
+                    if (candidate?.kind == ImportUrlExtractor.Kind.ShareLink) {
+                        repository.importShareLink(candidate.url)
                     } else {
-                        repository.add(trimmed, requestedName?.trim()?.ifEmpty { null }, allowInsecureHttp)
+                        repository.add(
+                            candidate?.url ?: trimmed,
+                            requestedName?.trim()?.ifEmpty { null } ?: candidate?.name,
+                            allowInsecureHttp,
+                        )
                     }
                 result
                     .onSuccess { outcome ->
@@ -178,20 +178,6 @@ class SubscriptionsViewModel
                         postSubscriptionFailure(it, R.string.subs_add_failed, "Failed to add")
                     }
             }
-        }
-
-        /**
-         * `scheme://` where scheme is one UriListParser accepts — the signal the
-         * pasted text is a node share link. Pure string check (no parsing) so it
-         * stays cheap on the main thread; the real parse runs in the repository
-         * off-dispatcher and reports skipped/typed errors.
-         */
-        private fun isShareLink(text: String): Boolean {
-            val scheme =
-                text
-                    .substringBefore("://", missingDelimiterValue = "")
-                    .lowercase()
-            return scheme in SHARE_LINK_SCHEMES
         }
 
         fun refresh(id: Long) {
@@ -315,21 +301,5 @@ class SubscriptionsViewModel
             const val MAX_REASON_LEN = 48
             const val MAX_REASON_GROUPS = 4
 
-            /** Schemes UriListParser.parseLine accepts — keep in sync. */
-            val SHARE_LINK_SCHEMES =
-                setOf(
-                    "vless",
-                    "vmess",
-                    "trojan",
-                    "ss",
-                    "hysteria2",
-                    "hy2",
-                    "tuic",
-                    "anytls",
-                    "wireguard",
-                    "wg",
-                    "socks",
-                    "socks5",
-                )
         }
     }

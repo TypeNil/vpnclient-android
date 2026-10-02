@@ -430,9 +430,9 @@
     <string name="qr_title">Scan QR code</string>
     <string name="qr_camera_unavailable">Camera unavailable</string>
     <string name="qr_retry">Retry</string>
-    <string name="qr_not_subscription">Not a subscription link</string>
+    <string name="qr_not_subscription">Not a subscription or server link</string>
     <string name="qr_aim_hint">Point the camera at a QR code</string>
-    <string name="qr_permission_rationale">Camera access is needed to scan a subscription QR code</string>
+    <string name="qr_permission_rationale">Camera access is needed to scan a subscription or server QR code</string>
     <string name="qr_open_settings">Open settings</string>
     <string name="qr_allow_camera">Allow camera</string>
 

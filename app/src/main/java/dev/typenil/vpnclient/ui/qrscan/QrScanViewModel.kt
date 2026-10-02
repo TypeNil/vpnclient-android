@@ -11,7 +11,7 @@ sealed interface ScanOutcome {
     /** The QR carried an import link — deliver it and leave. */
     data class Found(val url: String) : ScanOutcome
 
-    /** Decoded content that isn't a subscription link — tell the user once. */
+    /** Decoded content that isn't an import link — tell the user once. */
     data object Rejected : ScanOutcome
 
     /** Duplicate frames or post-result noise — stay quiet, keep scanning. */

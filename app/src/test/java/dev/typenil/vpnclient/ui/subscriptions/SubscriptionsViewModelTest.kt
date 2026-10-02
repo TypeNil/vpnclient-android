@@ -1,5 +1,8 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
+import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
+import dev.typenil.vpnclient.ui.qrscan.QrScanViewModel
+import dev.typenil.vpnclient.ui.qrscan.ScanOutcome
 import dev.typenil.vpnclient.core.subscription.ClashYamlParser
 import dev.typenil.vpnclient.core.subscription.SingBoxJsonParser
 import dev.typenil.vpnclient.core.subscription.SubscriptionCandidateValidator
@@ -196,6 +199,7 @@ class SubscriptionsViewModelTest {
     }
 
     private lateinit var viewModel: SubscriptionsViewModel
+    private var validatorCalls = 0
 
     /** Shared by the repository and the view model — the real app has one DAO
      *  instance, and the manual-node list is read through the repository. */
@@ -223,7 +227,9 @@ class SubscriptionsViewModelTest {
                     ),
                 validator =
                     object : SubscriptionCandidateValidator {
-                        override suspend fun validate(nodes: List<ProxyNode>) = Unit
+                        override suspend fun validate(nodes: List<ProxyNode>) {
+                            validatorCalls++
+                        }
                     },
                 transactions =
                     object : DbTransactionRunner {
@@ -439,6 +445,73 @@ class SubscriptionsViewModelTest {
                     "Xray JSON subscriptions are not supported. In your panel, select sing-box, Clash, or base64/share links.",
                     message?.fallback,
                 )
+            } finally {
+                server.shutdown()
+            }
+        }
+
+    @Test
+    fun `paste QR and Share confirm the same node with one validation each`() =
+        testScope.runTest {
+            collectUi()
+            val raw = "vless://11111111-1111-1111-1111-111111111111@a.example.com:443?security=none&type=tcp"
+            val paste = ImportUrlExtractor.extract(null, raw, null)!!
+            val qr = QrScanViewModel().onBarcode(raw, nowMs = 1_000) as ScanOutcome.Found
+            val share = ImportUrlExtractor.extract("android.intent.action.SEND", null, raw)!!
+            assertEquals(paste.url, qr.url)
+            assertEquals(paste, share)
+            assertEquals(0, validatorCalls)
+            assertTrue(nodeDao.nodes.isEmpty()) // extraction never imports silently
+            var firstId: String? = null
+            for ((index, candidate) in listOf(paste.url, qr.url, share.url).withIndex()) {
+                viewModel.add(candidate, null) // existing dialog confirmation
+                val deadline = System.currentTimeMillis() + 5_000
+                while (validatorCalls <= index && System.currentTimeMillis() < deadline) {
+                    advanceUntilIdle()
+                    Thread.sleep(20)
+                }
+                // Validation happens before DAO commit, so also await the node.
+                while (nodeDao.nodes.isEmpty() && System.currentTimeMillis() < deadline) {
+                    advanceUntilIdle()
+                    Thread.sleep(20)
+                }
+                advanceUntilIdle()
+                assertEquals(index + 1, validatorCalls)
+                assertNull(viewModel.uiState.value.pendingMessage)
+                assertEquals(1, nodeDao.nodes.size)
+                val id = nodeDao.nodes.keys.single()
+                if (firstId == null) firstId = id else assertEquals(firstId, id)
+            }
+        }
+
+    @Test
+    fun `trash empty input and an HTML page never validate or commit nodes`() =
+        testScope.runTest {
+            collectUi()
+            assertNull(ImportUrlExtractor.extract(null, "  ", null))
+            for (raw in listOf("plain text")) {
+                viewModel.add(raw, null)
+                advanceUntilIdle()
+                assertTrue(viewModel.uiState.value.pendingMessage != null)
+                viewModel.acknowledgeMessage(viewModel.uiState.value.pendingMessage!!.id)
+                advanceUntilIdle()
+            }
+            val server = MockWebServer()
+            try {
+                server.start()
+                server.enqueue(MockResponse().setHeader("Content-Type", "text/html").setBody("<html><body>Not a subscription</body></html>"))
+                val candidate = ImportUrlExtractor.extract(null, server.url("/page").toString(), null)!!
+                viewModel.add(candidate.url, null, allowInsecureHttp = true)
+                val deadline = System.currentTimeMillis() + 5_000
+                while (viewModel.uiState.value.pendingMessage == null && System.currentTimeMillis() < deadline) {
+                    advanceUntilIdle()
+                    Thread.sleep(20)
+                }
+                assertTrue(viewModel.uiState.value.pendingMessage != null)
+                assertEquals(0, validatorCalls)
+                assertTrue(nodeDao.nodes.isEmpty())
+                // The repository retains a failed subscription row for retry;
+                // no parsed node or engine candidate may be committed.
             } finally {
                 server.shutdown()
             }

@@ -430,9 +430,9 @@
     <string name="qr_title">Сканировать QR-код</string>
     <string name="qr_camera_unavailable">Камера недоступна</string>
     <string name="qr_retry">Повторить</string>
-    <string name="qr_not_subscription">Это не ссылка на подписку</string>
+    <string name="qr_not_subscription">Это не ссылка на подписку или сервер</string>
     <string name="qr_aim_hint">Наведите камеру на QR-код</string>
-    <string name="qr_permission_rationale">Для сканирования QR-кода подписки нужен доступ к камере</string>
+    <string name="qr_permission_rationale">Для сканирования QR-кода подписки или сервера нужен доступ к камере</string>
     <string name="qr_open_settings">Открыть настройки</string>
     <string name="qr_allow_camera">Разрешить камеру</string>
 

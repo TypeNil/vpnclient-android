@@ -25,6 +25,18 @@ class QrScanViewModelTest {
     }
 
     @Test
+    fun `single node qr delivers the unchanged link and waits for UI confirmation`() {
+        val raw = "vless://11111111-1111-1111-1111-111111111111@a.example.com:443?security=none&type=tcp"
+        assertEquals(ScanOutcome.Found(raw), viewModel.onBarcode(raw, nowMs = 1_000))
+        assertEquals(ScanOutcome.Ignored, viewModel.onBarcode(raw, nowMs = 1_100))
+    }
+
+    @Test
+    fun `empty qr is rejected`() {
+        assertEquals(ScanOutcome.Rejected, viewModel.onBarcode("  ", nowMs = 1_000))
+    }
+
+    @Test
     fun `non-subscription qr is rejected once then deduped`() {
         val raw = "WIFI:T:nopass;S:net;;"
         assertEquals(ScanOutcome.Rejected, viewModel.onBarcode(raw, nowMs = 1_000))

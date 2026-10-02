@@ -128,7 +128,6 @@ class ImportUrlExtractorTest {
 
     @Test
     fun `unknown scheme rejected`() {
-        assertNull(ImportUrlExtractor.extract(view, "vless://abc@1.2.3.4:443", null))
         assertNull(ImportUrlExtractor.extract(view, "ftp://example.com/sub", null))
     }
 
@@ -138,6 +137,25 @@ class ImportUrlExtractorTest {
             ImportUrlExtractor.extract(view, "sing-box://import-remote-profile?url=javascript%3A%2F%2Fx", null),
         )
         assertNull(ImportUrlExtractor.extract(view, "clash://install-config", null))
+    }
+
+    @Test
+    fun `node schemes use the same candidate for paste and share`() {
+        val schemes = listOf("vless", "vmess", "trojan", "ss", "hysteria2", "hy2", "tuic", "anytls", "wireguard", "wg", "socks", "socks5")
+        for (scheme in schemes) {
+            // Classification only; payload validation belongs to the repository.
+            val raw = "$scheme://synthetic"
+            val paste = ImportUrlExtractor.extract(null, "  $raw  ", null)
+            assertEquals(raw, paste?.url)
+            assertEquals(ImportUrlExtractor.Kind.ShareLink, paste?.kind)
+            assertEquals(paste, ImportUrlExtractor.extract(send, null, raw))
+            assertEquals(raw, ImportUrlExtractor.extract(view, raw.uppercase(), null)?.url?.lowercase())
+        }
+        assertEquals(
+            ImportUrlExtractor.Kind.Subscription,
+            ImportUrlExtractor.extract(null, "https://example.com/sub", null)?.kind,
+        )
+        assertNull(ImportUrlExtractor.extract(null, "plain text", null))
     }
 
     @Test
