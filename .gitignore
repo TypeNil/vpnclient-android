@@ -32,3 +32,8 @@ vpnclient-test-subscriptions.txt
 
 # Pi agent session/notes (not for the repo)
 .pi/
+
+# Local screenshots and upstream research
+build/*.png
+research_1/
+research_2/
