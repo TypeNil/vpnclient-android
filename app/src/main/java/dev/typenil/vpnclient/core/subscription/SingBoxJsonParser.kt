@@ -83,6 +83,7 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
         if (type in NON_NODE_TYPES) return null
         val protocol = NODE_TYPES[type]
             ?: throw SkipNode(tag, "unsupported protocol: $type")
+        rejectFilesystemFields(obj, tag)
         // Pre-1.13 wireguard outbounds can't be passed through — the type
         // was removed from sing-box; convert to the endpoints[] shape.
         if (protocol == ProtocolType.WIREGUARD) {
@@ -104,6 +105,7 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
         if (type != "wireguard") {
             throw SkipNode(tag, "unsupported endpoint: $type")
         }
+        rejectFilesystemFields(obj, tag)
         // Endpoint shape: the peer carries server/port, not the top level.
         // Apply the same normalization wireguardToNode gives legacy
         // outbounds: private_key is required, peers need allowed_ips, and a
@@ -211,6 +213,21 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
             mtu = obj["mtu"]?.jsonPrimitive?.intOrNull,
         )
         return finishNode(endpoint, tag, ProtocolType.WIREGUARD, server, port, subscriptionId)
+    }
+
+    /** Validate the original entry before normalization can discard fields.
+     *  HTTP transport `path` and inline TLS material are not filesystem access. */
+    private fun rejectFilesystemFields(element: JsonElement, tag: String?) {
+        when (element) {
+            is JsonObject -> element.forEach { (key, value) ->
+                if (key.endsWith("_path") || key.endsWith("_paths")) {
+                    throw SkipNode(tag, "unsupported field: $key")
+                }
+                rejectFilesystemFields(value, tag)
+            }
+            is JsonArray -> element.forEach { rejectFilesystemFields(it, tag) }
+            else -> Unit
+        }
     }
 
     private fun finishNode(
