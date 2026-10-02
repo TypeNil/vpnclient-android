@@ -10,6 +10,7 @@ import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
+import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.ui.common.UserMessage
@@ -106,6 +107,17 @@ class SubscriptionsViewModel
             }
         }
 
+        private fun postSubscriptionFailure(error: Throwable, @StringRes fallbackRes: Int, fallback: String) {
+            if (error is SubscriptionError.UnsupportedFormat && error.detail == "xray-json") {
+                postMessage(
+                    R.string.subs_xray_json_unsupported,
+                    "Xray JSON subscriptions are not supported. In your panel, select sing-box, Clash, or base64/share links.",
+                )
+            } else {
+                error.message?.let(::postRawMessage) ?: postMessage(fallbackRes, fallback)
+            }
+        }
+
         /** The screen consumed the message — clear it only if it's still the
          *  one that was displayed (a newer message may have replaced it). */
         fun acknowledgeMessage(id: Long) {
@@ -163,8 +175,7 @@ class SubscriptionsViewModel
                             skippedSummary(outcome.skipped)
                         }
                     }.onFailure {
-                        it.message?.let(::postRawMessage)
-                            ?: postMessage(R.string.subs_add_failed, "Failed to add")
+                        postSubscriptionFailure(it, R.string.subs_add_failed, "Failed to add")
                     }
             }
         }
@@ -194,8 +205,7 @@ class SubscriptionsViewModel
                                 skippedSummary(outcome.skipped)
                             }
                         }.onFailure {
-                            it.message?.let(::postRawMessage)
-                                ?: postMessage(R.string.subs_refresh_failed, "Refresh failed")
+                            postSubscriptionFailure(it, R.string.subs_refresh_failed, "Refresh failed")
                         }
                 } finally {
                     refreshing.update { it - id }
@@ -253,8 +263,7 @@ class SubscriptionsViewModel
                     repository
                         .editUrl(id, newUrl)
                         .onFailure {
-                            it.message?.let(::postRawMessage)
-                                ?: postMessage(R.string.subs_url_update_failed, "URL update failed")
+                            postSubscriptionFailure(it, R.string.subs_url_update_failed, "URL update failed")
                         }
                 } finally {
                     refreshing.update { it - id }

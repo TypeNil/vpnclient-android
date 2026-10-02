@@ -398,6 +398,7 @@
     <string name="subs_edit_url">Edit URL</string>
     <string name="subs_nodes_skipped">%1$d nodes skipped: %2$s</string>
     <string name="subs_nodes_skipped_more">%1$d nodes skipped: %2$s, +%3$d more</string>
+    <string name="subs_xray_json_unsupported">Xray JSON subscriptions are not supported. In your panel, select sing-box, Clash, or base64/share links.</string>
     <string name="subs_add_failed">Failed to add</string>
     <string name="subs_refresh_failed">Refresh failed</string>
     <string name="subs_update_failed">Failed to update subscription</string>

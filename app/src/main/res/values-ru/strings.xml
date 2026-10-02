@@ -398,6 +398,7 @@
     <string name="subs_edit_url">Изменить URL</string>
     <string name="subs_nodes_skipped">Пропущено серверов: %1$d: %2$s</string>
     <string name="subs_nodes_skipped_more">Пропущено серверов: %1$d: %2$s, +ещё %3$d</string>
+    <string name="subs_xray_json_unsupported">Подписка в формате Xray JSON не поддерживается. В панели выберите формат sing-box, Clash или base64/ссылки</string>
     <string name="subs_add_failed">Не удалось добавить</string>
     <string name="subs_refresh_failed">Не удалось обновить</string>
     <string name="subs_update_failed">Не удалось обновить подписку</string>

@@ -37,7 +37,7 @@ class SubscriptionParserDispatcher @Inject constructor(
             SubscriptionFormat.SingBoxJson -> singBoxJsonParser.parse(body, subscriptionId)
             SubscriptionFormat.ClashYaml -> clashYamlParser.parse(body, subscriptionId)
             SubscriptionFormat.XrayJson -> throw SubscriptionError.UnsupportedFormat(
-                "xray-json subscriptions are not supported by the sing-box engine",
+                "xray-json",
             )
             SubscriptionFormat.Unknown -> throw SubscriptionError.UnsupportedFormat("unknown")
         }

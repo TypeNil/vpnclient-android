@@ -419,6 +419,31 @@ class SubscriptionsViewModelTest {
             }
         }
 
+    @Test
+    fun `xray json failure is a localized format message not network failure`() =
+        testScope.runTest {
+            collectUi()
+            val server = MockWebServer()
+            try {
+                server.start()
+                server.enqueue(MockResponse().setBody("""{"outbounds":[{"protocol":"vless","settings":{}}]}"""))
+                viewModel.add(server.url("/synthetic").toString(), null, allowInsecureHttp = true)
+                val deadline = System.currentTimeMillis() + 5_000
+                while (viewModel.uiState.value.pendingMessage == null && System.currentTimeMillis() < deadline) {
+                    advanceUntilIdle()
+                    Thread.sleep(20)
+                }
+                val message = viewModel.uiState.value.pendingMessage?.body
+                assertTrue(message is dev.typenil.vpnclient.ui.common.UserMessage.Resource)
+                assertEquals(
+                    "Xray JSON subscriptions are not supported. In your panel, select sing-box, Clash, or base64/share links.",
+                    message?.fallback,
+                )
+            } finally {
+                server.shutdown()
+            }
+        }
+
     // ---- share-link routing ----
 
     @Test
