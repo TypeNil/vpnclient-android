@@ -369,7 +369,15 @@ class OfflineUrlTestResearchTest {
      *  TIMED_OUT fail with a phase label. TIMED_OUT also preserves the
      *  native root — the call may still be running. */
     private fun <T> boundedCall(phase: Int, what: String, timeoutMs: Long, block: () -> T): T {
+        val startedAt = System.nanoTime()
         val res = tryBounded("p$phase-$what", timeoutMs, block)
+        // Fixed op label + duration only — feeds the "is urlTest blocking"
+        // question with device numbers instead of guesses.
+        Log.i(
+            TAG,
+            "call=p$phase-$what tookMs=" +
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
+        )
         when (res.end) {
             CallEnd.RETURNED -> return res.outcome!!.getOrThrow()
             CallEnd.THREW -> {

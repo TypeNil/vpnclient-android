@@ -468,12 +468,19 @@ without dropping the notification.
 
 ### Slice 4 — Latency + server list (P1)
 
-1. Wire `urlTestAll()` into the Servers screen (ping button → progress →
-   repaint rows whose delay changed).
-2. Map `OutboundGroupItem.urlTestDelay` / `urlTestTime` onto node rows.
-3. Live node switching while connected via `selectNode()` →
-   `CommandClient.selectOutbound("proxy", nodeId)` — removes the current
-   "Reconnect to apply the new server" limitation.
+1. Wire latency testing into the Servers screen (ping button → progress →
+   repaint rows whose delay changed). The pinned AAR has **no
+   `urlTestAll`** — `CommandClient.urlTest(groupTag)` is a per-group
+   async dispatch (~8 ms, measured); one call per `type == "urltest"`
+   group measures all its members, and results land on the next
+   `writeGroups` push. Evidence + the baseline-comparison completion
+   rule: `docs/R04-SLICE4-SPIKE.md`.
+2. Map `OutboundGroupItem.urlTestDelay` **and** `urlTestTime` onto node
+   rows — the timestamp distinguishes a fresh result from a stale one
+   (closes the §3.13 note that `urlTestTime` is ignored).
+3. Live node switching — **already implemented**: selection changes are
+   reconciled into the live engine via `CommandClient.selectOutbound`
+   with a reconnect fallback (`ConnectionManager.applyDesiredSelection`).
 
 ### Slice 5 — Subscription auto-update (P1)
 

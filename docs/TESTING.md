@@ -99,3 +99,21 @@ not established. This is not a blocker for the pushed integration work.
 The temporary LAN SOCKS5/subscription servers used in the earlier run were
 stopped after testing. No subscription URLs, tokens, UUIDs, or node configs
 are recorded here.
+
+## R04 research instrumentation (opt-in)
+
+`OfflineUrlTestResearchTest` + `R04ReceiverIsolationRestoreTest` run an
+exclusive-process sing-box harness and are **gated behind the `-e r04 1`
+instrumentation argument** (`R04ReceiverIsolation.RUN_ARG`) — they skip
+themselves in a normal `connectedDebugAndroidTest` pass and must never be
+unconditional. To run them deliberately:
+
+```bash
+adb -s <device> shell am instrument -w -r \
+  -e class dev.typenil.vpnclient.core.engine.singbox.OfflineUrlTestResearchTest \
+  -e r04 1 \
+  dev.typenil.vpnclient.test/dev.typenil.vpnclient.VpnTestRunner
+```
+
+Timings/results land in logcat under the `R04Research` tag. Evidence and
+verdicts: `docs/R04-SLICE4-SPIKE.md`.
