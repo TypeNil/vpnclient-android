@@ -20,8 +20,11 @@ import dev.typenil.vpnclient.core.subscription.parse.vlessOutbound
 import dev.typenil.vpnclient.core.subscription.parse.vmessOutbound
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
 import org.yaml.snakeyaml.constructor.SafeConstructor
@@ -71,6 +74,11 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
         val network = m.str("network") ?: "tcp"
         if (classifyNetwork(network) == NetworkClass.Unsupported) {
             throw SkipNode(name, "unsupported transport: $network")
+        }
+        // Clash HTTP header obfuscation is not the native H2 transport.
+        // Do not approximate path/header choices as a different wire protocol.
+        if (network.equals("http", ignoreCase = true)) {
+            throw SkipNode(name, "unsupported transport: http obfuscation")
         }
         // Port hopping (hysteria2): `ports`/`mport` as "a-b,c" or a YAML
         // list. server_port stays at the first hop port — sing-box ignores
@@ -202,7 +210,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
     private fun clashServerName(m: Map<*, *>, server: String, network: String): String? {
         val opts = m.map("${network.lowercase()}-opts")
         val host = opts?.map("headers")?.str("Host") ?: opts?.map("headers")?.str("host")
-            ?: (opts?.get("host") as? String)
+            ?: opts?.stringValues("host", "h2-opts.host")?.firstOrNull()
         return tlsServerName(m.str("servername")?.takeIf { it.isNotBlank() } ?: m.str("sni"), host, server, network)
     }
 
@@ -231,15 +239,34 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                     path = opts?.str("path"),
                 )
             }
-            "http", "h2" -> {
-                val opts = m.map("h2-opts") ?: m.map("http-opts")
-                transportBlock("http", host = opts?.str("host"), path = opts?.str("path"))
+            "h2" -> {
+                val opts = m.map("h2-opts")
+                val hosts = opts?.stringValues("host", "h2-opts.host")
+                val paths = opts?.stringValues("path", "h2-opts.path")
+                if (paths != null && paths.size != 1) throw SkipNode(m.str("name"), "unsupported h2-opts.path list")
+                buildJsonObject {
+                    put("type", "http")
+                    if (!hosts.isNullOrEmpty()) put("host", JsonArray(hosts.map(::JsonPrimitive)))
+                    paths?.singleOrNull()?.let { put("path", it) }
+                    put("method", "GET")
+                }
             }
             "quic" -> transportBlock("quic")
             else -> null
         }
 
-    private fun Map<*, *>.str(key: String): String? = this[key]?.toString()
+    private fun Map<*, *>.stringValues(key: String, field: String): List<String>? = when (val v = this[key]) {
+        null -> null
+        is String -> listOf(v)
+        is List<*> -> v.map { it as? String ?: throw SkipNode(str("name"), "malformed $field") }
+        else -> throw SkipNode(str("name"), "malformed $field")
+    }
+
+    private fun Map<*, *>.str(key: String): String? = when (val v = this[key]) {
+        is String -> v
+        is Number, is Boolean -> v.toString()
+        else -> null
+    }
     private fun Map<*, *>.int(key: String): Int? = when (val v = this[key]) {
         is Number -> v.toInt()
         is String -> v.toIntOrNull()

@@ -1,0 +1,18 @@
+proxies:
+  - name: unsupported-http
+    type: vmess
+    server: server.example
+    port: 80
+    uuid: 00000000-0000-0000-000000000001
+    network: http
+    http-opts:
+      method: GET
+      path: [/first, /second]
+      headers:
+        Host: [front.example]
+        Connection: [keep-alive]
+  - name: ordinary
+    type: vmess
+    server: server.example
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000002

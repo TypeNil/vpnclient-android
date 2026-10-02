@@ -1,0 +1,11 @@
+proxies:
+  - name: h2-list
+    type: vmess
+    server: server.example
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000001
+    tls: true
+    network: h2
+    h2-opts:
+      host: [first.example, second.example]
+      path: /tunnel
