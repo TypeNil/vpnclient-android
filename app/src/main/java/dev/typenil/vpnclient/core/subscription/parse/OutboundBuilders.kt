@@ -216,7 +216,8 @@ internal fun hysteria2Outbound(
     serverPorts: List<String>? = null,
 ): JsonObject = baseOutbound("hysteria2", tag, server, port) {
     put("password", password)
-    put("tls", tls)
+    // sing-quic requires STDConfig; sing-box 1.14.1 uTLS rejects that usage.
+    put("tls", JsonObject(tls - "utls"))
     if (obfsPassword != null) {
         putJsonObject("obfs") {
             put("type", "salamander")
@@ -260,7 +261,8 @@ internal fun tuicOutbound(
     put("password", password)
     put("congestion_control", congestionControl?.takeIf { it.isNotBlank() } ?: "bbr")
     put("udp_relay_mode", udpRelayMode?.takeIf { it.isNotBlank() } ?: "native")
-    put("tls", tls)
+    // Apply at the shared builder so both URI and Clash use QUIC-compatible TLS.
+    put("tls", JsonObject(tls - "utls"))
 }
 
 internal fun anytlsOutbound(
