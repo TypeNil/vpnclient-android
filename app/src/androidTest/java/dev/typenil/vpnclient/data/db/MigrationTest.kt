@@ -38,6 +38,50 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate1To7PreservesLegacyData() {
+        helper.createDatabase(TEST_DB, 1).use { db ->
+            insertV1Row(db, "http://127.0.0.1:9/synthetic")
+            db.execSQL(
+                """INSERT INTO nodes
+                    (id, subscriptionId, name, protocol, server, port,
+                     outboundJson, rawUri, position)
+                   VALUES ('n1', 1, 'synthetic', 'VLESS', '192.0.2.1', 443, '{}', NULL, 0)""",
+            )
+        }
+        helper.runMigrationsAndValidate(
+            TEST_DB, 7, true,
+            AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3,
+            AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5,
+            AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7,
+        ).use { db ->
+            db.query(
+                "SELECT name, createdAtEpochMs, allowInsecureHttp, updateIntervalMinutes, " +
+                    "refreshPolicy, refreshFixedMinutes, updateAlways FROM subscriptions",
+            ).use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("sub", c.getString(0))
+                assertEquals(1L, c.getLong(1))
+                assertEquals(1, c.getInt(2))
+                assertTrue(c.isNull(3))
+                assertEquals("inherit", c.getString(4))
+                assertTrue(c.isNull(5))
+                assertEquals(0, c.getInt(6))
+            }
+            db.query("SELECT server, port FROM nodes WHERE id = 'n1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("192.0.2.1", c.getString(0))
+                assertEquals(443, c.getInt(1))
+            }
+            for (table in listOf("node_preferences", "routing_rules")) {
+                db.query("SELECT COUNT(*) FROM $table").use { c ->
+                    assertTrue(c.moveToFirst())
+                    assertEquals(0, c.getInt(0))
+                }
+            }
+        }
+    }
+
+    @Test
     fun migrate1To3PreservesLegacyHttpOptIn() {
         helper.createDatabase(TEST_DB, 1).use { db ->
             insertV1Row(db, "http://127.0.0.1:9/sub")
