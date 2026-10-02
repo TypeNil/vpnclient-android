@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.core.subscription.parse.portHoppingList
 import dev.typenil.vpnclient.core.subscription.parse.shadowsocksOutbound
 import dev.typenil.vpnclient.core.subscription.parse.stableNodeId
 import dev.typenil.vpnclient.core.subscription.parse.tlsBlock
+import dev.typenil.vpnclient.core.subscription.parse.tlsServerName
 import dev.typenil.vpnclient.core.subscription.parse.transportBlock
 import dev.typenil.vpnclient.core.subscription.parse.trojanOutbound
 import dev.typenil.vpnclient.core.subscription.parse.tuicOutbound
@@ -92,7 +93,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
                 val tlsEnabled = reality != null || m.bool("tls")
                     || m.str("security")?.lowercase() in setOf("tls", "reality")
                 val tls = if (tlsEnabled) tlsBlock(
-                    serverName = m.str("servername") ?: m.str("sni"),
+                    serverName = clashServerName(m, server, network),
                     insecure = m.bool("skip-cert-verify"),
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
@@ -112,7 +113,7 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             "vmess" -> {
                 val uuid = m.str("uuid") ?: throw SkipNode(name, "malformed")
                 val tls = if (m.bool("tls")) tlsBlock(
-                    serverName = m.str("servername") ?: m.str("sni"),
+                    serverName = clashServerName(m, server, network),
                     insecure = m.bool("skip-cert-verify"),
                     alpn = m.strList("alpn"),
                     fingerprint = m.str("client-fingerprint") ?: m.str("fingerprint"),
@@ -196,6 +197,13 @@ class ClashYamlParser @Inject constructor() : SubscriptionParser {
             rawUri = null,
             subscriptionId = subscriptionId,
         )
+    }
+
+    private fun clashServerName(m: Map<*, *>, server: String, network: String): String? {
+        val opts = m.map("${network.lowercase()}-opts")
+        val host = opts?.map("headers")?.str("Host") ?: opts?.map("headers")?.str("host")
+            ?: (opts?.get("host") as? String)
+        return tlsServerName(m.str("servername")?.takeIf { it.isNotBlank() } ?: m.str("sni"), host, server, network)
     }
 
     /** Clash `network` + `*-opts` maps → sing-box transport block. */

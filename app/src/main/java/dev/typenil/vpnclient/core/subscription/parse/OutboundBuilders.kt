@@ -69,6 +69,17 @@ internal fun classifyNetwork(network: String?): NetworkClass =
         else -> NetworkClass.Unsupported
     }
 
+/** SNI fallback without DNS lookup or weakening certificate verification. */
+internal fun tlsServerName(sni: String?, host: String?, server: String, network: String): String? =
+    sni?.takeIf { it.isNotBlank() }
+        ?: host?.takeIf { network.lowercase() in setOf("ws", "httpupgrade", "h2", "http") && it.isNotBlank() }
+        ?: server.takeUnless {
+            // A colon denotes an IPv6 literal (including mapped IPv4/zone IDs).
+            ':' in it || it.split('.').let { parts ->
+                parts.size == 4 && parts.all { p -> p.isNotEmpty() && p.all(Char::isDigit) && p.toIntOrNull() in 0..255 }
+            }
+        }
+
 /** `"tls"` block shared by all TLS-capable outbounds. */
 internal fun tlsBlock(
     serverName: String?,

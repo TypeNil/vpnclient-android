@@ -18,6 +18,7 @@ import dev.typenil.vpnclient.core.subscription.parse.portHoppingList
 import dev.typenil.vpnclient.core.subscription.parse.shadowsocksOutbound
 import dev.typenil.vpnclient.core.subscription.parse.stableNodeId
 import dev.typenil.vpnclient.core.subscription.parse.tlsBlock
+import dev.typenil.vpnclient.core.subscription.parse.tlsServerName
 import dev.typenil.vpnclient.core.subscription.parse.transportBlock
 import dev.typenil.vpnclient.core.subscription.parse.trojanOutbound
 import dev.typenil.vpnclient.core.subscription.parse.truthyParam
@@ -109,7 +110,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val security = p["security"]?.lowercase()
         val tls = when (security) {
             "tls", "reality" -> tlsBlock(
-                serverName = p["sni"],
+                serverName = tlsServerName(p["sni"], p["host"], link.host, network),
                 insecure = truthyParam(p.param("allowInsecure", "allow_insecure", "insecure")),
                 alpn = commaList(p["alpn"]),
                 fingerprint = p["fp"],
@@ -162,7 +163,7 @@ class UriListParser @Inject constructor() : SubscriptionParser {
         val security = obj.str("tls")?.lowercase()
         val tls = when (security) {
             "tls", "reality" -> tlsBlock(
-                serverName = obj.str("sni"),
+                serverName = tlsServerName(obj.str("sni"), obj.str("host"), server, network),
                 insecure = truthyParam(obj.str("allowInsecure") ?: obj.str("allow_insecure")),
                 alpn = commaList(obj.str("alpn")),
                 fingerprint = obj.str("fp"),
