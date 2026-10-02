@@ -23,6 +23,14 @@ class SingBoxFilesystemTest {
         """"tls":{"enabled":true,"certificate_path":"/synthetic/cert.pem"}""", "certificate_path",
     )
 
+    @Test fun mixedCaseCertificatePathRejected() = checkRejected(
+        """"tls":{"Certificate_Path":"/synthetic/cert.pem"}""", "Certificate_Path",
+    )
+
+    @Test fun uppercaseClientKeyPathRejected() = checkRejected(
+        """"tls":{"CLIENT_KEY_PATH":"/synthetic/key.pem"}""", "CLIENT_KEY_PATH",
+    )
+
     @Test fun echConfigPathSkippedRecursively() = checkRejected(
         """"tls":{"ech":{"config_path":"/synthetic/ech"}}""", "config_path",
     )

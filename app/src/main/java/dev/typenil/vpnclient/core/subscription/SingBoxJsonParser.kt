@@ -220,7 +220,8 @@ class SingBoxJsonParser @Inject constructor() : SubscriptionParser {
     private fun rejectFilesystemFields(element: JsonElement, tag: String?) {
         when (element) {
             is JsonObject -> element.forEach { (key, value) ->
-                if (key.endsWith("_path") || key.endsWith("_paths")) {
+                val foldedKey = key.lowercase()
+                if (foldedKey.endsWith("_path") || foldedKey.endsWith("_paths")) {
                     throw SkipNode(tag, "unsupported field: $key")
                 }
                 rejectFilesystemFields(value, tag)
