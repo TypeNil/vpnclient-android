@@ -95,8 +95,8 @@ sealed class DnsUpstream {
     }
 
     companion object {
-        val presets = listOf(Cloudflare, Google, Quad9, AdGuard)
-        val default = Cloudflare
+        val presets: List<DnsUpstream> get() = listOf(Cloudflare, Google, Quad9, AdGuard)
+        val default: DnsUpstream get() = Cloudflare
 
         fun fromKey(key: String?): DnsUpstream {
             if (key == null) return default
