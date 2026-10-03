@@ -308,9 +308,10 @@
     <string name="settings_dynamic_color">Динамические цвета</string>
     <string name="settings_dynamic_color_sub">Цвета на основе обоев (Android 12+)</string>
     <string name="settings_per_app_sub">Выберите, какие приложения используют туннель</string>
-    <string name="settings_always_on">Постоянный VPN и блокировка</string>
-    <string name="settings_always_on_unavailable">Настраивается в системных настройках VPN</string>
-    <string name="settings_always_on_status">Постоянный VPN: %1$s · Блокировка: %2$s</string>
+    <string name="settings_always_on">Постоянный VPN и блокировка соединений</string>
+    <string name="settings_always_on_unavailable">Статус недоступен. Откройте системные настройки VPN.</string>
+    <string name="settings_always_on_status">Постоянный VPN: %1$s · Блокировать соединения без VPN: %2$s</string>
+    <string name="settings_always_on_warning">Без включённых системных опций «Постоянный VPN» и «Блокировать соединения без VPN» возможны утечки трафика напрямую при переподключениях и перестройке туннеля (правила приложений, обновление подписок, смена IPv6 при Wi-Fi/мобильной сети). Нажмите, чтобы настроить системную защиту.</string>
     <string name="settings_auto_refresh">Автообновление подписок</string>
     <string name="settings_auto_refresh_every">Каждые %1$d мин</string>
     <string name="settings_auto_refresh_provider">По интервалу каждого провайдера</string>

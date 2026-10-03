@@ -308,9 +308,10 @@
     <string name="settings_dynamic_color">Dynamic color</string>
     <string name="settings_dynamic_color_sub">Use wallpaper-based colors (Android 12+)</string>
     <string name="settings_per_app_sub">Choose which apps use the tunnel</string>
-    <string name="settings_always_on">Always-on &amp; kill switch</string>
-    <string name="settings_always_on_unavailable">Configure in system VPN settings</string>
-    <string name="settings_always_on_status">Always-on: %1$s · Kill switch: %2$s</string>
+    <string name="settings_always_on">Always-on VPN &amp; connection blocking</string>
+    <string name="settings_always_on_unavailable">Status unavailable. Open system VPN settings.</string>
+    <string name="settings_always_on_status">Always-on VPN: %1$s · Block connections without VPN: %2$s</string>
+    <string name="settings_always_on_warning">Without both Always-on VPN and Block connections without VPN enabled in system VPN settings, traffic may leak directly during reconnects or tunnel rebuilds (app rules, subscription updates, or Wi-Fi/mobile IPv6 changes). Tap to configure system protection.</string>
     <string name="settings_auto_refresh">Auto-refresh subscriptions</string>
     <string name="settings_auto_refresh_every">Every %1$d min</string>
     <string name="settings_auto_refresh_provider">Using each provider\u2019s update interval</string>

@@ -458,7 +458,7 @@ private fun AutoRefreshIntervalRow(
 }
 
 /**
- * Real always-on/kill-switch status (VpnService.isAlwaysOn /
+ * Real system always-on/connection-blocking status (VpnService.isAlwaysOn /
  * isLockdownEnabled on API 29+), refreshed whenever the screen resumes —
  * the user configures it in system VPN settings, so returning from that
  * activity must show the new value. Click still opens the system screen;
@@ -527,6 +527,11 @@ private fun AlwaysOnRow() {
             Text(stringResource(R.string.settings_always_on), style = MaterialTheme.typography.bodyLarge)
             Text(
                 subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(R.string.settings_always_on_warning),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

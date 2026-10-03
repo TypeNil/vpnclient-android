@@ -20,7 +20,7 @@ data class VpnSystemStatus(
     /** True when this app's VPN is set as always-on for the current user;
      *  null when the API isn't available (< Q). */
     val alwaysOn: Boolean?,
-    /** True when always-on + lockdown (kill switch) is set; null on < Q. */
+    /** True when system Block connections without VPN is set; null on < Q. */
     val lockdownEnabled: Boolean?,
 ) {
     val available: Boolean get() = alwaysOn != null
@@ -36,8 +36,8 @@ private class ProbeVpnService : VpnService() {
 }
 
 /**
- * Read the live system state. Safe to call on the main thread — both flags
- * are cached by the framework process-side (no binder round trip on Q+).
+ * Read the live system flags through VpnService platform queries.
+ * Query failures remain unknown; this does not enable any protection.
  */
 fun readVpnSystemStatus(context: Context): VpnSystemStatus =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

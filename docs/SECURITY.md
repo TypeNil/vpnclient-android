@@ -40,6 +40,47 @@
   failed fetch keeping last-known-good — never silent corruption. `LatencyProbe` is the deliberate exception: it
   measures the underlay, so it binds off-tunnel via `VpnSocketProtector`.
 
+## Tunnel gaps and system fail-closed protection
+
+The app does not implement its own kill switch or blocking TUN. During
+`ClientVpnService.rebuildTunnel`, the old engine is stopped (which also closes
+its TUN), the service closes the TUN, and a new engine establishes a fresh
+interface. There is a gap with no VPN interface. Rebuilds happen for per-app
+rules, changes to enabled subscription nodes, and changes to the underlay IPv6
+mode (for example Wi-Fi/mobile handover). Automatic reconnects can also leave
+no TUN while restarting. New connections can use the physical network directly
+during these gaps; a UI reconnecting state is not a traffic block.
+
+Enable **both Always-on VPN and Block connections without VPN** in Android VPN
+settings to have the system deny non-VPN connections while the VPN is absent.
+Always-on alone restarts the service; it does not provide this blocking policy.
+Lockdown is enforced by Android for the relevant user/profile, subject to system
+VPN policy/exemptions; the app cannot enable it itself. Split-routing rules and
+protected core/underlay sockets are not a promise that every packet uses a proxy.
+The Settings row opens `Settings.ACTION_VPN_SETTINGS` and reports system flags,
+not an app-owned protection state.
+
+### Retaining the old TUN during rebuild (research only)
+
+Android [`Builder.establish()`](https://developer.android.com/reference/android/net/VpnService.Builder#establish())
+supports keeping the old interface until the replacement succeeds: success
+moves outgoing packets to the new interface, leaving the old descriptor valid
+for draining/closing; failure leaves the old interface untouched (permission
+revocation is a separate failure). This could reduce a route gap, but is **not
+implemented** here. Simply moving `closeTun()` is insufficient: engine stop and
+start-error cleanup also close the platform TUN, and the service currently owns
+one mutable descriptor.
+
+A future change would need generation/engine-scoped descriptor ownership,
+serialized engine replacement, an explicit retained-descriptor cleanup policy,
+and native fd lifetime verification. A stopped engine with a retained TUN
+stalls/drops packets; it does not keep the VPN usable. Old per-app/IPv6 routes
+may still bypass traffic newly covered by the replacement policy. Successful
+establishment also does not guarantee a working remote handshake. Failure,
+revoke, cancellation, disconnect races and native close paths need device tests;
+retention would not replace system lockdown. Expect a separate lifecycle change
+(service/engine ownership plus unit and device tests), not a one-line reorder.
+
 ## Untrusted input
 
 All subscription content is attacker-controlled: capped size, typed parse
