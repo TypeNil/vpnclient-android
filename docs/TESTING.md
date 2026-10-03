@@ -8,6 +8,26 @@
 ./gradlew assembleDebug   # full build incl. libbox fetch+checksum
 ```
 
+## Physical device safety (hard rule)
+
+**Never run `connectedDebugAndroidTest` (or any `connected*` Gradle task) on a
+physical device.** Gradle uninstalls the app after the run, which erases the
+installed app's data (subscriptions, selection, settings). Run instrumented
+tests there only through a plain install plus `am instrument`:
+
+```powershell
+$adb = "$env:LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
+./gradlew assembleDebug assembleDebugAndroidTest
+& $adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
+& $adb -s <serial> install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+& $adb -s <serial> shell am instrument -w -r `
+  -e class <fully.qualified.TestClass> `
+  dev.typenil.vpnclient.test/dev.typenil.vpnclient.VpnTestRunner
+```
+
+Never `adb uninstall`, `pm clear` or otherwise clear app data on a physical
+device. Prefer the `Medium_Phone_API_36.1` emulator for instrumented runs.
+
 ## Unit test coverage (JVM)
 
 - `UriListParserTest` — VLESS(+REALITY/WS), VMess, Trojan, SS (3 forms),
