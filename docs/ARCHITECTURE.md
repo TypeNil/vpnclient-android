@@ -32,6 +32,19 @@ SubscriptionRepository.refresh(id)
 
 A failed refresh never touches stored nodes (last-known-good).
 
+Node identity: `stableNodeId` = SHA-256 of `subscriptionId` plus the canonical
+(key-sorted) outbound JSON **without its `tag`**. Display name/tag do not
+matter; transport, TLS and **SNI (`server_name`) do** — so when the parser
+derives an SNI (explicit value, or the transport host for ws/httpupgrade) the
+id differs from one produced without it. Decision D-5 (WP-3b notes): no id
+migration; after the parser changes that altered the hashed outbound for
+affected nodes, one refresh may reset those nodes' preferences and a stored
+selection once. Not restored automatically.
+
+The fetcher's User-Agent is built from the pinned core version
+(`sing-box/<vpnCore> (VPNClient; android)`, `BuildConfig.VPN_CORE_VERSION`),
+so it changes only with the `vpnCore` pin.
+
 The stored `outboundJson` stays opaque outside `core.engine.singbox`, but
 the Servers UI surfaces a read-only TLS posture via
 `NodeTlsSummary.fromOutboundJson` (same package): the TLS authentication
@@ -101,8 +114,10 @@ shapes report `UNKNOWN` rather than a false verified/insecure claim.
   `idle_timeout: 20m` stops background probing when the group is idle
 - `tun` inbound (mtu 9000, `auto_route`, `stack: gvisor` — required on pinned
   libbox 1.14.1; IPv6 optional)
-- `dns`: `local` (platform, via LocalDnsResolver) + `remote` (https://1.1.1.1
-  with `detour: proxy` so DoH follows the selected node, not the direct path);
+- `dns`: `local` (platform, via LocalDnsResolver) + `remote` (DoH upstream from
+  the DNS profile, `DnsPolicy` — preset Cloudflare `https://1.1.1.1` by default,
+  or Google/Quad9/AdGuard/validated custom — with `detour: proxy` so DoH follows
+  the selected node, not the direct path);
   route rule `hijack-dns` captures tunneled DNS; `default_domain_resolver: local`
   prevents the loop on outbound server names (kept in every mode)
 - route: `sniff` → `hijack-dns` → private-IP bypass → mode rule → `final`
@@ -155,8 +170,10 @@ the tunnel instead of dead-ending in `direct`.
   re-runs with the new plan). The UI sees a brief `Reconnecting`; changes
   landing in other states are picked up by the next `openTun`.
 
-Validated with `Libbox.checkConfig` in `ConnectionManager.connect()` **before**
-requesting VPN permission.
+Validated with `Libbox.checkConfig` inside `ConfigCompiler.compile` (called
+from `compileSelected()` while the state is `Preparing`, i.e. **before**
+requesting VPN permission) and again by `SingBoxEngine` at start. Subscription
+refresh and routing-rule edits run the same validation on candidates.
 
 ## Connection lifecycle
 
@@ -185,11 +202,18 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   when the engine can't honor it (control channel down, tag missing) the
   manager reconnects so the pick compiles in as the selector default.
 - Latency: `urlTest` runs through each node's own outbound over the real
-  underlay — engine sockets bypass the TUN via `VpnService.protect()`. The
-  app's own package rides the tunnel in every per-app mode, so the
-  disconnected-mode `LatencyProbe` (direct TCP connect to `server:port`)
-  protects its sockets explicitly through `VpnSocketProtector` and never
-  measures through the tunnel itself.
+  underlay — engine sockets bypass the TUN via `VpnService.protect()`; only
+  `type == "urltest"` groups are dispatched, and results are accepted when
+  `urlTestTime` advances past a per-tag baseline taken before dispatch
+  (`docs/R04-SLICE4-SPIKE.md`; scoped to the engine epoch so a rebuilt
+  engine never inherits old timings). The app's own package rides the tunnel
+  in every per-app mode, so the disconnected-mode `LatencyProbe` (direct TCP
+  connect to `server:port`) protects its sockets explicitly through
+  `VpnSocketProtector` and never measures through the tunnel itself. It
+  allows 8 concurrent probes (`Semaphore`); the caller acquires a permit
+  cancellably *before* the 3 s DNS+connect deadline starts, so queue wait is
+  neither measured nor charged to the deadline, and the worker keeps its
+  permit until DNS/connect really finish even if the caller timed out.
   Settings baked into the config at compile time (`routeMode`,
   `ipv6Enabled`) prompt a reconnect when changed on a live tunnel; per-app
   policy rebuilds the TUN in-session instead.
@@ -203,9 +227,30 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   → `Error(PermissionRevoked)`.
 - Durability: `desiredVpnRunning` (DataStore) records user intent. `CONNECT` sets
   it and returns `START_STICKY`; `DISCONNECT`/`onRevoke`/start-failure clear it
-  and return `NOT_STICKY`. A null-intent restart (process death) or system
-  start rebuilds the config from Room/DataStore via `NodeConfigProvider` and
-  adopts a fresh session generation — no `pendingSession` handoff needed.
+  and return `NOT_STICKY`. Any other start (null intent, `RESTORE`, system
+  `VpnService` start) rebuilds the config from Room/DataStore via
+  `NodeConfigProvider` and adopts a fresh session generation — no
+  `pendingSession` handoff needed. These starts are classified by
+  `automaticStartBranch` (`AutomaticStartPolicy.kt`, pure, unit-tested):
+  - request `AlwaysOn` = intent action `VpnService.SERVICE_INTERFACE`.
+    Classified by the action, not by `VpnService.isAlwaysOn()`: on CPH2449
+    the system start carries `SERVICE_INTERFACE` while `isAlwaysOn` reports
+    `false` (observed 2026-10-03, with and without lockdown). Branch
+    `AlwaysOn` ignores `desiredVpnRunning` but needs VPN consent and a
+    selected node (or Auto); otherwise `MissingPrerequisites` posts a
+    localized alert and stops without restart loops (no desire flag is set).
+    After the engine is up, `desiredVpnRunning=true` is committed only if
+    this attempt still owns the session.
+  - request `Restore` = null intent or `RESTORE` (process-death restart,
+    boot, package replace): branch `Restore` only when `desiredVpnRunning`,
+    else `Stop`.
+  - request `Stray` = any other action: always `Stop`.
+  Eligible branches go through the bounded restart guard
+  (`registerVpnRestartAttempt`: 3 automatic starts per 10 min, then
+  `desiredVpnRunning` is cleared, the guard-tripped flag and an alert are
+  set). A user Disconnect clears the flag and never restarts, even with
+  system always-on still configured. Process-kill restart on CPH2449 was not
+  observed (`docs/TESTING.md`, scenario C).
 - Socket protection: `autoDetectInterfaceControl` → `protect(fd)`. A `false`
   return means the core's outbound socket loops back into the TUN — the
   engine reports it once as `EngineEvent.Failed` and the bounded
@@ -237,10 +282,36 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   keep rules for `go.**`/`io.nekohasekai.**`); the Room schema is exported to
   `app/schemas/` for migration history.
 
+### Diagnostics export
+
+- `CoreLogBuffer` (one per `SingBoxEngine`, in memory only, 500 lines): keeps
+  only core levels panic/fatal/error/warn, 512 chars per line. Every line goes
+  through `Redactor.redactCore` with a context list built from the compiled
+  config (`coreLogSecrets`: node name/server plus string values under keys
+  such as `server`, `server_name`, `password`, `uuid`, `token`, `auth`,
+  `public_key`, `private_key`, `short_id`, `username`). `redactCore` also
+  replaces URLs, IPv4/IPv6 addresses and host names, `name`/`tag`/credential
+  `key=value` pairs, and the generic `Redactor.redact` patterns (UUIDs, long
+  opaque tokens, `user@host`).
+- The subscription is lifecycle-gated: the command client subscribes to core
+  logs only while the state is `Connecting`/`Connected` and the screen is on;
+  tokens (epoch) make callbacks from a disconnected client no-ops, and
+  `engine.stop()` clears the buffer (see `docs/SECURITY.md` for the limit).
+- Share path: `LogExporter` renders app log + core section (an explicit note
+  when empty) and publishes the bytes to `DiagnosticShareStore`;
+  `DiagnosticProvider` (non-exported, `grantUriPermissions`, read-only)
+  serves them through an in-memory pipe (`openPipeHelper`) as
+  `vpn-diagnostics.txt`. No cache file, no filesystem path. Each export gets a
+  fresh random URI and replaces the previous payload, so an old grant cannot
+  read a later export; process death expires it. A recipient that needs a
+  seekable file descriptor cannot read the pipe — receiver compatibility is
+  not verified (`docs/TESTING.md`).
+
 ### Entry points
 
-- **QS tile** (`VpnTileService`): mirrors `ConnectionManager.state`; tap on an
-  active session disconnects directly, otherwise calls
+- **QS tile** (`VpnTileService`): mirrors `ConnectionManager.state`; tap while
+  `Preparing`/`Connecting`/`Connected`/`Reconnecting`/`Stopping` calls
+  `disconnect()` (cancelling a `Preparing` attempt), otherwise it calls
   `ConnectionManager.connect()` itself and opens `MainActivity` — the consent
   dialog reaches the UI via the `prepareIntent` StateFlow. The exported
   activity never honors caller-supplied connect extras.
@@ -250,8 +321,11 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 - **Import funnel** (`MainActivity` → `ImportUrlExtractor`): `sing-box://
   import-remote-profile?url=`, `clash://install-config?url=`,
   `clashmeta://install-config?url=`, and `text/plain` shares carrying a bare
-  `http(s)` URL. The URL lands prefilled in the add-subscription dialog —
-  nothing is imported without user confirmation.
+  `http(s)` URL (`Kind.Subscription`), plus a single node share link with a
+  scheme `UriListParser` accepts (`Kind.ShareLink`, imported through
+  `importShareLink` instead of the subscription path). The result lands
+  prefilled in the add dialog — nothing is imported without user
+  confirmation; classification is not validation.
 
 ## Threading
 
@@ -262,12 +336,17 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 
 ## Storage
 
-- Room: `subscriptions` + `nodes` tables (nodes keyed by stable content hash id).
-- DataStore preferences: selected node id, HWID, reconnect/IPv6/doze flags,
-  `desiredVpnRunning`, `subscriptionRefreshMinutes`, `perAppMode`,
-  `perAppPackages`, restart-guard window/count/tripped flag.
-- Secrets stay in Room (`url`, `rawUri`, `outboundJson`) — local-only, never exported;
-  `SecureLog` + `Redactor` scrub logs.
+- Room (schema v7, exported to `app/schemas/`): `subscriptions`, `nodes`
+  (keyed by stable content hash id), `node_preferences` (favorite / enabled /
+  hidden / custom name per node id), `routing_rules` (user rules).
+- DataStore preferences: selected node id (`auto` sentinel or node id), HWID,
+  reconnect/IPv6/doze/LAN-bypass flags, `desiredVpnRunning`, route mode,
+  per-app mode + package set, DNS profile, theme/language, refresh interval,
+  restart-guard window/count/tripped flag.
+- Rule sets: `filesDir/rule_sets/*.srs` (public data, not secret). Diagnostics
+  are never stored — see "Diagnostics export".
+- Secrets stay in Room (`url`, `rawUri`, `outboundJson`) and the HWID in
+  DataStore — local-only, never exported; `SecureLog` + `Redactor` scrub logs.
 
 ## Foreground service
 
