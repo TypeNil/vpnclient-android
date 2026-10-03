@@ -32,13 +32,15 @@
   `usesCleartextTraffic="true"` stays in the manifest because the opt-in needs
   the OS to permit cleartext — the fetcher enforces the policy itself.
 - **Self rides the tunnel:** the app's own OkHttp traffic (subscription
-  refresh, rule-set downloads) is routed through the VPN while connected
-  (`PerAppPolicy` includes the app). A malicious exit node can therefore
-  observe this fetch path; downloads are still integrity-gated (rule sets
-  carry `SRS\x01` magic + full zlib payload decompression validation + size cap,
+  refresh, rule-set downloads, including the background rule-set refresh after
+  `Connected`) is routed through the VPN while connected (`PerAppPolicy`
+  includes the app). A malicious exit node can therefore observe this fetch
+  path; downloads are still integrity-gated (see "Rule-set payloads";
   subscription bodies are full-validated before commit), so worst case is a
-  failed fetch keeping last-known-good — never silent corruption. `LatencyProbe` is the deliberate exception: it
-  measures the underlay, so it binds off-tunnel via `VpnSocketProtector`.
+  failed fetch keeping last-known-good — structural corruption is rejected,
+  but a well-formed hostile rule list is not detectable. `LatencyProbe` is the
+  deliberate exception: it measures the underlay, so it binds off-tunnel via
+  `VpnSocketProtector`.
 
 ## Tunnel gaps and system fail-closed protection
 
@@ -53,7 +55,13 @@ during these gaps; a UI reconnecting state is not a traffic block.
 
 Enable **both Always-on VPN and Block connections without VPN** in Android VPN
 settings to have the system deny non-VPN connections while the VPN is absent.
-Always-on alone restarts the service; it does not provide this blocking policy.
+Always-on alone makes the system ask the app to start the service
+(`AutomaticStartBranch.AlwaysOn`, which starts without our own desire flag
+when consent and a selected node/Auto exist; missing prerequisites alert and
+stop). It does not provide a blocking policy. Observed on CPH2449 only
+(2026-10-03): the system start works with and without lockdown, but a killed
+service was not restarted, and reboot with always-on is **not verified**. The
+app does not promise a kill switch or leak-proofing.
 Lockdown is enforced by Android for the relevant user/profile, subject to system
 VPN policy/exemptions; the app cannot enable it itself. Split-routing rules and
 protected core/underlay sockets are not a promise that every packet uses a proxy.
@@ -87,6 +95,65 @@ All subscription content is attacker-controlled: capped size, typed parse
 failures, full-parse-before-commit so a poisoned refresh can't wipe working
 nodes.
 
+### Rule-set payloads
+
+Rule sets (`.srs`) are public data but still untrusted input. Every file —
+downloaded, bundled seed, or already stored — must pass: size cap (32 MiB),
+`SRS\x01` magic, a complete zlib payload within a 64 MiB decompressed bound
+(decompression-bomb guard), a decompressed-header schema check (rule count,
+rule/item type), and a decode by the core (`Libbox.checkConfig` on a probe
+config, fail-closed on any error). A download goes to a unique temp file and
+replaces the working copy atomically only after all checks pass; any failure
+keeps last-known-good. The background refresh (`refreshStale`) is
+single-flight and logs only the exception class. A valid but old copy is used
+as-is on connect; staleness never blocks or fails a connect. Upstream
+publishes no checksums, so integrity is structural, not authenticity: a
+hostile or compromised exit node/CDN could still serve a *valid* but
+malicious rule list.
+
+### Imported nodes and uTLS
+
+Hysteria2 and TUIC builders drop the `utls` block: the pinned sing-box 1.14.1
+rejects uTLS for the QUIC (sing-quic) path on the first connection. Those
+nodes therefore carry no client-fingerprint mimicry; TCP-based outbounds keep
+uTLS (`chrome` unless the source names a fingerprint). Explicit `insecure`
+TLS flags are preserved and shown read-only in the Servers UI; the app does
+not set a global trust-all.
+
+## Diagnostics export
+
+The share action sends a redacted snapshot (app log ring + a bounded core-log
+tail) through `DiagnosticProvider`: a non-exported, read-only, URI-granted
+**memory pipe**. Nothing is written to a cache file or the filesystem; the
+payload lives in process memory, is replaced by the next export, and
+disappears with the process (an old URI then fails as expired).
+
+Redaction coverage:
+- App log: `Redactor.redact` (UUIDs, `user@host`, sensitive query params,
+  bearer tokens, long opaque tokens).
+- Core log: `Redactor.redactCore` on top of that — all URLs, IP addresses,
+  host names, `name=`/`tag=`/credential `key=value` pairs, plus every string
+  under sensitive keys of the session's compiled config (`server`,
+  `server_name`, `password`, `uuid`, `token`, `auth`, `auth_str`,
+  `public_key`, `private_key`, `pre_shared_key`, `short_id`, `username`) and
+  the node name/server, matched case-insensitively. Core logs keep only
+  panic/fatal/error/warn levels, 512 characters per line, 500 lines.
+
+Known limits:
+- Redaction is pattern + context based, not a proof. Config values under keys
+  that are **not** in the context list (for example `path`, `service_name`,
+  header values) are covered only by the generic patterns, so a short value
+  without a URL/host shape that appears in free text could survive. Treat the
+  export as sensitive and review it before sharing.
+- Recipients that require a seekable descriptor cannot read the pipe; we do
+  not fall back to a file. Receiver behavior is not verified on a device.
+- The core tail is cleared when the engine stops (and is not collected while
+  disconnected or with the screen off), so a failure that already tore the
+  engine down leaves no core section to export.
+- Verified on CPH2449 (WP-4b): secret scans over the export and logcat found 0
+  matches for the session's real credentials. This is one device and one
+  node set, not a general guarantee.
+
 ## Core supply chain
 
 `libbox.aar` comes from the pinned `singbox-android/libbox` GitHub release,
@@ -96,5 +163,11 @@ AAR is not committed; `core-native/` is gitignored.
 ## Permissions
 
 INTERNET, ACCESS_NETWORK_STATE, FOREGROUND_SERVICE,
-FOREGROUND_SERVICE_SYSTEM_EXEMPTED (VpnService type), POST_NOTIFICATIONS.
-No location, contacts, or storage permissions.
+FOREGROUND_SERVICE_SYSTEM_EXEMPTED (VpnService type), POST_NOTIFICATIONS,
+RECEIVE_BOOT_COMPLETED (restore after boot/update, see `BootReceiver`), CAMERA
+(QR subscription import only; the camera feature is optional). No location,
+contacts, or storage permissions. Exported components: `MainActivity`
+(launcher/import intents; never honors caller-supplied connect extras),
+`VpnTileService` (system-bound via `BIND_QUICK_SETTINGS_TILE`) and
+`BootReceiver` (acts only on `BOOT_COMPLETED`/`MY_PACKAGE_REPLACED`).
+`ClientVpnService` and `DiagnosticProvider` are not exported.
