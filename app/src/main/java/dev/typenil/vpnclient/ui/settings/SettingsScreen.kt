@@ -61,7 +61,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
-import dev.typenil.vpnclient.ui.common.CORE_VERSION
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 
 @Composable
@@ -223,7 +222,7 @@ fun SettingsScreen(
             NavChevron()
         }
 
-        InfoRow(title = stringResource(R.string.common_vpn_core), value = CORE_VERSION)
+        AboutSection()
     }
 }
 
@@ -542,7 +541,7 @@ private fun AlwaysOnRow() {
 
 /** Trailing affordance for rows that open a screen or a picker. */
 @Composable
-private fun NavChevron() {
+internal fun NavChevron() {
     Icon(
         Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = null,
@@ -551,7 +550,7 @@ private fun NavChevron() {
 }
 
 @Composable
-private fun InfoRow(
+internal fun InfoRow(
     title: String,
     value: String,
 ) {

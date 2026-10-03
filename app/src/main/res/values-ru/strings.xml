@@ -308,6 +308,16 @@
     <string name="settings_dynamic_color">Динамические цвета</string>
     <string name="settings_dynamic_color_sub">Цвета на основе обоев (Android 12+)</string>
     <string name="settings_per_app_sub">Выберите, какие приложения используют туннель</string>
+    <string name="about_title">О приложении</string>
+    <string name="about_version">Версия приложения</string>
+    <string name="about_version_value">%1$s (%2$d)</string>
+    <string name="about_license">Лицензия</string>
+    <string name="about_core_attribution">На базе sing-box / libbox (SagerNet), GPL-3.0. sing-box содержит условие об имени и атрибуции. Приложение распространяется под GPL-3.0.</string>
+    <string name="about_dependencies">Основные зависимости</string>
+    <string name="about_dependency_licenses">AndroidX (Compose, Room, WorkManager), Hilt, OkHttp, kotlinx.serialization, kotlinx.coroutines и SnakeYAML — Apache-2.0.</string>
+    <string name="about_source_code">Исходный код</string>
+    <string name="about_privacy_policy">Политика конфиденциальности</string>
+    <string name="about_link_unavailable">Нет приложения для открытия ссылки.</string>
     <string name="settings_always_on">Постоянный VPN и блокировка соединений</string>
     <string name="settings_always_on_unavailable">Статус недоступен. Откройте системные настройки VPN.</string>
     <string name="settings_always_on_status">Постоянный VPN: %1$s · Блокировать соединения без VPN: %2$s</string>

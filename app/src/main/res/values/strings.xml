@@ -308,6 +308,16 @@
     <string name="settings_dynamic_color">Dynamic color</string>
     <string name="settings_dynamic_color_sub">Use wallpaper-based colors (Android 12+)</string>
     <string name="settings_per_app_sub">Choose which apps use the tunnel</string>
+    <string name="about_title">About</string>
+    <string name="about_version">App version</string>
+    <string name="about_version_value">%1$s (%2$d)</string>
+    <string name="about_license">License</string>
+    <string name="about_core_attribution">Powered by sing-box / libbox (SagerNet), GPL-3.0. sing-box includes a namesake/attribution clause. This app is distributed under GPL-3.0.</string>
+    <string name="about_dependencies">Main dependencies</string>
+    <string name="about_dependency_licenses">AndroidX (Compose, Room, WorkManager), Hilt, OkHttp, kotlinx.serialization, kotlinx.coroutines and SnakeYAML — Apache-2.0.</string>
+    <string name="about_source_code">Source code</string>
+    <string name="about_privacy_policy">Privacy policy</string>
+    <string name="about_link_unavailable">No app could open this link.</string>
     <string name="settings_always_on">Always-on VPN &amp; connection blocking</string>
     <string name="settings_always_on_unavailable">Status unavailable. Open system VPN settings.</string>
     <string name="settings_always_on_status">Always-on VPN: %1$s · Block connections without VPN: %2$s</string>
