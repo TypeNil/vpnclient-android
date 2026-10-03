@@ -23,7 +23,19 @@ The libbox AAR is fetched at build time from the pinned `singbox-android/libbox`
 GitHub release and verified against a SHA-256 recorded in `app/build.gradle.kts`.
 Core version lives in `gradle/libs.versions.toml` as `vpnCore`.
 
-Requirements: JDK 17, Android SDK 37, minSdk 26.
+Requirements (from the build files, not from memory):
+
+- **JDK 25 to run Gradle.** `gradle/gradle-daemon-jvm.properties` pins the
+  daemon to Java 25 (`toolchainVersion=25`) and `settings.gradle.kts` applies
+  the Foojay resolver, so a missing JDK 25 is provisioned automatically. CI
+  (`.github/workflows/android-ci.yml`) uses Temurin 25. The compiled bytecode
+  targets Java 11 (`compileOptions` in `app/build.gradle.kts`).
+- Gradle 9.5.0 (wrapper, checksum-pinned), AGP 9.3.3, Kotlin 2.2.10.
+- Android SDK platform 37 (`compileSdk`/`targetSdk` 37), `minSdk` 26.
+- Network access on the first build to fetch the pinned libbox AAR.
+
+Instrumented tests: see `docs/TESTING.md`. Never run `connected*` Gradle tasks
+on a physical device — they uninstall the app and erase its data.
 
 ## Emulator verification
 
