@@ -280,7 +280,10 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
     modifier: Modifier = Modifier, hasNodes: Boolean = false) {
     val colors = AfterglowTheme.colors
     val active = state == VisualState.Connected || state == VisualState.Reconnecting
-    val enabled = noServers || active || state == VisualState.Offline || state == VisualState.Error
+    // Preparing is the only pre-service phase that can be cancelled: the
+    // manager aborts the compile and never starts the tunnel.
+    val cancellable = state == VisualState.Preparing
+    val enabled = noServers || active || cancellable || state == VisualState.Offline || state == VisualState.Error
     val label = when {
         noServers -> stringResource(if (hasNodes) R.string.nav_servers else R.string.common_add_server_cta)
         active -> stringResource(R.string.action_disconnect)
@@ -288,7 +291,7 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
         state == VisualState.Error -> stringResource(R.string.afterglow_retry)
         state == VisualState.Stopping -> stringResource(R.string.home_status_disconnecting)
         state == VisualState.Permission -> stringResource(R.string.home_status_permission)
-        state == VisualState.Preparing -> stringResource(R.string.home_status_preparing)
+        cancellable -> stringResource(R.string.common_cancel)
         else -> stringResource(R.string.home_status_connecting)
     }
     val accent = when {
@@ -353,7 +356,7 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
             .border(1.dp, colors.onActionSurface.copy(alpha = .18f), RoundedCornerShape(12.dp))
             .semantics { role = Role.Button }
             .clickable(enabled = enabled, interactionSource = interaction, indication = null,
-                onClick = if (active && !noServers) onDisconnect else onConnect)
+                onClick = if ((active || cancellable) && !noServers) onDisconnect else onConnect)
             .heightIn(min = 84.dp).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(animatedAccent),

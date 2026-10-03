@@ -57,6 +57,7 @@ class VpnTileService : TileService() {
     override fun onClick() {
         super.onClick()
         when (connectionManager.state.value) {
+            is VpnConnectionState.Preparing,
             is VpnConnectionState.Connected,
             is VpnConnectionState.Connecting,
             is VpnConnectionState.Reconnecting,

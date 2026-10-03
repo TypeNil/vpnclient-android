@@ -163,10 +163,15 @@ requesting VPN permission.
 `VpnConnectionState`: `Idle → Preparing → PermissionRequired? → Connecting →
 Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
 
-- `connect()`: compile config → `VpnService.prepare()` → (consent intent →
-  UI launcher → `onPermissionResult`) → `startForegroundService`. Each attempt
-  gets a monotonically increasing session generation; every service callback
-  and collector emission is tagged with it and stale generations are dropped.
+- `connect()`: publish `Preparing` (node not yet known) → compile config
+  outside the manager mutex → under the mutex, commit only if the attempt is
+  still current → `VpnService.prepare()` → (consent intent → UI launcher →
+  `onPermissionResult`) → `startForegroundService`. `disconnect()` during
+  `Preparing` cancels the compile at once (it never waits on the mutex) and
+  returns to `Idle` without starting the service; Home and the quick-settings
+  tile expose it as Cancel. Each attempt gets a monotonically increasing
+  session generation; every service callback and collector emission is tagged
+  with it and stale generations are dropped.
 - `ClientVpnService` builds the engine, calls `start(config)`; libbox calls back
   `EnginePlatform.openTun` → `Builder.establish()` → fd. `onServiceStarted(gen)`
   flips state to `Connected`; stats may only mutate a `Connected` payload —
