@@ -79,17 +79,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Serves the redacted diagnostics export to the share sheet —
-             scoped to cache-path "diagnostics/" only. -->
+        <!-- Redacted diagnostics are shared from memory, never written to disk. -->
         <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
+            android:name=".core.common.log.DiagnosticProvider"
+            android:authorities="${applicationId}.diagnostics"
             android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
+            android:grantUriPermissions="true" />
 
         <!-- QS tile: toggle connect/disconnect; state mirrors the manager. -->
         <service

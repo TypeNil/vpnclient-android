@@ -1,7 +1,6 @@
 package dev.typenil.vpnclient.ui.diagnostics
 
 import android.content.Intent
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -183,21 +182,7 @@ fun DiagnosticsScreen(
             OutlinedButton(
                 onClick = {
                     val intent = exporter.buildShareIntent(context)
-                    if (intent != null) {
-                        context.startActivity(
-                            Intent.createChooser(
-                                intent,
-                                shareChooserTitle,
-                            ),
-                        )
-                    } else {
-                        Toast
-                            .makeText(
-                                context,
-                                R.string.diag_export_empty,
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                    }
+                    context.startActivity(Intent.createChooser(intent, shareChooserTitle))
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {

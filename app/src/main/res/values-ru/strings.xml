@@ -351,7 +351,9 @@
     <string name="diag_ip_network">сетевая ошибка (%1$s)</string>
     <string name="diag_ip_not_connected">Нет подключения — запрос идёт напрямую, не через туннель</string>
     <string name="diag_export_log">Экспорт лога</string>
-    <string name="diag_export_log_sub">Последние %1$d строк, уже без секретов — отправляется как текстовый файл</string>
+    <string name="diag_export_log_sub">Приложение: до %1$d строк; ядро: до 500 предупреждений/ошибок. Без секретов, экспорт из памяти.</string>
+    <string name="diag_core_log_title">Лог ядра — предупреждения и ошибки (без секретов)</string>
+    <string name="diag_core_log_empty">В текущем сеансе движка нет предупреждений или ошибок ядра.</string>
     <string name="diag_export_empty">Пока нечего экспортировать</string>
     <string name="diag_share_chooser">Поделиться логом диагностики</string>
 

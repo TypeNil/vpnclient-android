@@ -351,7 +351,9 @@
     <string name="diag_ip_network">network error (%1$s)</string>
     <string name="diag_ip_not_connected">Not connected — the probe goes direct, not through the tunnel</string>
     <string name="diag_export_log">Export log</string>
-    <string name="diag_export_log_sub">Last %1$d lines, already redacted — shareable as a text file</string>
+    <string name="diag_export_log_sub">App: up to %1$d lines; core: up to 500 warn/error lines. Redacted, shared from memory.</string>
+    <string name="diag_core_log_title">Core log — warnings and errors (redacted)</string>
+    <string name="diag_core_log_empty">No core warnings or errors in the current engine session.</string>
     <string name="diag_export_empty">Nothing to export yet</string>
     <string name="diag_share_chooser">Share diagnostics log</string>
 
