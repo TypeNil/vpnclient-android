@@ -42,7 +42,14 @@ device. Prefer the `Medium_Phone_API_36.1` emulator for instrumented runs.
   (`subscription-userinfo`, `base64:` profile-title), HTTP error mapping,
   size cap, UA/HWID request headers.
 - `RedactorTest` — UUID/secret redaction in URLs and tokens.
-- `ConnectionManager`/state tests — transition rules with a fake config provider.
+- `ConnectionManager`/state tests — transition rules with a fake config provider,
+  including cancellable `Preparing` (`ConnectionManagerTest`).
+- `AutomaticStartPolicyTest` — pure branch table for always-on / restore / stray starts.
+- `RuleSetStoreTest` — valid stale copy used without network, bounded and
+  cancellable first download, background `refreshStale` last-known-good rules.
+- `CoreLogTest`, `CoreLogSecretsTest`, `DiagnosticExportTest`, `LogRingTest` —
+  bounded core log buffer, redaction, export content.
+- `LatencyProbeTest`, `ServersViewModelTest` — probe permit/deadline, connected-mode latency runs.
 
 ## On-device (emulator-5560)
 
@@ -82,7 +89,12 @@ A real connection additionally needs a working subscription/server — unit test
 cover everything up to `VpnService.prepare`; TUN and lifecycle paths need the
 device scenarios above.
 
-## 2026-09-26 — physical device `CPH2449` (Android 16, API 36)
+## 2026-09-26 — physical device `CPH2449` (Android 16, API 36), historical
+
+> Historical entry. This run used `connectedDebugAndroidTest` on the physical
+> device, which is now forbidden (it uninstalls the app and erases its data —
+> see "Physical device safety"). It also predates the always-on, rule-set and
+> diagnostics changes; do not read it as a statement about HEAD.
 
 `connectedDebugAndroidTest` — `ClientVpnServiceLifecycleTest`: 8/8 pass.
 
@@ -137,3 +149,54 @@ adb -s <device> shell am instrument -w -r \
 
 Timings/results land in logcat under the `R04Research` tag. Evidence and
 verdicts: `docs/R04-SLICE4-SPIKE.md`.
+
+The same runner (`VpnTestRunner`) disables `BootReceiver` through
+`R04ReceiverIsolation` for **every** instrumented run (not only `-e r04 1`),
+because a stale `BOOT_COMPLETED` record was seen crashing the fresh test
+process on CPH2449. If a run dies before the first test with a
+`Hilt_BootReceiver` stack, re-run the identical command once — the crashed run
+leaves the receiver disabled plus a durable record, so the retry resolves
+broadcasts without it and `finish` restores the original state. Do not
+hand-restore in between (`docs/R04-RESEARCH-GATE.md`).
+
+## Manual device matrix (status at HEAD 69c0e35)
+
+Status wording: **JVM** = covered by unit tests only; **CPH2449 <date>** =
+observed on the physical OnePlus CPH2449 (Android 16) at that date, on the
+named build; **not verified** = no observation. Nothing here is a claim for
+other devices or OEM builds. No subscription URLs, UUIDs, hosts or tokens are
+recorded; the device runs used a private test subscription.
+
+### Always-on VPN (scenarios A–H)
+
+Policy under test: `AutomaticStartPolicy` (`AlwaysOn` / `Restore` / `Stray`),
+see `docs/ARCHITECTURE.md`. Runs used a private instrumentation harness
+(not committed) driving the real production application, on the debug build
+that became commit `3904776`.
+
+| ID | What to check | Expected | Status |
+|---|---|---|---|
+| A | System always-on enabled, `desired_vpn_running=false`, app not opened | Service starts the selected node (or Auto) and reaches `Connected`; desired flag becomes true only after the engine is up | CPH2449 2026-10-03 (real engine, HTTP 200). JVM: `AutomaticStartPolicyTest`; fake-engine instrumented: `ClientVpnServiceLifecycleTest` |
+| B | Same with "Block connections without VPN" | Same as A | CPH2449 2026-10-03 |
+| C | Kill the app process (no `force-stop`) with always-on / desired tunnel | System restarts the service; guarded restore rebuilds the tunnel | **not passed**: on CPH2449 2026-10-03 a killed service was never restarted, also for an ordinary non-always-on session (`kill -9`, `am crash`, battery whitelist tried). Cause not established (OEM behavior suspected). An earlier run on 2026-09-26 (see below) did observe a restore after `kill -9`; the two observations conflict |
+| D | In-app Disconnect while always-on stays configured, with and without lockdown | `Idle`, flag false, no service for 60 s (no restart loop) | CPH2449 2026-10-03 (both variants) |
+| E | Always-on turned off in system settings | Nothing starts | CPH2449 2026-10-03 |
+| F | Always-on with no selected node (F0) / no enabled nodes (F1) | Localized alert, service stops, no restart loop, flag stays false | CPH2449 2026-10-03 (60 s each, no service, no loop). Also instrumented with a fake engine: `alwaysOn_missingPrerequisites_stopsWithoutEngine` (the 12-test `ClientVpnServiceLifecycleTest` class passed on CPH2449 via `am instrument`, 2026-10-03) |
+| G | Normal connect → reconnect → disconnect | HTTP works both times, fresh engine epoch, clean `Idle` | CPH2449 2026-10-03 |
+| H | Reboot with always-on enabled (needs the user to unlock the screen) | VPN comes up after unlock; with lockdown, traffic is blocked until then | **not verified** (requires the user; no unlock bypass attempted) |
+
+Not claimed: that system always-on behaves like a kill switch. The
+fail-closed limits are in `docs/SECURITY.md`.
+
+### Other device checks
+
+| Area | What to check | Expected | Status |
+|---|---|---|---|
+| Core logs in Diagnostics | Connect with a node that produces core warnings; open the export | Bounded, redacted core section present; no UUID/password/host/key/subscription URL in the export or logcat; screen-off pauses the tail and screen-on resumes it; disconnect clears it | CPH2449 (WP-4b, debug build at `1701ab0`, private harness reading the export pipe): 91 warn/error lines exported, secret scans 0; screen-off 60 s paused, `Reconnecting` 0. The real share chooser and third-party receivers: **not verified**. Empty-section note when there are no core logs: JVM (`DiagnosticExport`) |
+| Preparing cancel | Tap Connect, then Cancel while `Preparing` | `Preparing → Idle`, no service record, no TUN, UI `Idle` | CPH2449 2026-10-04 (HEAD `69c0e35`): observed once, `Preparing → Idle` in 58 ms, no `ClientVpnService` record, no `tun0`. Race window is ~0.2 s; one hit only. JVM: `ConnectionManagerTest` (3 preparation tests) |
+| Rule sets, old files | Age `files/rule_sets/*.srs` mtime (content unchanged), Connect | Connect does not wait on the network and uses the local copy; files are refreshed after `Connected` | CPH2449 2026-10-04: mtime set to 2020-01-01 via `run-as touch`; `Preparing → Connected` in 421 ms; both files replaced after `Connected`. Unreachable CDN on device: **not verified** (JVM: `RuleSetStoreTest`) |
+| Rule sets, no copy and no bundle | Connect with the CDN unreachable | Bounded (20 s), cancellable, `StartFailed("routing lists unavailable")` | JVM only (`RuleSetStoreTest`); not verified on device |
+| Service restore after APK replace | `adb install -r` while connected with `desired_vpn_running=1` | Service restored by the system, `Connected` within seconds | CPH2449 2026-10-04: restored twice (~0.3 s after process start). Not the same as scenario C (no process kill by shell) |
+| Screen-off | Screen off 60 s while connected | Status updates paused, core subscription dropped, no `Reconnecting`; resumes on screen-on | CPH2449 (WP-4b): observed, see core logs row |
+| HWID acceptance | Refresh a Remnawave subscription from the app | No device-limit error (`DeviceLimitReached` is a 404 with `x-hwid*` headers) | partial, CPH2449 2026-10-04: one in-app refresh updated the row (`lastError` empty, node count unchanged). Provider-side device slot: **not verifiable** from the client |
+
