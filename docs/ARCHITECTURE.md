@@ -119,11 +119,15 @@ and the compiler:
   direct`; DNS maps the same list → `remote` (ISP answers are spoofed),
   `final` becomes `local`.
 
-Rule sets are **local**, not remote: `RuleSetStore` downloads the `.srs`
-files app-side over OkHttp into `filesDir/rule_sets` before compile and the
-config references them by path — the engine's start path never fetches over
-the network (a GitHub hiccup can't fail a connect; a stale copy still works
-offline). When the active underlay lacks real IPv6 (global address + `::/0`
+Rule sets are **local**, not remote: `RuleSetStore` keeps the `.srs` files
+app-side in `filesDir/rule_sets` and the config references them by path — the
+engine's start path never fetches over the network. Connect uses any valid
+copy as-is, however old (missing → bundled baseline → bounded, cancellable
+download as a last resort). Copies older than a day are refreshed in the
+background once a tunnel is `Connected` (`refreshStale`, single-flight,
+validated before an atomic replace, picked up by the next connect). A GitHub
+hiccup can't fail or delay a connect; a stale copy still works
+offline. When the active underlay lacks real IPv6 (global address + `::/0`
 route), non-ALL modes also emit an `ip_version: 6 → proxy` rule so v6 rides
 the tunnel instead of dead-ending in `direct`.
 

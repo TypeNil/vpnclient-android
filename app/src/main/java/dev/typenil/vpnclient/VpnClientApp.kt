@@ -6,13 +6,19 @@ import android.app.NotificationManager
 import dagger.hilt.android.HiltAndroidApp
 import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.engine.singbox.LibboxRuntime
+import dev.typenil.vpnclient.core.engine.singbox.RuleSetStore
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
+import dev.typenil.vpnclient.core.vpn.ConnectionManager
+import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.core.vpn.VpnNotification
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -30,6 +36,12 @@ class VpnClientApp : Application() {
     @Inject
     lateinit var subscriptionRepository: SubscriptionRepository
 
+    @Inject
+    lateinit var connectionManager: ConnectionManager
+
+    @Inject
+    lateinit var ruleSetStore: RuleSetStore
+
     override fun onCreate() {
         super.onCreate()
         SecureLog.debugEnabled = BuildConfig.DEBUG
@@ -41,6 +53,22 @@ class VpnClientApp : Application() {
         // so N x fetch-timeout can't delay a due alert.
         checkSubscriptionExpiry()
         refreshUpdateAlwaysSubscriptions()
+        refreshRuleSetsWhileConnected()
+    }
+
+    /**
+     * Rule sets older than a day are refreshed once a tunnel is up — never on
+     * the connect path. Failures are logged by the store and the working copy
+     * is kept; the new file is used by the next connect.
+     */
+    private fun refreshRuleSetsWhileConnected() {
+        applicationScope.launch {
+            connectionManager.state
+                .map { it is VpnConnectionState.Connected }
+                .distinctUntilChanged()
+                .filter { it }
+                .collect { ruleSetStore.refreshStale(settings.routeMode.first()) }
+        }
     }
 
     /**
