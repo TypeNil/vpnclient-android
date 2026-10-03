@@ -14,6 +14,7 @@ import dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -142,7 +143,13 @@ class ConnectionManagerTest {
          *  records whatever the test set as [enabledFingerprint]. */
         val compiledFingerprint = MutableStateFlow<String?>(null)
 
+        /** When set, compile suspends until completed — a slow rule-set fetch. */
+        var compileGate: CompletableDeferred<Unit>? = null
+        var compileCalls = 0
+
         override suspend fun compileSelected(): EngineConfig? {
+            compileCalls++
+            compileGate?.await()
             failure?.let { throw it }
             compiledFingerprint.value = enabledFingerprint.value
             return config
@@ -312,6 +319,60 @@ class ConnectionManagerTest {
         val generation = connectToRunning()
         testScope.runCurrent()
         return generation
+    }
+
+    @Test
+    fun `preparing is published before a slow compile finishes`() = testScope.runTest {
+        val gate = CompletableDeferred<Unit>()
+        configProvider.compileGate = gate
+        manager.connect()
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Preparing)
+        assertEquals(1, configProvider.compileCalls)
+        assertEquals(0, serviceControl.connectStarts)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        assertEquals(1, serviceControl.connectStarts)
+    }
+
+    @Test
+    fun `disconnect during preparation cancels at once and never starts the tunnel`() = testScope.runTest {
+        val gate = CompletableDeferred<Unit>()
+        configProvider.compileGate = gate
+        manager.connect()
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Preparing)
+
+        manager.disconnect()
+        runCurrent()
+        // Compile is still hung: the cancel must not have waited for it.
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+        assertEquals(0, serviceControl.connectStarts)
+        assertEquals(0, serviceControl.disconnectStarts)
+        assertNull(manager.pendingSession)
+    }
+
+    @Test
+    fun `a cancelled preparation cannot hijack the next connect`() = testScope.runTest {
+        val gate = CompletableDeferred<Unit>()
+        configProvider.compileGate = gate
+        manager.connect()
+        runCurrent()
+        manager.disconnect()
+        runCurrent()
+
+        manager.connect()
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Preparing)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        assertEquals(1, serviceControl.connectStarts)
     }
 
     @Test

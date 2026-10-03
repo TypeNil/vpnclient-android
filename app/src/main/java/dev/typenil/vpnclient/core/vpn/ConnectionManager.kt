@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -340,6 +342,9 @@ class ConnectionManager
         private val _appliedSessionConfig = MutableStateFlow<AppliedSessionConfig?>(null)
         val appliedSessionConfig: StateFlow<AppliedSessionConfig?> = _appliedSessionConfig
 
+        /** The in-flight compile of a connect attempt; null once committed or cancelled. */
+        private var prepareJob: Job? = null
+
         /** User pressed Connect. */
         fun connect() {
             scope.launch { mutex.withLock { startConnect(resetFailureBudget = true) } }
@@ -350,7 +355,7 @@ class ConnectionManager
          * connect (fresh auto-reconnect budget) from a retry driven by
          * reconnect() — resetting there would make the budget never exhaust.
          */
-        private suspend fun startConnect(resetFailureBudget: Boolean) {
+        private fun startConnect(resetFailureBudget: Boolean) {
             when (_state.value) {
                 is VpnConnectionState.Connected,
                 is VpnConnectionState.Connecting,
@@ -369,44 +374,74 @@ class ConnectionManager
                 failureReconnectAttempts = 0
                 lastFailureError = null
             }
-            val config =
+            // Preparing goes out before the compile (which may touch the
+            // network), and the compile runs outside the mutex: the state is
+            // honest while it runs and disconnect() can cancel it at once.
+            publish(VpnConnectionState.Preparing(null))
+            val job = scope.launch(start = CoroutineStart.LAZY) { prepare() }
+            prepareJob = job
+            job.start()
+        }
+
+        private suspend fun prepare() {
+            val self = currentCoroutineContext()[Job]
+            val compiled =
                 try {
-                    configProvider.compileSelected()
-                } catch (e: EngineError) {
-                    publish(VpnConnectionState.Error(VpnError.fromEngine(e), null))
-                    return
+                    Result.success(configProvider.compileSelected())
                 } catch (e: CancellationException) {
                     // Cancelled work is not a user-visible failure.
                     throw e
                 } catch (e: Exception) {
-                    publish(
-                        VpnConnectionState.Error(
-                            VpnError.Unexpected(e.message ?: "config build failed"),
-                            null,
-                        ),
-                    )
+                    Result.failure(e)
+                }
+            mutex.withLock {
+                // A disconnect (or a newer attempt) already took over.
+                if (prepareJob !== self || _state.value !is VpnConnectionState.Preparing) return
+                prepareJob = null
+                val config =
+                    compiled.getOrElse { e ->
+                        val error =
+                            if (e is EngineError) {
+                                VpnError.fromEngine(e)
+                            } else {
+                                VpnError.Unexpected(e.message ?: "config build failed")
+                            }
+                        publish(VpnConnectionState.Error(error, null))
+                        return
+                    }
+                if (config == null) {
+                    publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
                     return
                 }
-            if (config == null) {
-                publish(VpnConnectionState.Error(VpnError.NoNodeSelected, null))
-                return
-            }
-            val generation = ++sessionGeneration
-            healthStore.begin(generation)
-            pendingSession = PendingSession(config, generation)
-            sessionNode = config.node
-            compiledNodeId = config.node.id
-            publish(VpnConnectionState.Preparing(config.node))
+                val generation = ++sessionGeneration
+                healthStore.begin(generation)
+                pendingSession = PendingSession(config, generation)
+                sessionNode = config.node
+                compiledNodeId = config.node.id
 
-            val prepare = serviceControl.prepareVpn()
-            if (prepare != null) {
-                recordConsent(HealthStatus.Unverified, HealthReason.ConsentRequired)
-                _prepareIntent.value = prepare
-                publish(VpnConnectionState.PermissionRequired)
-                return
+                val prepare = serviceControl.prepareVpn()
+                if (prepare != null) {
+                    recordConsent(HealthStatus.Unverified, HealthReason.ConsentRequired)
+                    _prepareIntent.value = prepare
+                    publish(VpnConnectionState.PermissionRequired)
+                    return
+                }
+                recordConsent(HealthStatus.Ok, HealthReason.ConsentGranted)
+                launchService(config)
             }
-            recordConsent(HealthStatus.Ok, HealthReason.ConsentGranted)
-            launchService(config)
+        }
+
+        /** Cancels an in-flight [prepare] and returns to Idle; false when none runs. */
+        private fun cancelPreparation(): Boolean {
+            val job = prepareJob ?: return false
+            prepareJob = null
+            job.cancel()
+            failureReconnectJob?.cancel()
+            failureReconnectAttempts = 0
+            lastFailureError = null
+            pendingTerminalError = null
+            publish(VpnConnectionState.Idle)
+            return true
         }
 
         /** System VPN-consent dialog result. */
@@ -443,6 +478,10 @@ class ConnectionManager
 
         fun disconnect() {
             scope.launch {
+                // Preparation holds no lock, so cancelling it never waits on
+                // the mutex. Main-confined like the commit step below, so the
+                // two can't interleave.
+                if (cancelPreparation()) return@launch
                 mutex.withLock {
                     if (_state.value is VpnConnectionState.Idle ||
                         _state.value is VpnConnectionState.Stopping

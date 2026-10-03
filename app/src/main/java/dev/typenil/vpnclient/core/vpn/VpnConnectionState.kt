@@ -14,8 +14,8 @@ sealed interface VpnConnectionState {
     /** Nothing running, no error. */
     data object Idle : VpnConnectionState
 
-    /** Resolving node + compiling config before touching the service. */
-    data class Preparing(val node: NodeSummary) : VpnConnectionState
+    /** Compiling config before touching the service; [node] is unknown until it finishes. */
+    data class Preparing(val node: NodeSummary?) : VpnConnectionState
 
     /** `VpnService.prepare()` returned a consent intent — the UI must show it. */
     data object PermissionRequired : VpnConnectionState

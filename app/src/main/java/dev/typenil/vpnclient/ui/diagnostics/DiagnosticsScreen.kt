@@ -105,7 +105,7 @@ fun DiagnosticsScreen(
                     is VpnConnectionState.Connected -> connection.node.name
                     is VpnConnectionState.Connecting -> connection.node.name
                     is VpnConnectionState.Reconnecting -> connection.node.name
-                    is VpnConnectionState.Preparing -> connection.node.name
+                    is VpnConnectionState.Preparing -> connection.node?.name ?: none
                     else -> none
                 },
             )
