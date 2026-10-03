@@ -4,6 +4,7 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.common.log.SecureLog
 import io.nekohasekai.libbox.Libbox
 import java.io.File
 import java.io.IOException
@@ -17,11 +18,17 @@ import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.Inflater
 
 /**
@@ -47,6 +54,7 @@ class RuleSetStore(
     private val client: OkHttpClient,
     private val bundled: BundledRuleSets,
     private val coreValidator: CoreValidator = LibboxCoreValidator,
+    private val blockingDownloadTimeoutMs: Long = BLOCKING_DOWNLOAD_TIMEOUT_MS,
 ) {
     @Inject
     constructor(
@@ -83,33 +91,68 @@ class RuleSetStore(
             }.awaitAll().toMap()
         }
 
+    private val refreshing = AtomicBoolean(false)
+
     private val validatedCache = ConcurrentHashMap<String, Boolean>()
 
-    private fun ensureFile(tag: String): File {
+    private suspend fun ensureFile(tag: String): File {
         val target = File(dir, "$tag.srs")
-        val fresh = isValidSrs(target) &&
-            System.currentTimeMillis() - target.lastModified() < STALE_MS
-        if (fresh) return target
-        // Seed from the bundled baseline and use it immediately — a fresh
-        // install must connect even with the CDN unreachable, and must not
-        // stall the connect on a download attempt. The seed is marked fresh,
-        // so revalidation happens on a later ensureReady once it goes stale.
-        // A present-but-corrupt file is not a seed blocker —
-        // seeding overwrites it atomically.
-        if (!isValidSrs(target)) {
-            if (seedFromBundle(tag, target)) return target
-        }
+        // A valid copy is used as-is, however old: age only schedules a
+        // background refresh ([refreshStale]) and must never stall a connect
+        // on a CDN that may be blackholed.
+        if (isValidSrs(target)) return target
+        // Seed from the bundled baseline — a fresh install connects offline.
+        // A present-but-corrupt file is not a seed blocker — seeding
+        // overwrites it atomically.
+        if (seedFromBundle(tag, target)) return target
+        // No usable copy and no baseline: the only connect-path download.
+        // Bounded, and cancellable through the caller's job.
         try {
-            download(tag, target)
-        } catch (e: Exception) {
-            // A stale copy beats none — routing may be slightly outdated but
-            // the connect still succeeds. Only a structurally valid
-            // file qualifies; a corrupt file must fail the connect instead
-            // of silently degrading routing.
-            if (isValidSrs(target)) return target
-            throw EngineError.StartFailed("routing lists unavailable")
+            withTimeoutOrNull(blockingDownloadTimeoutMs) {
+                download(tag) { tmp -> place(tmp, target) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // fall through to the typed failure below
         }
-        return target
+        if (isValidSrs(target)) return target
+        throw EngineError.StartFailed("routing lists unavailable")
+    }
+
+    /** Refreshes copies older than [STALE_MS] from the CDN — meant for the
+     *  background once a tunnel is up, not for the connect path. Overlapping
+     *  calls collapse into one. Each file is validated before it replaces
+     *  the working copy, so a failure of any kind keeps last-known-good, and
+     *  the network wait holds no tag lock (a connect never queues behind it).
+     *  The new file is picked up by the next connect. */
+    suspend fun refreshStale(mode: RouteMode) {
+        if (mode.ruleSetTags.isEmpty() || !refreshing.compareAndSet(false, true)) return
+        try {
+            withContext(Dispatchers.IO) {
+                for (tag in mode.ruleSetTags) {
+                    val target = File(dir, "$tag.srs")
+                    // Missing/corrupt copies are ensureReady's job.
+                    if (!isValidSrs(target) ||
+                        System.currentTimeMillis() - target.lastModified() < STALE_MS
+                    ) {
+                        continue
+                    }
+                    try {
+                        download(tag) { tmp ->
+                            tagLocks.getOrPut(tag) { Mutex() }.withLock { place(tmp, target) }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Class name only: messages can carry URLs.
+                        SecureLog.w(TAG, "rule set refresh failed: ${e.javaClass.simpleName}")
+                    }
+                }
+            }
+        } finally {
+            refreshing.set(false)
+        }
     }
 
     /** A stored file is usable only when it starts with the .srs
@@ -266,58 +309,88 @@ class RuleSetStore(
         }
     }
 
-    private fun download(tag: String, target: File) {
-        val request = Request.Builder().url(urlFor(tag)).build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-            val body = response.body!!
-            if (body.contentLength() > MAX_RULE_SET_BYTES) {
-                throw IOException("rule set too large")
+    /** Fetches [tag] into a temp file, validates it, and hands it to
+     *  [install]. `execute()` ignores coroutine cancellation, so a watcher
+     *  cancels the call to free the IO thread when the caller is cancelled. */
+    private suspend fun download(tag: String, install: suspend (File) -> Boolean) {
+        coroutineScope {
+            val call = client.newCall(Request.Builder().url(urlFor(tag)).build())
+            val watcher = launch(Dispatchers.IO) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    call.cancel()
+                }
             }
-            // Unique temp per download — even if the tag lock were bypassed,
-            // two writers can never interleave into one file.
-            val tmp = File.createTempFile("$tag-", ".srs.tmp", dir)
             try {
-                var total = 0L
-                body.byteStream().use { input ->
-                    tmp.outputStream().use { out ->
-                        val buf = ByteArray(8192)
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            total += n
-                            if (total > MAX_RULE_SET_BYTES) {
-                                throw IOException("rule set too large")
+                call.execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    val body = response.body!!
+                    if (body.contentLength() > MAX_RULE_SET_BYTES) {
+                        throw IOException("rule set too large")
+                    }
+                    // Unique temp per download — even if the tag lock were bypassed,
+                    // two writers can never interleave into one file.
+                    val tmp = File.createTempFile("$tag-", ".srs.tmp", dir)
+                    try {
+                        var total = 0L
+                        body.byteStream().use { input ->
+                            tmp.outputStream().use { out ->
+                                val buf = ByteArray(8192)
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    total += n
+                                    if (total > MAX_RULE_SET_BYTES) {
+                                        throw IOException("rule set too large")
+                                    }
+                                    out.write(buf, 0, n)
+                                }
                             }
-                            out.write(buf, 0, n)
                         }
+                        if (tmp.length() == 0L) throw IOException("empty rule set")
+                        // Deep integrity gate: .srs files start with "SRS\x01" and
+                        // contain an RFC 1950 zlib-compressed payload that must decompress
+                        // fully. A poisoned 200 (captive portal, truncated mirror) must
+                        // not replace a working copy — the old file survives untouched.
+                        if (!isValidSrs(tmp)) throw IOException("corrupted or incomplete rule set")
+                        // A failed install leaves the old target (the last known
+                        // good copy) untouched.
+                        if (!install(tmp)) throw IOException("atomic install failed")
+                    } finally {
+                        tmp.delete()
                     }
                 }
-                if (tmp.length() == 0L) throw IOException("empty rule set")
-                // Deep integrity gate: .srs files start with "SRS\x01" and
-                // contain an RFC 1950 zlib-compressed payload that must decompress
-                // fully. A poisoned 200 (captive portal, truncated mirror) must
-                // not replace a working copy — the old file survives untouched.
-                if (!isValidSrs(tmp)) throw IOException("corrupted or incomplete rule set")
-                if (!installAtomically(tmp, target)) {
-                    // The old target (if any) was not touched — it stays
-                    // available for the last-known-good fallback.
-                    throw IOException("atomic install failed")
-                }
-                target.setLastModified(System.currentTimeMillis())
+            } catch (e: IOException) {
+                // A call cancelled by the watcher surfaces as IOException;
+                // report the cancellation, not a download failure.
+                coroutineContext.ensureActive()
+                throw e
             } finally {
-                tmp.delete()
+                watcher.cancel()
             }
         }
+    }
+
+    private fun place(tmp: File, target: File): Boolean {
+        if (!installAtomically(tmp, target)) return false
+        target.setLastModified(System.currentTimeMillis())
+        return true
     }
 
     private fun urlFor(tag: String): String =
         if (tag.startsWith("geoip-")) "$GEOIP_RS_BASE/$tag.srs" else "$GEOSITE_RS_BASE/$tag.srs"
 
     private companion object {
-        /** Revalidate after a day — geosite churn is slow and a failed
-         *  revalidation silently keeps the stale copy anyway. */
+        const val TAG = "RuleSetStore"
+
+        /** A copy older than this is refreshed in the background — never
+         *  on the connect path, where any valid copy is used as-is. */
         const val STALE_MS = 24L * 60 * 60 * 1000
+
+        /** Bound on the only network wait a connect can still incur: no
+         *  usable local copy and no bundled baseline. */
+        const val BLOCKING_DOWNLOAD_TIMEOUT_MS = 20_000L
 
         /** Hard cap on a downloaded rule set — the real files are ~5 MB
          *  max; anything bigger is a hostile or broken endpoint. */

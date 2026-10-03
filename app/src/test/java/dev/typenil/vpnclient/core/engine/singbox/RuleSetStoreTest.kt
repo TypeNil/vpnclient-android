@@ -6,12 +6,19 @@ import dev.typenil.vpnclient.core.engine.RouteMode
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -90,19 +97,22 @@ class RuleSetStoreTest {
     fun setUp() {
         dir = Files.createTempDirectory("rule_sets").toFile()
         ruleDir = File(dir, "rule_sets").apply { mkdirs() }
+        store = newStore()
+    }
+
+    private fun newStore(blockingDownloadTimeoutMs: Long = 20_000): RuleSetStore {
         val context = object : ContextWrapper(null) {
             override fun getFilesDir(): File = dir
         }
         val bundled = object : BundledRuleSets(context) {
-            override fun open(tag: String) =
-                bundledBytes[tag]?.inputStream()
+            override fun open(tag: String) = bundledBytes[tag]?.inputStream()
         }
         val client = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 chain.proceed(chain.request().newBuilder().url(server.url("/")).build())
             }
             .build()
-        store = RuleSetStore(context, client, bundled, coreValidator = { true })
+        return RuleSetStore(context, client, bundled, coreValidator = { true }, blockingDownloadTimeoutMs = blockingDownloadTimeoutMs)
     }
 
     @After
@@ -146,18 +156,130 @@ class RuleSetStoreTest {
     }
 
     @Test
-    fun `failed refresh keeps the stale copy`() = runTest {
+    fun `valid stale file is used without touching the network`() = runTest {
+        // A day-old copy is still a working copy: connect must not wait on
+        // a CDN that may be blackholed. Queued 500s keep the pre-fix code
+        // from hanging, but any request at all fails the assertion.
         RouteMode.BYPASS_RU.ruleSetTags.forEach {
             File(ruleDir, "$it.srs").apply {
                 writeBytes(validSrsBytes())
                 setLastModified(0L)
             }
-        }
-        repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setResponseCode(500))
         }
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
-        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
+        assertEquals(0, server.requestCount)
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.toSet(), paths.keys)
+        paths.values.forEach { assertEquals(0L, File(it).lastModified()) }
+    }
+
+    @Test
+    fun `cancelling a connect releases a hung blocking download`() = runBlocking {
+        // No local copy and a CDN that accepts but never answers: the one
+        // path that may wait on the network must still react to cancel.
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        }
+        val connect = launch(Dispatchers.IO) { store.ensureReady(RouteMode.BYPASS_RU) }
+        server.takeRequest(5, TimeUnit.SECONDS)
+        val released = withTimeoutOrNull(3_000) { connect.cancelAndJoin() }
+        assertTrue("cancel must release the download", released != null)
+    }
+
+    @Test
+    fun `missing file with an unresponsive CDN fails with a clear error within the bound`() = runBlocking {
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        }
+        val bounded = newStore(blockingDownloadTimeoutMs = 300)
+        val started = System.nanoTime()
+        try {
+            withContext(Dispatchers.IO) { bounded.ensureReady(RouteMode.BYPASS_RU) }
+            fail("expected StartFailed")
+        } catch (e: EngineError.StartFailed) {
+            assertEquals("routing lists unavailable", e.message)
+        }
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5_000)
+    }
+
+    @Test
+    fun `refresh replaces a stale copy with a valid download`() = runTest {
+        val stale = validSrsBytes(payload = byteArrayOf(0x01, 0x00, 0x03, 0x01, 0x01, 0x61, 0xFF.toByte(), 0x00))
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(stale)
+                setLastModified(0L)
+            }
+            server.enqueue(MockResponse().setBody(okio.Buffer().write(validSrsBytes())))
+        }
+        store.refreshStale(RouteMode.BYPASS_RU)
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            val file = File(ruleDir, "$it.srs")
+            assertEquals(validSrsBytes().size.toLong(), file.length())
+            assertTrue(file.lastModified() > 0L)
+        }
+        assertTrue(ruleDir.listFiles().orEmpty().none { it.name.endsWith(".tmp") })
+    }
+
+    @Test
+    fun `refresh skips files that are not stale`() = runTest {
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").writeBytes(validSrsBytes())
+        }
+        store.refreshStale(RouteMode.BYPASS_RU)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `overlapping refreshes do not duplicate downloads`() = runTest {
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(validSrsBytes())
+                setLastModified(0L)
+            }
+            server.enqueue(
+                MockResponse().setBody(okio.Buffer().write(validSrsBytes()))
+                    .setBodyDelay(200, TimeUnit.MILLISECONDS),
+            )
+        }
+        awaitAll(
+            async { store.refreshStale(RouteMode.BYPASS_RU) },
+            async { store.refreshStale(RouteMode.BYPASS_RU) },
+        )
+        assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, server.requestCount)
+    }
+
+    @Test
+    fun `a slow refresh does not hold up a connect`() = runBlocking {
+        val tags = RouteMode.BYPASS_RU.ruleSetTags
+        tags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(validSrsBytes())
+                setLastModified(0L)
+            }
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        }
+        val refresh = launch(Dispatchers.IO) { store.refreshStale(RouteMode.BYPASS_RU) }
+        server.takeRequest(5, TimeUnit.SECONDS)
+        val paths = withTimeoutOrNull(3_000) { store.ensureReady(RouteMode.BYPASS_RU) }
+        refresh.cancelAndJoin()
+        assertEquals(tags.toSet(), paths?.keys)
+    }
+
+    @Test
+    fun `failed refresh keeps the stale copy`() = runTest {
+        val stale = validSrsBytes()
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            File(ruleDir, "$it.srs").apply {
+                writeBytes(stale)
+                setLastModified(0L)
+            }
+            server.enqueue(MockResponse().setResponseCode(500))
+        }
+        store.refreshStale(RouteMode.BYPASS_RU)
+        RouteMode.BYPASS_RU.ruleSetTags.forEach {
+            assertTrue(File(ruleDir, "$it.srs").readBytes().contentEquals(stale))
+        }
     }
 
     @Test
@@ -200,6 +322,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody("<html>portal</html>"))
         }
+        store.refreshStale(RouteMode.BYPASS_RU)
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
@@ -313,6 +436,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody(okio.Buffer().write(truncated)))
         }
+        store.refreshStale(RouteMode.BYPASS_RU)
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
@@ -344,6 +468,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody(okio.Buffer().write(good)))
         }
+        rejectingStore.refreshStale(RouteMode.BYPASS_RU)
         val paths = rejectingStore.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
@@ -365,6 +490,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody(okio.Buffer().write(nonSrs)))
         }
+        store.refreshStale(RouteMode.BYPASS_RU)
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
@@ -402,6 +528,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody(okio.Buffer().write(bomb)))
         }
+        store.refreshStale(RouteMode.BYPASS_RU)
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
@@ -423,6 +550,7 @@ class RuleSetStoreTest {
         repeat(RouteMode.BYPASS_RU.ruleSetTags.size) {
             server.enqueue(MockResponse().setBody(okio.Buffer().write(corruptBody)))
         }
+        store.refreshStale(RouteMode.BYPASS_RU)
         val paths = store.ensureReady(RouteMode.BYPASS_RU)
         assertEquals(RouteMode.BYPASS_RU.ruleSetTags.size, paths.size)
         paths.values.forEach {
