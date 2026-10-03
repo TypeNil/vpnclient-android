@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Process
 import dev.typenil.vpnclient.core.common.log.Redactor
 import dev.typenil.vpnclient.core.common.log.SecureLog
+import dev.typenil.vpnclient.core.engine.CoreLogBuffer
 import dev.typenil.vpnclient.core.engine.CidrAddress
 import dev.typenil.vpnclient.core.engine.ConnectionInfo
 import dev.typenil.vpnclient.core.engine.EngineConfig
@@ -95,6 +96,22 @@ class SingBoxEngine(
 ) : VpnEngine {
 
     private val lifecycleMutex = Mutex()
+    private val coreLogs = CoreLogBuffer()
+    private var coreLogsEnabled = false
+    override fun coreLogSnapshot(): List<String> = coreLogs.snapshot()
+
+    override suspend fun setCoreLogsEnabled(enabled: Boolean) {
+        val stale = clientMutex.withLock {
+            if (coreLogsEnabled == enabled) return
+            coreLogsEnabled = enabled
+            val old = invalidateClientLocked()
+            connectClientLocked()
+            old
+        }
+        stale?.let {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { runCatching { it.disconnect() } }
+        }
+    }
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val networkMonitor = NetworkMonitor(connectivity, scope)
     private val localDnsResolver = LocalDnsResolver(networkMonitor)
@@ -155,9 +172,12 @@ class SingBoxEngine(
 
     override suspend fun start(config: EngineConfig): Unit = lifecycleMutex.withLock {
         withContext(Dispatchers.IO) {
+            coreLogs.stop()
+            coreLogs.start(coreLogSecrets(config))
             val server = try {
                 CommandServer(ServerHandler(), PlatformBridge()).also { it.start() }
             } catch (e: Exception) {
+                coreLogs.stop()
                 throw EngineError.StartFailed(e.message ?: "command server start failed")
             }
             commandServer = server
@@ -184,12 +204,14 @@ class SingBoxEngine(
                 networkMonitor.stop()
                 platform.closeTun()
                 commandServer = null
+                coreLogs.stop()
                 throw e
             } catch (e: Exception) {
                 runCatching { server.close() }
                 networkMonitor.stop()
                 platform.closeTun()
                 commandServer = null
+                coreLogs.stop()
                 throw EngineError.StartFailed(e.message ?: "sing-box start failed")
             }
             // Fresh tracker + cleared surface per session — a new tunnel
@@ -226,6 +248,7 @@ class SingBoxEngine(
      *  caller can disconnect it outside the lock. */
     private fun invalidateClientLocked(): CommandClient? {
         clientEpoch++
+        coreLogs.pause()
         clientJob?.cancel()
         clientJob = null
         val client = commandClient
@@ -241,6 +264,7 @@ class SingBoxEngine(
         if (commandClient != null || clientJob?.isActive == true) return
         val epoch = clientEpoch
         val options = CommandClientOptions().apply {
+            if (coreLogsEnabled) addCommand(Libbox.CommandLog)
             addCommand(Libbox.CommandStatus)
             addCommand(Libbox.CommandGroup)
             addCommand(Libbox.CommandConnections)
@@ -252,7 +276,11 @@ class SingBoxEngine(
                 attempt++
                 // Fresh client per attempt — a failed connect() can leave the
                 // instance in a state libbox won't recover.
-                val handler = ClientHandler()
+                val logToken = clientMutex.withLock {
+                    if (epoch != clientEpoch) return@launch
+                    if (coreLogsEnabled) coreLogs.subscribe() else -1L
+                }
+                val handler = ClientHandler(logToken)
                 val client = CommandClient(handler, options)
                 handler.client = client
                 try {
@@ -287,8 +315,12 @@ class SingBoxEngine(
                     if (!publish) runCatching { client.disconnect() }
                     return@launch
                 } catch (e: CancellationException) {
+                    coreLogs.pause(logToken)
+                    runCatching { client.disconnect() }
                     throw e
                 } catch (e: Exception) {
+                    coreLogs.pause(logToken)
+                    runCatching { client.disconnect() }
                     if (attempt >= COMMAND_CONNECT_MAX_ATTEMPTS) {
                         // Bounded retry: the tunnel works without the control
                         // channel (stats/selection degrade), so this stays
@@ -331,6 +363,7 @@ class SingBoxEngine(
 
     override suspend fun stop(): Unit = lifecycleMutex.withLock {
         withContext(Dispatchers.IO) {
+            coreLogs.stop()
             val server = commandServer ?: return@withContext
             // Intentional teardown: serviceStop() callbacks firing while we
             // close the server must not surface as StoppedUnexpectedly.
@@ -422,7 +455,7 @@ class SingBoxEngine(
         override fun triggerNativeCrash() = Unit
 
         override fun writeDebugMessage(message: String?) {
-            SecureLog.d(TAG, Redactor.redact(message ?: ""))
+            SecureLog.d(TAG, Redactor.redactCore(message.orEmpty()))
         }
 
         override fun connectSSHAgent(): Int = -1
@@ -432,7 +465,7 @@ class SingBoxEngine(
 
     // region CommandClientHandler
 
-    private inner class ClientHandler : CommandClientHandler {
+    private inner class ClientHandler(private val logToken: Long) : CommandClientHandler {
         /** The client this handler is bound to — set before connect() so
          *  callbacks can be matched against the published client. Read on
          *  libbox binder threads. */
@@ -447,8 +480,9 @@ class SingBoxEngine(
         override fun connected() = Unit
 
         override fun disconnected(message: String?) {
-            SecureLog.d(TAG, "command client disconnected: ${Redactor.redact(message)}")
+            SecureLog.d(TAG, "command client disconnected: ${Redactor.redactCore(message.orEmpty())}")
             dropped = true
+            coreLogs.pause(logToken)
             val dead = client ?: return
             // Binder thread — the client state is mutex-guarded, so the
             // identity check and the reconnect scheduling happen in a
@@ -458,6 +492,7 @@ class SingBoxEngine(
                 clientMutex.withLock {
                     if (commandClient !== dead) return@withLock
                     commandClient = null
+                    coreLogs.pause()
                     connectClientLocked()
                 }
             }
@@ -518,9 +553,15 @@ class SingBoxEngine(
 
         override fun setDefaultLogLevel(level: Int) = Unit
 
-        override fun clearLogs() = Unit
+        override fun clearLogs() = coreLogs.clear(logToken)
 
-        override fun writeLogs(messageList: LogIterator?) = Unit
+        override fun writeLogs(messageList: LogIterator?) {
+            val entries = messageList ?: return
+            while (entries.hasNext()) {
+                val entry = entries.next()
+                coreLogs.add(logToken, entry.level, entry.message.orEmpty())
+            }
+        }
 
         override fun initializeClashMode(modeList: StringIterator, currentMode: String) = Unit
 

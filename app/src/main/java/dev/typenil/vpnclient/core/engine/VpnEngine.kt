@@ -145,6 +145,12 @@ interface VpnEngine {
      */
     suspend fun setStatusUpdatesEnabled(enabled: Boolean) = Unit
 
+    /** Already-redacted, memory-only warn/error tail for this engine instance. */
+    fun coreLogSnapshot(): List<String> = emptyList()
+
+    /** ConnectionManager's active-state gate; screen suppression is independent. */
+    suspend fun setCoreLogsEnabled(enabled: Boolean) = Unit
+
     val stats: Flow<TrafficStats>
     val events: Flow<EngineEvent>
     val groups: StateFlow<List<OutboundGroupInfo>>

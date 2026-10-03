@@ -92,6 +92,42 @@ class ConnectionManagerTest {
         }
     }
 
+    @Test fun `core diagnostics follow active state screen suppression and engine epoch`() = testScope.runTest {
+        val generation = connectToRunning()
+        runCurrent()
+        assertTrue(engine.coreLogsEnabled)
+        engine.emitCoreWarning("first timeout")
+        assertEquals(listOf("WARN first timeout"), manager.coreLogSnapshot())
+        engine.setStatusUpdatesEnabled(false)
+        engine.emitCoreWarning("screen off ignored")
+        assertEquals(1, manager.coreLogSnapshot().size)
+        engine.setStatusUpdatesEnabled(true)
+        manager.onUnderlyingNetworkLost(generation)
+        runCurrent()
+        assertFalse(engine.coreLogsEnabled)
+        engine.emitCoreWarning("reconnecting ignored")
+        manager.onUnderlyingNetworkAvailable(generation)
+        runCurrent()
+        assertTrue(engine.coreLogsEnabled)
+        assertEquals(1, manager.coreLogSnapshot().size)
+        val oldEngine = engine
+        val epoch = manager.engineEpoch.value
+        engine = FakeEngine()
+        manager.attachEngine(engine, generation)
+        runCurrent()
+        assertTrue(manager.engineEpoch.value > epoch)
+        assertTrue(manager.coreLogSnapshot().isEmpty())
+        oldEngine.emitCoreWarning("old engine ignored by export")
+        assertTrue(manager.coreLogSnapshot().isEmpty())
+        engine.emitCoreWarning("fresh warning")
+        assertEquals(listOf("WARN fresh warning"), manager.coreLogSnapshot())
+        manager.disconnect()
+        runCurrent()
+        assertFalse(engine.coreLogsEnabled)
+        manager.onServiceStopped(generation)
+        assertTrue(manager.coreLogSnapshot().isEmpty())
+    }
+
     private class FakeNodeConfigProvider(
         var config: EngineConfig?,
         var failure: Exception? = null,
@@ -156,6 +192,22 @@ class ConnectionManagerTest {
         override val connections: StateFlow<List<ConnectionInfo>> get() = connectionsFlow
         override val statusUpdatesEnabled: StateFlow<Boolean> get() = statusUpdatesFlow
         var stopCalls = 0
+        var coreLogsEnabled = false
+        val coreLogs = dev.typenil.vpnclient.core.engine.CoreLogBuffer().apply { start(emptyList()) }
+        private var logToken = -1L
+        override fun coreLogSnapshot() = coreLogs.snapshot()
+        override suspend fun setCoreLogsEnabled(enabled: Boolean) {
+            coreLogsEnabled = enabled
+            logToken = if (enabled && statusUpdatesFlow.value) coreLogs.subscribe() else {
+                coreLogs.pause()
+                -1L
+            }
+        }
+        override suspend fun setStatusUpdatesEnabled(enabled: Boolean) {
+            statusUpdatesFlow.value = enabled
+            setCoreLogsEnabled(coreLogsEnabled)
+        }
+        fun emitCoreWarning(text: String) = coreLogs.add(logToken, 3, text)
 
         override suspend fun validate(config: EngineConfig) = Unit
 

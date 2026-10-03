@@ -29,6 +29,10 @@ class CoreLogBuffer {
         subscribed = false
     }
 
+    @Synchronized fun pause(token: Long) {
+        if (token == epoch) pause()
+    }
+
     @Synchronized fun stop() {
         pause()
         running = false

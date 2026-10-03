@@ -290,7 +290,16 @@ class ConnectionManager
         /** A teardown intent was already sent for this session — don't resend. */
         private var teardownRequested = false
 
-        private var engine: VpnEngine? = null
+        @Volatile private var engine: VpnEngine? = null
+        private var coreLogStateJob: Job? = null
+
+        /** Read only the currently attached epoch; never retain a previous engine tail. */
+        fun coreLogSnapshot(): List<String> {
+            val epoch = engineEpoch.value
+            val current = engine ?: return emptyList()
+            val lines = current.coreLogSnapshot()
+            return if (current === engine && epoch == engineEpoch.value) lines else emptyList()
+        }
         private var statsJob: Job? = null
         private var eventsJob: Job? = null
         private var groupsJob: Job? = null
@@ -564,6 +573,16 @@ class ConnectionManager
             healthStore.invalidate(generation, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
             this.engine = engine
             _engineEpoch.update { it + 1 }
+            coreLogStateJob?.cancel()
+            coreLogStateJob = scope.launch {
+                state.collect { current ->
+                    if (this@ConnectionManager.engine === engine && generation == sessionGeneration) {
+                        engine.setCoreLogsEnabled(
+                            current is VpnConnectionState.Connecting || current is VpnConnectionState.Connected,
+                        )
+                    }
+                }
+            }
             statsJob?.cancel()
             eventsJob?.cancel()
             groupsJob?.cancel()
@@ -654,6 +673,8 @@ class ConnectionManager
          */
         fun detachEngine(generation: Long = -1L) {
             if (generation >= 0 && generation != sessionGeneration) return
+            coreLogStateJob?.cancel()
+            coreLogStateJob = null
             statsJob?.cancel()
             statsJob = null
             eventsJob?.cancel()
