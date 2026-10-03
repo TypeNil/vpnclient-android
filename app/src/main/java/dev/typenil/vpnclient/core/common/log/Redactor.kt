@@ -35,6 +35,29 @@ object Redactor {
             .replace(longTokenRegex, "<token>")
     }
 
+    private val coreUrl = Regex("[a-zA-Z][a-zA-Z0-9+.-]*://[^\\s<>]+")
+    private val coreField = Regex(
+        "(\\b(?:password|passwd|token|uuid|public[_ -]?key|private[_ -]?key|pbk|short[_ -]?id|sid|secret|authorization|name|tag)\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s,;]+)",
+        RegexOption.IGNORE_CASE,
+    )
+    private val coreAddress = Regex(
+        "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b|" +
+            "(?<![\\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]*(?:%[\\w]+)?|" +
+            "\\b(?:[a-zA-Z0-9_-]+\\.)+[a-zA-Z]{2,}\\b",
+    )
+
+    /** Core diagnostics hide endpoints too. Context covers arbitrary names and
+     * short credentials that cannot be distinguished from ordinary prose. */
+    fun redactCore(text: String, sensitiveValues: Collection<String> = emptyList()): String {
+        var safe = text
+        for (value in sensitiveValues.filter { it.isNotBlank() }.sortedByDescending { it.length }) {
+            safe = safe.replace(value, "<redacted>", ignoreCase = true)
+        }
+        return redact(safe.replace(coreUrl, "<url>").replace(coreField, "$1<redacted>"))
+            .replace(coreAddress, "<address>")
+            .replace('\r', ' ').replace('\n', ' ')
+    }
+
     /** Redact a URL for display: keep scheme + host + port, hide path/query/userinfo. */
     fun urlForDisplay(url: String): String = try {
         val uri = java.net.URI(url)
