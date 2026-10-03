@@ -40,6 +40,46 @@ class LatencyProbeTest {
         assertEquals(100L, testScheduler.currentTime - start)
     }
 
+    @Test
+    fun `queued live probes get their own deadline after lingering DNS releases permits`() = runTest {
+        var resolved = 0
+        val queued = LatencyProbe(VpnSocketProtector(), StandardTestDispatcher(testScheduler)) {
+            if (++resolved <= 8) withContext(NonCancellable) { delay(1_000) }
+            InetAddress.getLoopbackAddress()
+        }
+        ServerSocket(0, 50).use { server ->
+            val results = List(20) { async { queued.measure("synthetic.example", server.localPort, 100) } }
+                .awaitAll()
+            assertTrue(results.take(8).all { it == null })
+            assertTrue("queued live results=$results", results.drop(8).all { it != null })
+            assertEquals(20, resolved)
+            assertEquals(1_000L, testScheduler.currentTime)
+        }
+    }
+
+    @Test
+    fun `cancellation while queued never starts DNS or consumes a permit`() = runTest {
+        var resolved = 0
+        val queued = LatencyProbe(VpnSocketProtector(), StandardTestDispatcher(testScheduler)) {
+            resolved++
+            withContext(NonCancellable) { delay(1_000) }
+            InetAddress.getLoopbackAddress()
+        }
+        val workers = List(8) { async { queued.measure("synthetic.example", 443, 100) } }
+        runCurrent()
+        val waiting = launch { queued.measure("synthetic.example", 443, 100) }
+        runCurrent()
+        waiting.cancelAndJoin()
+        workers.awaitAll()
+        assertEquals(8, resolved)
+        // Let cancelled DNS workers finish, then verify all permits are reusable.
+        testScheduler.advanceUntilIdle()
+        val next = List(8) { async { queued.measure("synthetic.example", 443, 100) } }
+        runCurrent()
+        assertEquals(16, resolved)
+        next.awaitAll()
+    }
+
     @Test(timeout = 5_000)
     fun `blocked worker pool does not starve the caller deadline`() = runBlocking {
         val release = CountDownLatch(1)

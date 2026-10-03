@@ -14,7 +14,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -46,49 +45,57 @@ class LatencyProbe internal constructor(
     /**
      * Milliseconds for a TCP connect to `host:port` (DNS resolution
      * included — it's part of real-world reachability), or null on
-     * timeout/refusal/DNS failure.
+     * timeout/refusal/DNS failure. Cancellable queue wait is not measured
+     * and does not consume the DNS + connect deadline.
      */
     suspend fun measure(
         host: String,
         port: Int,
         timeoutMs: Int = DEFAULT_TIMEOUT_MS,
     ): Int? = withContext(callerDispatcher) {
-        withTimeoutOrNull(timeoutMs.toLong()) { probe(host, port, timeoutMs) }
-    }
-
-    private suspend fun probe(host: String, port: Int, timeoutMs: Int): Int? =
-        suspendCancellableCoroutine { continuation ->
-            val socket = Socket()
-            // Deliberately not a child of the caller: JVM DNS may ignore
-            // cancellation. The caller must not join that blocking syscall.
-            // Permits stay with lingering workers; bounded IO also caps threads.
-            val worker = CoroutineScope(ioDispatcher).launch {
-                try {
-                    val result = permits.withPermit {
-                        ensureActive()
-                        // bind(null) materializes the fd for VpnService.protect.
-                        socket.bind(null)
-                        if (!socketProtector.protect(socket)) return@withPermit null
-                        val start = System.nanoTime()
-                        val address = resolver(host)
-                        ensureActive() // Never connect after a cancelled DNS wait.
-                        socket.connect(InetSocketAddress(address, port), timeoutMs)
-                        ((System.nanoTime() - start) / 1_000_000L).toInt()
+        permits.acquire()
+        var workerOwnsPermit = false
+        try {
+            withTimeoutOrNull(timeoutMs.toLong()) {
+                suspendCancellableCoroutine { continuation ->
+                    val socket = Socket()
+                    // Not a child: JVM DNS may ignore cancellation; the caller
+                    // must not join it. The worker retains its permit until done.
+                    val worker = CoroutineScope(ioDispatcher).launch {
+                        try {
+                            ensureActive()
+                            socket.bind(null) // Materialize fd before protect.
+                            val result = if (socketProtector.protect(socket)) {
+                                val start = System.nanoTime()
+                                val address = resolver(host)
+                                ensureActive() // No connect after cancelled DNS.
+                                socket.connect(InetSocketAddress(address, port), timeoutMs)
+                                ((System.nanoTime() - start) / 1_000_000L).toInt()
+                            } else null
+                            continuation.resume(result)
+                        } catch (e: CancellationException) {
+                            continuation.cancel(e)
+                        } catch (e: Exception) {
+                            continuation.resume(null)
+                        } finally {
+                            runCatching { socket.close() }
+                        }
                     }
-                    continuation.resume(result)
-                } catch (e: CancellationException) {
-                    continuation.cancel(e)
-                } catch (e: Exception) {
-                    continuation.resume(null)
-                } finally {
-                    runCatching { socket.close() }
+                    // Completion also runs if cancellation wins before launch
+                    // enters its body, so every acquired permit is released.
+                    worker.invokeOnCompletion { permits.release() }
+                    workerOwnsPermit = true
+                    continuation.invokeOnCancellation {
+                        runCatching { socket.close() }
+                        worker.cancel()
+                    }
                 }
             }
-            continuation.invokeOnCancellation {
-                runCatching { socket.close() } // Interrupt an in-flight connect.
-                worker.cancel()
-            }
+        } finally {
+            // Timeout/cancellation may prevent the bridge from starting at all.
+            if (!workerOwnsPermit) permits.release()
         }
+    }
 
     companion object {
         const val DEFAULT_TIMEOUT_MS = 3_000
