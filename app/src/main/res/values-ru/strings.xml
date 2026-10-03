@@ -48,6 +48,8 @@
     <string name="notification_channel_vpn_alerts">Оповещения VPN</string>
     <string name="notification_restart_guard_title">Автоперезапуск VPN остановлен</string>
     <string name="notification_restart_guard_text">Повторные сбои — нажмите, чтобы переподключиться вручную</string>
+    <string name="notification_always_on_unavailable_title">Не удалось запустить постоянную VPN</string>
+    <string name="notification_always_on_unavailable_text">Выберите включённый сервер (или Авто) и предоставьте разрешение VPN, затем повторно включите постоянную VPN в настройках системы.</string>
     <string name="notification_connecting">Подключение…</string>
     <string name="notification_connected">Подключено</string>
     <string name="notification_reconnecting">Переподключение…</string>

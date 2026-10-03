@@ -312,6 +312,7 @@ class FakeServiceControl(
  * dialog.
  */
 class FakeTunProvider : TunProvider {
+    var consentRequired = false
     val prepareCalls = AtomicInteger(0)
     val establishCalls = AtomicInteger(0)
 
@@ -321,7 +322,7 @@ class FakeTunProvider : TunProvider {
 
     override fun prepare(context: Context): Intent? {
         prepareCalls.incrementAndGet()
-        return null // consent already granted
+        return if (consentRequired) Intent("synthetic-consent") else null
     }
 
     override fun establish(builder: VpnService.Builder): ParcelFileDescriptor? {

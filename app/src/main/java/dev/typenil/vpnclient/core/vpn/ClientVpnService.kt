@@ -558,6 +558,12 @@ class ClientVpnService :
                 ) {
                     return START_STICKY
                 }
+                val request = when (intent?.action) {
+                    SERVICE_INTERFACE -> AutomaticStartRequest.AlwaysOn
+                    null, ACTION_RESTORE -> AutomaticStartRequest.Restore
+                    else -> AutomaticStartRequest.Stray
+                }
+                // CPH2449 sends SERVICE_INTERFACE while isAlwaysOn reports false.
                 // FGS contract: startForegroundService gives us ~5s to call
                 // startForeground — promote *before* the DataStore reads
                 // below, not inside startTunnel after them.
@@ -566,27 +572,30 @@ class ClientVpnService :
                     text = getString(R.string.app_name),
                     showDisconnect = false,
                 )
-                // System restart (null intent), boot/update restore, or
-                // always-on start: rebuild only if the user previously wanted
-                // the tunnel running. A failed flag read stops the service
-                // cleanly. The restart attempt is bounded — a hard/native
-                // crash never reaches a catch block, so without the guard a
-                // crash-on-start would loop forever:
-                // crash → START_STICKY restart → startTunnel → crash → …
-                //
-                // The coroutine suspends on DataStore reads, so ownership is
-                // re-validated after every suspension point and before
-                // startTunnel()/stopSelf() — a CONNECT/DISCONNECT arriving
-                // mid-flight must never see this stale work stop or
-                // resurrect its session.
+                // Only an explicit system VPN request bypasses the desire flag.
+                // Sticky/boot/update restore and the bounded restart guard stay
+                // unchanged: the attempt is bounded because a hard/native crash
+                // never reaches a catch block (crash → START_STICKY → crash …).
+                // Re-check ownership after suspended reads.
                 autoStartJob =
                     scope.launch {
-                        val wanted =
-                            runCatching { settings.desiredVpnRunning.first() }
-                                .getOrDefault(false)
-                        if (!wanted) {
-                            if (!autoStartLostOwnership()) stopSelf()
-                            return@launch
+                        val wanted = request == AutomaticStartRequest.Restore &&
+                            runCatching { settings.desiredVpnRunning.first() }.getOrDefault(false)
+                        if (autoStartLostOwnership()) return@launch
+                        val alwaysOn = request == AutomaticStartRequest.AlwaysOn
+                        val selected = !alwaysOn || runCatching { configProvider.selectedNodeId.first() }
+                            .onFailure { if (it is CancellationException) throw it }.getOrNull() != null
+                        if (autoStartLostOwnership()) return@launch
+                        val prepared = !alwaysOn || tunProvider.prepare(this@ClientVpnService) == null
+                        val branch = automaticStartBranch(request, wanted, prepared, selected)
+                        SecureLog.i(TAG, "automatic start branch=${branch.name}")
+                        when (branch) {
+                            AutomaticStartBranch.Stop -> { stopSelf(); return@launch }
+                            AutomaticStartBranch.MissingPrerequisites -> {
+                                rejectAlwaysOn(if (prepared) VpnError.NoNodeSelected else VpnError.PermissionRevoked, startGuard.begin())
+                                return@launch
+                            }
+                            else -> Unit
                         }
                         // Fail-open on a DataStore read error: the guard is a
                         // safety net, a broken read must not block reconnects.
@@ -596,7 +605,7 @@ class ClientVpnService :
                         if (autoStartLostOwnership()) return@launch
                         if (allowed) {
                             SecureLog.i(TAG, "rebuilding tunnel after service restart")
-                            startTunnel()
+                            startTunnel(alwaysOn = alwaysOn)
                         } else {
                             SecureLog.w(
                                 TAG,
@@ -650,7 +659,7 @@ class ClientVpnService :
         }
     }
 
-    private fun startTunnel() {
+    private fun startTunnel(alwaysOn: Boolean = false) {
         if (destroyed || engine != null) {
             // Nothing to start — a live engine already serves whatever the
             // queued request was for.
@@ -680,7 +689,7 @@ class ClientVpnService :
             scope.launch {
                 val attempt = startGuard.begin()
                 try {
-                    runStartAttempt(attempt, session)
+                    runStartAttempt(attempt, session, alwaysOn)
                 } finally {
                     startJob = null
                     // A start whose ACTION_CONNECT the single-flight guard rejected
@@ -702,6 +711,7 @@ class ClientVpnService :
     private suspend fun runStartAttempt(
         attempt: Long,
         session: ConnectionManager.PendingSession?,
+        alwaysOn: Boolean,
     ) {
         // Same-process fast path uses the handed-off session; after a
         // process death the service rebuilds from persisted state itself.
@@ -737,7 +747,8 @@ class ClientVpnService :
                                 // Genuinely nothing enabled — the user must
                                 // pick a server; that is a state, not a
                                 // defect.
-                                failStart(VpnError.NoNodeSelected, attempt)
+                                if (alwaysOn) rejectAlwaysOn(VpnError.NoNodeSelected, attempt)
+                                else failStart(VpnError.NoNodeSelected, attempt)
                                 return
                             }
 
@@ -750,6 +761,17 @@ class ClientVpnService :
                         }
                     }
                 }
+        if (alwaysOn && effective == null) {
+            val selected = runCatching { configProvider.selectedNodeId.first() }
+                .onFailure { if (it is CancellationException) throw it }.getOrNull()
+            if (!stillOwns(attempt)) return
+            // Reject stale/disabled picks that the ordinary compiler falls back from.
+            // AUTO's compiled summary has the same persisted sentinel id.
+            if (selected != config.node.id) {
+                rejectAlwaysOn(VpnError.NoNodeSelected, attempt)
+                return
+            }
+        }
         if (stopRequested || destroyed) {
             connectionManager.onServiceStopped(-1L)
             cleanup()
@@ -808,6 +830,13 @@ class ClientVpnService :
             activeGeneration = generation
         }
         connectionManager.onServiceStarted(generation)
+        if (alwaysOn) {
+            // Commit only after openTun/start succeeded, and test ownership inside
+            // DataStore's caller-context transaction (not before a suspended write).
+            persistSetting { settings.setDesiredVpnRunning(true) {
+                !stopRequested && !destroyed && stillOwns(attempt, generation)
+            } }
+        }
         connectionManager.reportHealthUnderlay(lastUnderlyingNetwork != null, generation)
         // A network loss during start() left no further callbacks —
         // re-evaluate so we don't publish Connected while offline.
@@ -1105,6 +1134,16 @@ class ClientVpnService :
      * stale error, and a newer connect owns the outcome through
      * [ConnectionManager.onSessionlessStartFailed].
      */
+    private suspend fun rejectAlwaysOn(error: VpnError, attempt: Long) {
+        if (!stillOwns(attempt)) return
+        SecureLog.w(TAG, "always-on prerequisites missing")
+        runCatching { notification.postAlert(
+            getString(R.string.notification_always_on_unavailable_title),
+            getString(R.string.notification_always_on_unavailable_text),
+        ) }
+        failStart(error, attempt)
+    }
+
     private suspend fun failStart(
         error: VpnError,
         attempt: Long,

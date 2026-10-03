@@ -341,6 +341,87 @@ class ClientVpnServiceLifecycleTest {
     }
 
     @Test
+    fun alwaysOn_withoutDesire_commitsOnlyAfterStart_thenDisconnectClears() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(false)
+        fakeConfig().selected.value = FakeNodeConfigProvider.NODE.id
+        val latch = CompletableDeferred<Unit>()
+        val engine = FakeVpnEngine(startLatch = latch)
+        fakeFactory().next = engine
+        startService(Intent(context, ClientVpnService::class.java).setAction(android.net.VpnService.SERVICE_INTERFACE))
+        awaitState<VpnConnectionState.Connecting>()
+        assertEquals(false, settings.desiredVpnRunning.first())
+        latch.complete(Unit)
+        awaitState<VpnConnectionState.Connected>()
+        withTimeout(STATE_TIMEOUT_MS) { settings.desiredVpnRunning.first { it } }
+        // The ownership predicate is evaluated by the real DataStore transaction.
+        settings.setDesiredVpnRunning(false) { false }
+        assertTrue(settings.desiredVpnRunning.first())
+        disconnect()
+        awaitState<VpnConnectionState.Idle>()
+        assertEquals(false, settings.desiredVpnRunning.first())
+        assertEquals(1, engine.startCalls.get())
+    }
+
+    @Test
+    fun alwaysOn_autoWithNodes_startsWithoutDesire() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(false)
+        fakeConfig().selected.value = dev.typenil.vpnclient.core.subscription.model.NodeSelection.AUTO_ID
+        val auto = dev.typenil.vpnclient.core.engine.singbox.ConfigCompiler.AUTO_NODE_SUMMARY
+        fakeConfig().config = EngineConfig("{}", auto)
+        startService(Intent(context, ClientVpnService::class.java).setAction(android.net.VpnService.SERVICE_INTERFACE))
+        awaitState<VpnConnectionState.Connected>()
+        withTimeout(STATE_TIMEOUT_MS) { settings.desiredVpnRunning.first { it } }
+        assertEquals(auto.id, requireState<VpnConnectionState.Connected>().node.id)
+        disconnect()
+        awaitState<VpnConnectionState.Idle>()
+        assertEquals(false, settings.desiredVpnRunning.first())
+    }
+
+    @Test
+    fun alwaysOn_missingPrerequisites_stopsWithoutEngine() = runBlocking<Unit> {
+        val cases = listOf(
+            null to FakeNodeConfigProvider.defaultConfig(),
+            "stale-synthetic-pick" to FakeNodeConfigProvider.defaultConfig(),
+            FakeNodeConfigProvider.NODE.id to null,
+            FakeNodeConfigProvider.NODE.id to FakeNodeConfigProvider.defaultConfig(),
+        )
+        cases.forEachIndexed { index, (pick, config) ->
+            settings.setDesiredVpnRunning(false)
+            fakeConfig().selected.value = pick
+            fakeConfig().config = config
+            fakeTun().consentRequired = index == 3
+            startService(Intent(context, ClientVpnService::class.java).setAction(android.net.VpnService.SERVICE_INTERFACE))
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            settleService()
+            withTimeout(STATE_TIMEOUT_MS) {
+                while (context.getSystemService(android.app.ActivityManager::class.java)
+                        .getRunningServices(Int.MAX_VALUE).any { it.service.className == ClientVpnService::class.java.name }) {
+                    kotlinx.coroutines.delay(20)
+                }
+            }
+            assertEquals(0, fakeFactory().createCalls.get())
+            assertEquals(false, settings.desiredVpnRunning.first())
+            requireState<VpnConnectionState.Idle>()
+        }
+    }
+
+    @Test
+    fun disconnect_duringAlwaysOnStart_doesNotResurrectDesire() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(false)
+        fakeConfig().selected.value = FakeNodeConfigProvider.NODE.id
+        val latch = CompletableDeferred<Unit>()
+        fakeFactory().next = FakeVpnEngine(startLatch = latch)
+        startService(Intent(context, ClientVpnService::class.java).setAction(android.net.VpnService.SERVICE_INTERFACE))
+        awaitState<VpnConnectionState.Connecting>()
+        disconnect()
+        awaitState<VpnConnectionState.Idle>()
+        latch.complete(Unit)
+        settleService()
+        assertEquals(false, settings.desiredVpnRunning.first())
+        requireState<VpnConnectionState.Idle>()
+    }
+
+    @Test
     fun restoreStart_withoutDesiredVpnRunning_staysIdle() {
         runBlocking {
             // Flag unset → a stray/RESTORE start must stopSelf without

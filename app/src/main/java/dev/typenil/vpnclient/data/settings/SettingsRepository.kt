@@ -172,8 +172,8 @@ class SettingsRepository
                 .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
                 .map { it[Keys.DESIRED_VPN_RUNNING] ?: false }
 
-        suspend fun setDesiredVpnRunning(running: Boolean) {
-            context.settingsStore.edit { it[Keys.DESIRED_VPN_RUNNING] = running }
+        suspend fun setDesiredVpnRunning(running: Boolean, onlyIf: () -> Boolean = { true }) {
+            context.settingsStore.edit { if (onlyIf()) it[Keys.DESIRED_VPN_RUNNING] = running }
         }
 
         /** See [SubscriptionSettings.autoRefreshMinutes] for the encoding. */
