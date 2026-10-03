@@ -230,7 +230,9 @@ of CMFA's stop → poll → start restart loop.
 
 - `StatusMessage.trafficAvailable` is ignored — libbox tells us when counters are
   meaningful.
-- `OutboundGroupItem.urlTestTime` is ignored (only `urlTestDelay` is kept).
+- ~~`OutboundGroupItem.urlTestTime` is ignored (only `urlTestDelay` is kept).~~
+  Outdated since `6c1ae2e`: `urlTestTime` is mapped and used as the freshness
+  signal for connected-mode latency runs.
 - `OutboundGroup.isExpand` is ignored; SFA persists it via `setGroupExpand`.
 - `readWIFIState()` returns null and `CommandServer.needWIFIState()` is never
   checked. Fine today; a config with SSID rules would silently get no Wi-Fi state.
@@ -468,16 +470,23 @@ without dropping the notification.
 
 ### Slice 4 — Latency + server list (P1)
 
+**Status (HEAD 69c0e35): implemented for connected mode** in `6c1ae2e`
+(`vpn: bound connected latency runs and handle cancellation`). The items below
+are kept as the original plan; corrections are marked.
+
 1. Wire latency testing into the Servers screen (ping button → progress →
-   repaint rows whose delay changed). The pinned AAR has **no
-   `urlTestAll`** — `CommandClient.urlTest(groupTag)` is a per-group
-   async dispatch (~8 ms, measured); one call per `type == "urltest"`
-   group measures all its members, and results land on the next
-   `writeGroups` push. Evidence + the baseline-comparison completion
-   rule: `docs/R04-SLICE4-SPIKE.md`.
+   repaint rows whose delay changed). The pinned libbox 1.14.1 AAR has **no
+   `urlTestAll`** (the earlier plan assumed one) — only
+   `CommandClient.urlTest(groupTag)`, a per-group async dispatch (~8 ms,
+   measured); one call per `type == "urltest"` group measures all its
+   members, and results land on the next `writeGroups` push. Evidence + the
+   baseline-comparison completion rule: `docs/R04-SLICE4-SPIKE.md`. The
+   offline (no-TUN) variant is a separate gated research result:
+   `docs/R04-RESEARCH-GATE.md`.
 2. Map `OutboundGroupItem.urlTestDelay` **and** `urlTestTime` onto node
    rows — the timestamp distinguishes a fresh result from a stale one
-   (closes the §3.13 note that `urlTestTime` is ignored).
+   (**done** in `6c1ae2e`; this closes the §3.13 note that `urlTestTime` is
+   ignored — that note is now outdated).
 3. Live node switching — **already implemented**: selection changes are
    reconciled into the live engine via `CommandClient.selectOutbound`
    with a reconnect fallback (`ConnectionManager.applyDesiredSelection`).
