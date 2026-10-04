@@ -20,7 +20,7 @@
     <string name="health_consent_granted">Consent granted</string>
     <string name="health_consent_required">Consent required</string>
     <string name="health_consent_denied">Consent denied</string>
-    <string name="health_revoked">Consent revoked</string>
+    <string name="health_revoked">Stopped by system or another app</string>
     <string name="health_started">Local runtime started; egress not verified</string>
     <string name="health_stopped">Session stopped</string>
     <string name="health_runtime_invalidated">Runtime evidence invalidated</string>
@@ -221,7 +221,7 @@
     <string name="home_status_disconnecting">Disconnecting…</string>
     <string name="home_status_failed">Connection failed</string>
     <string name="home_error_permission_denied">VPN permission denied</string>
-    <string name="home_error_permission_revoked">VPN permission was revoked</string>
+    <string name="home_error_permission_revoked">VPN was turned off by the system or another VPN app. Tap Connect to turn it on again.</string>
     <string name="home_error_no_node">No server selected — pick one in Servers</string>
     <string name="home_error_config">Invalid configuration: %1$s</string>
     <string name="home_error_engine">VPN core failed: %1$s</string>

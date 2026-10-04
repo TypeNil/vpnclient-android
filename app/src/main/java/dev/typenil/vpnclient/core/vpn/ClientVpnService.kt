@@ -592,7 +592,7 @@ class ClientVpnService :
                         when (branch) {
                             AutomaticStartBranch.Stop -> { stopSelf(); return@launch }
                             AutomaticStartBranch.MissingPrerequisites -> {
-                                rejectAlwaysOn(if (prepared) VpnError.NoNodeSelected else VpnError.PermissionRevoked, startGuard.begin())
+                                rejectAlwaysOn(if (prepared) VpnError.NoNodeSelected else VpnError.PermissionDenied, startGuard.begin())
                                 return@launch
                             }
                             else -> Unit

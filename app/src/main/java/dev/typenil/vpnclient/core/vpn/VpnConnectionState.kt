@@ -66,7 +66,7 @@ sealed class VpnError : Exception() {
         override val message = "VPN permission denied"
     }
     data object PermissionRevoked : VpnError() {
-        override val message = "VPN permission was revoked"
+        override val message = "VPN was stopped by the system or another VPN app"
     }
     data object NoNodeSelected : VpnError() {
         override val message = "no server selected"
@@ -80,7 +80,7 @@ sealed class VpnError : Exception() {
         fun fromEngine(error: EngineError): VpnError =
             when (error) {
                 is EngineError.InvalidConfig -> ConfigInvalid(error.message)
-                is EngineError.MissingVpnPermission -> PermissionRevoked
+                is EngineError.MissingVpnPermission -> PermissionDenied
                 is EngineError.TunnelFailed -> TunnelFailed(error.message)
                 is EngineError.StartFailed -> EngineFailed(error.message)
                 is EngineError.CoreError -> EngineFailed(error.message)

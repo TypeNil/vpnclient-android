@@ -20,7 +20,7 @@
     <string name="health_consent_granted">Разрешение получено</string>
     <string name="health_consent_required">Нужно разрешение</string>
     <string name="health_consent_denied">Разрешение отклонено</string>
-    <string name="health_revoked">Разрешение отозвано</string>
+    <string name="health_revoked">Остановлен системой или другим приложением</string>
     <string name="health_started">Локальный запуск; выход не проверен</string>
     <string name="health_stopped">Сеанс завершён</string>
     <string name="health_runtime_invalidated">Локальные свидетельства сброшены</string>
@@ -221,7 +221,7 @@
     <string name="home_status_disconnecting">Отключение…</string>
     <string name="home_status_failed">Не удалось подключиться</string>
     <string name="home_error_permission_denied">Разрешение VPN отклонено</string>
-    <string name="home_error_permission_revoked">Разрешение VPN было отозвано</string>
+    <string name="home_error_permission_revoked">VPN отключён системой или другим VPN-приложением. Нажмите «Подключить», чтобы включить снова.</string>
     <string name="home_error_no_node">Сервер не выбран — выберите его на вкладке «Серверы»</string>
     <string name="home_error_config">Неверная конфигурация: %1$s</string>
     <string name="home_error_engine">Сбой ядра VPN: %1$s</string>
