@@ -1248,6 +1248,7 @@ class SubscriptionRepository
                 is SubscriptionError.ConfigRejected -> "rejected by engine"
                 is SubscriptionError.InsecureTransport -> "https required"
                 is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"
+                is SubscriptionError.DeviceIdentificationRejected -> "device identification rejected"
                 is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
                 is SubscriptionError.NotFound -> "subscription removed"
                 is SubscriptionError.Superseded -> "superseded"

@@ -394,6 +394,22 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    fun `200 refusal cannot replace last known good with valid remark nodes`() = runTest {
+        seedSubscription()
+        val old = nodeEntity(uri("old.example.com", "Old"), 1)
+        nodeDao.nodes[old.id] = old
+        server.enqueue(MockResponse().setBody(uri("remark.example.com", "Remark"))
+            .addHeader("x-hwid-max-devices-reached", "true"))
+        val error = repository.refresh(1).exceptionOrNull()
+        assertTrue(error is SubscriptionError.DeviceIdentificationRejected)
+        assertEquals(listOf(old), nodeDao.forSubscription(1))
+        assertEquals(0, validator.calls)
+        assertEquals(0, nodeDao.replaceCalls)
+        assertEquals(0, subscriptionDao.successCalls)
+        assertEquals(1, subscriptionDao.attemptCalls)
+    }
+
+    @Test
     fun `refresh validates before committing nodes`() = runTest {
         seedSubscription()
         server.enqueue(MockResponse().setBody(uri("a.example.com", "A")))

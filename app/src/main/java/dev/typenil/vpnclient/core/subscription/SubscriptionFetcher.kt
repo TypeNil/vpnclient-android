@@ -38,8 +38,6 @@ data class FetchedSubscription(
     val newDomain: String?,
     /** Alternate fetch URL tried when the primary is unreachable. */
     val fallbackUrl: String?,
-    /** Raw header values relevant to Remnawave HWID/device-limit diagnostics. */
-    val hwidHeaders: Map<String, String>,
 ) {
     override fun equals(other: Any?): Boolean =
         this === other || (other is FetchedSubscription && body.contentEquals(other.body))
@@ -144,6 +142,10 @@ class SubscriptionFetcher @Inject constructor(
                     throw SubscriptionError.Network
                 }
 
+                hwidRefusal(response.headers)?.let { reason ->
+                    response.close()
+                    throw SubscriptionError.DeviceIdentificationRejected(reason, hwid == null)
+                }
                 if (response.isRedirect && redirectsLeft > 0) {
                     val location = response.header("Location")
                     response.close()
@@ -201,7 +203,7 @@ class SubscriptionFetcher @Inject constructor(
         response.use { resp ->
                 val headers = resp.headers
                 if (!resp.isSuccessful) {
-                    throw mapHttpError(url, resp.code, headers)
+                    throw mapHttpError(url, resp.code)
                 }
                 val body = resp.body
                 val declared = body.contentLength()
@@ -246,23 +248,12 @@ class SubscriptionFetcher @Inject constructor(
                     newUrl = validRemoteUrl(headers["new-url"]),
                     newDomain = validDomain(headers["new-domain"]),
                     fallbackUrl = validRemoteUrl(headers["fallback-url"]),
-                    hwidHeaders = headers.names()
-                        .filter { it.lowercase().startsWith("x-hwid") }
-                        .associateWith { headers[it]!! },
                 )
             }
 
-    private fun mapHttpError(url: String, code: Int, headers: okhttp3.Headers): SubscriptionError {
-        // Remnawave returns 404 both for an unknown subscription and for a missing/invalid
-        // HWID when device limits are enabled — related headers disambiguate.
-        val hwidHint = headers.names().any { it.lowercase().startsWith("x-hwid") }
-        SecureLog.w(TAG, "subscription fetch failed http=$code url=${Redactor.urlForDisplay(url)} hwidHeaders=$hwidHint")
-        return when {
-            code == 404 && hwidHint -> SubscriptionError.DeviceLimitReached(
-                "panel rejected request (missing/invalid device id)",
-            )
-            else -> SubscriptionError.Http(code, url.hostOrNull())
-        }
+    private fun mapHttpError(url: String, code: Int): SubscriptionError {
+        SecureLog.w(TAG, "subscription fetch failed http=$code url=${Redactor.urlForDisplay(url)}")
+        return SubscriptionError.Http(code, url.hostOrNull())
     }
 
     /** `subscription-userinfo: upload=..; download=..; total=..; expire=..` */

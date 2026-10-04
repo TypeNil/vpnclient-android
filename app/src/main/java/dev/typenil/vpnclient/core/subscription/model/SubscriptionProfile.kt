@@ -84,7 +84,13 @@ sealed class SubscriptionError : Exception() {
     data object ForbiddenAddress : SubscriptionError() {
         override val message = "redirect to a private/local address is not allowed"
     }
-    /** Remnawave HWID device-limit rejection. */
+    enum class HwidRefusal { MaxDevices, MissingOrInvalid, Ambiguous }
+    /** Only recognized refusal flags; never provider text or identifiers. */
+    data class DeviceIdentificationRejected(
+        val reason: HwidRefusal,
+        val sendingDisabled: Boolean,
+    ) : SubscriptionError()
+    /** Legacy typed error retained for old callers. */
     data class DeviceLimitReached(val detail: String?) : SubscriptionError()
     /** The subscription row no longer exists (removed mid-flight). */
     data object NotFound : SubscriptionError() {

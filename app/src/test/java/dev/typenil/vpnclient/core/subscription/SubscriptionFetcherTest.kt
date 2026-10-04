@@ -58,6 +58,52 @@ class SubscriptionFetcherTest {
     }
 
     @Test
+    fun `refusal flags precede every status and body`() = runTest {
+        val max = SubscriptionError.HwidRefusal.MaxDevices
+        val missing = SubscriptionError.HwidRefusal.MissingOrInvalid
+        val ambiguous = SubscriptionError.HwidRefusal.Ambiguous
+        val cases = listOf(
+            listOf("x-hwid-max-devices-reached" to "true") to max,
+            listOf("X-HWID-NOT-SUPPORTED" to " TRUE ") to missing,
+            listOf("x-hwid-limit" to "true") to ambiguous,
+            listOf("x-hwid-limit" to "true", "x-hwid-not-supported" to "true") to missing,
+            listOf("x-hwid-max-devices-reached" to "true", "x-hwid-not-supported" to "true") to ambiguous,
+            listOf("x-hwid-max-devices-reached" to "true", "X-HWID-MAX-DEVICES-REACHED" to "false") to max,
+            listOf("x-hwid-max-devices-reached" to "false") to null,
+            listOf("x-hwid-not-supported" to "yes") to null,
+            listOf("x-hwid-max-devices-reached" to "true".repeat(20)) to null,
+            listOf("x-hwid-active" to "true") to null,
+            emptyList<Pair<String, String>>() to null,
+        )
+        for (status in listOf(200, 404, 403)) for ((headers, expected) in cases) {
+            val response = MockResponse().setResponseCode(status).setBody("synthetic remark body")
+            headers.forEach { (name, value) -> response.addHeader(name, value) }
+            server.enqueue(response)
+            val result = runCatching { fetcher.fetch(server.url("/matrix").toString(), hwid, true) }
+            val error = result.exceptionOrNull()
+            when {
+                expected != null -> {
+                    assertTrue(error is SubscriptionError.DeviceIdentificationRejected)
+                    assertEquals(expected, (error as SubscriptionError.DeviceIdentificationRejected).reason)
+                    assertFalse(error.sendingDisabled)
+                }
+                status == 200 -> assertTrue(result.isSuccess)
+                else -> assertEquals(status, (error as SubscriptionError.Http).code)
+            }
+        }
+    }
+
+    @Test
+    fun `refusal without sending identifies disabled mode before empty body`() = runTest {
+        server.enqueue(MockResponse().addHeader("x-hwid-not-supported", "true"))
+        val error = runCatching {
+            fetcher.fetch(server.url("/disabled").toString(), null, true)
+        }.exceptionOrNull() as SubscriptionError.DeviceIdentificationRejected
+        assertTrue(error.sendingDisabled)
+        assertEquals(SubscriptionError.HwidRefusal.MissingOrInvalid, error.reason)
+    }
+
+    @Test
     fun `plain http is rejected without opt-in`() = runTest {
         val error = fetchExpectingError(server.url("/sub").toString(), allowInsecure = false)
         assertTrue(error is SubscriptionError.InsecureTransport)
