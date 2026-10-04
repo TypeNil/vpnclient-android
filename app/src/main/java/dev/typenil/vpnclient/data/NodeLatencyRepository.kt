@@ -20,12 +20,19 @@ enum class LatencyMethod(val storage: String) {
     }
 }
 
+/** How long a stored verdict still counts as current for ordering. Past it
+ *  the value is shown as outdated history and never sorts as a fresh one. */
+const val LATENCY_TTL_MS = 24L * 60 * 60 * 1000
+
 /** A persisted verdict. [latencyMs] null = the probe ran and failed. */
 data class NodeLatency(
     val latencyMs: Int?,
     val checkedAtMs: Long,
     val method: LatencyMethod,
-)
+) {
+    /** A timestamp in the future (clock moved back) can't be trusted: stale. */
+    fun isFresh(nowMs: Long): Boolean = nowMs - checkedAtMs in 0..LATENCY_TTL_MS
+}
 
 /**
  * Persisted per-node latency verdicts. Stored values are history — callers

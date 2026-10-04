@@ -55,4 +55,12 @@ class NodeLatencyRepositoryTest {
 
             assertNull(repo.latencies.first()["a"])
         }
+
+    @Test
+    fun `a verdict is fresh up to the TTL, outdated after it and when from the future`() {
+        val v = NodeLatency(42, 1_000L, LatencyMethod.Tcp)
+        assertEquals(true, v.isFresh(1_000L + LATENCY_TTL_MS))
+        assertEquals(false, v.isFresh(1_000L + LATENCY_TTL_MS + 1))
+        assertEquals(false, v.isFresh(999L)) // clock moved back: cannot be trusted
+    }
 }

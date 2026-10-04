@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.LatencyProbe
 import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
+import dev.typenil.vpnclient.core.common.log.SecureLog
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
@@ -14,8 +15,13 @@ import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.data.LatencyMethod
+import dev.typenil.vpnclient.data.NodeLatency
+import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.core.engine.OutboundGroupInfo
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -29,7 +35,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+/** How far the active latency run has got: [done] of [total] nodes have a
+ *  verdict. */
+data class LatencyProgress(
+    val done: Int,
+    val total: Int,
+)
 
 /** Nodes of one subscription, under its display name. [subscriptionName] is
  *  null when the profile row is gone — the screen renders the localized
@@ -84,6 +98,10 @@ data class ServersUiState(
     /** Tags a latency run has covered — distinguishes "timeout" from
      *  "never tested" on the badge. */
     val testedNodeIds: Set<String> = emptySet(),
+    /** Last persisted verdict per node (method + time) — history, not a live
+     *  reading: the screen shows it with its age and method, and an outdated
+     *  one never counts as fresh for ordering ([NodeLatency.isFresh]). */
+    val storedLatency: Map<String, NodeLatency> = emptyMap(),
     /** Connected → badges come from the engine's urltest (through the
      *  proxy); disconnected → direct TCP-connect probe. Names the
      *  measurement so the UI doesn't imply one means the other. */
@@ -144,6 +162,7 @@ internal data class ProbeSurface(
 private data class NodeSurface(
     val nodes: List<ServerNode>,
     val subscriptionNames: Map<Long, String>,
+    val stored: Map<String, NodeLatency>,
 )
 
 /** User-controlled list transforms — each is a Flow input to combine. */
@@ -168,6 +187,7 @@ class ServersViewModel
         private val nodePreferenceDao: NodePreferenceDao,
         private val latencyProbe: LatencyProbe,
         private val subscriptions: SubscriptionRepository,
+        private val latencyRepository: NodeLatencyRepository,
     ) : ViewModel() {
         /** Direct TCP probe results — populated when testing while disconnected.
          *  Internal so teardown-commit tests can observe the cancelled run's
@@ -279,7 +299,8 @@ class ServersViewModel
                 nodeDao.observeEnabled(),
                 nodePreferenceDao.observeAll(),
                 subscriptions.profiles,
-            ) { nodes, prefs, profiles ->
+                latencyRepository.latencies,
+            ) { nodes, prefs, profiles, stored ->
                 val prefById = prefs.associateBy { it.nodeId }
                 NodeSurface(
                     nodes =
@@ -294,11 +315,12 @@ class ServersViewModel
                             )
                         },
                     subscriptionNames = profiles.associate { it.id to it.name },
+                    stored = stored,
                 )
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = NodeSurface(emptyList(), emptyMap()),
+                initialValue = NodeSurface(emptyList(), emptyMap(), emptyMap()),
             )
 
         val uiState: StateFlow<ServersUiState> =
@@ -374,10 +396,20 @@ class ServersViewModel
                             afterProtocol
                         }
 
-                        // Known delay ascending; untested/unmeasurable nodes last.
+                        // Live value first; a node with a live verdict but no
+                        // delay (timeout) sorts last. Only nodes with no live
+                        // verdict fall back to the stored one — and only while
+                        // it is fresh: outdated history never ranks.
                         ServerSortMode.Latency -> {
+                            val now = latencyRepository.now()
                             afterProtocol.sortedBy { node ->
-                                delays[node.id] ?: Int.MAX_VALUE
+                                delays[node.id]
+                                    ?: if (node.id in testedIds) {
+                                        null
+                                    } else {
+                                        surface.stored[node.id]?.takeIf { it.isFresh(now) }?.latencyMs
+                                    }
+                                    ?: Int.MAX_VALUE
                             }
                         }
 
@@ -427,6 +459,7 @@ class ServersViewModel
                     autoSelected = selectedId == NodeSelection.AUTO_ID,
                     delays = delays,
                     testedNodeIds = testedIds,
+                    storedLatency = surface.stored,
                     connected = engine.connected,
                     query = ctl.query,
                     sortMode = ctl.sortMode,
@@ -553,55 +586,116 @@ class ServersViewModel
         }
 
         /**
-         * Latency probe. Connected: the engine's urltest measures each node
-         * through its own outbound over the real underlay (our sockets never
-         * enter the TUN) — the run covers `urltest` group members only and
-         * waits, bounded, for fresh terminal results. Disconnected: a direct
-         * TCP-connect probe per node — same underlay, without a running core.
-         * A second press while a run is active is ignored — no parallel runs.
+         * Latency probe over every enabled node. Connected: the engine's
+         * urltest measures each node through its own outbound over the real
+         * underlay (our sockets never enter the TUN) — the run covers
+         * `urltest` group members only and waits, bounded, for fresh terminal
+         * results. Disconnected: a direct TCP-connect probe per node — same
+         * underlay, without a running core. Verdicts are persisted with their
+         * method and time. A second press while a run is active is ignored —
+         * no parallel runs; [cancelLatencyTest] stops the active one.
          */
         fun testLatency() {
             // Claim the run synchronously — two presses before the launched
             // coroutine is scheduled must not enqueue parallel runs.
             if (!_testing.compareAndSet(false, true)) return
-            viewModelScope.launch {
-                try {
-                    if (connectionManager.state.value is VpnConnectionState.Connected) {
-                        runUrlTest()
-                    } else {
-                        val nodes = nodeDao.getEnabled()
-                        coroutineScope {
-                            nodes.forEach { node ->
-                                launch {
-                                    val delay = latencyProbe.measure(node.server, node.port)
-                                    // A connect that landed mid-probe must not
-                                    // publish a direct result into the
-                                    // connected-mode surface.
-                                    if (connectionManager.state.value is VpnConnectionState.Connected) {
-                                        return@launch
-                                    }
-                                    probeSurface.update { surface ->
-                                        surface.copy(
-                                            delays =
-                                                if (delay != null) {
-                                                    surface.delays + (node.id to delay)
-                                                } else {
-                                                    surface.delays - node.id
-                                                },
-                                            tested = surface.tested + node.id,
-                                            // A fresh direct measurement
-                                            // supersedes a retained urltest
-                                            // verdict for this tag.
-                                            urlTested = surface.urlTested - node.id,
-                                            urlTestDelays = surface.urlTestDelays - node.id,
-                                        )
-                                    }
-                                }
+            testJob =
+                viewModelScope.launch {
+                    try {
+                        if (connectionManager.state.value is VpnConnectionState.Connected) {
+                            runUrlTest()
+                        } else {
+                            runTcpTest()
+                        }
+                    } finally {
+                        _progress.value = null
+                        _testing.value = false
+                    }
+                }
+        }
+
+        /** Stop the active run. Probes in flight are cancelled; nodes the run
+         *  had not reached keep their previous value (stored verdict) — they
+         *  do not turn into timeouts. Verdicts that already arrived are kept. */
+        fun cancelLatencyTest() {
+            testJob?.cancel()
+        }
+
+        /** The screen went away: a direct-probe run has no one to show its
+         *  progress to. A connected run is the engine's own urltest and is
+         *  left to finish. */
+        fun onScreenLeft() {
+            if (connectionManager.state.value !is VpnConnectionState.Connected) cancelLatencyTest()
+        }
+
+        private var testJob: Job? = null
+
+        private suspend fun runTcpTest() {
+            val nodes = nodeDao.getEnabled()
+            val ids = nodes.mapTo(HashSet()) { it.id }
+            _progress.value = LatencyProgress(0, nodes.size)
+            // The run invalidates what it covers on the session surface; a
+            // node it never reaches (cancel) falls back to its stored verdict
+            // instead of a stale in-memory one or a fake timeout.
+            probeSurface.update {
+                it.copy(
+                    delays = it.delays - ids,
+                    tested = it.tested - ids,
+                    urlTested = it.urlTested - ids,
+                    urlTestDelays = it.urlTestDelays - ids,
+                )
+            }
+            val measured = mutableMapOf<String, Int?>()
+            try {
+                coroutineScope {
+                    nodes.forEach { node ->
+                        launch {
+                            val delay = latencyProbe.measure(node.server, node.port)
+                            // A connect that landed mid-probe must not
+                            // publish a direct result into the
+                            // connected-mode surface.
+                            if (connectionManager.state.value is VpnConnectionState.Connected) {
+                                return@launch
+                            }
+                            measured[node.id] = delay
+                            _progress.value = LatencyProgress(measured.size, nodes.size)
+                            probeSurface.update { surface ->
+                                surface.copy(
+                                    delays =
+                                        if (delay != null) {
+                                            surface.delays + (node.id to delay)
+                                        } else {
+                                            surface.delays - node.id
+                                        },
+                                    tested = surface.tested + node.id,
+                                    // A fresh direct measurement
+                                    // supersedes a retained urltest
+                                    // verdict for this tag.
+                                    urlTested = surface.urlTested - node.id,
+                                    urlTestDelays = surface.urlTestDelays - node.id,
+                                )
                             }
                         }
                     }
-                } finally {
-                    _testing.value = false
+                }
+            } finally {
+                persistLatency(measured.toMap(), LatencyMethod.Tcp)
+            }
+        }
+
+        /** Persist even while the run is being cancelled — what already
+         *  arrived is a real verdict. A storage failure must not take the
+         *  screen down; the session surface still holds the value. */
+        private suspend fun persistLatency(
+            results: Map<String, Int?>,
+            method: LatencyMethod,
+        ) {
+            if (results.isEmpty()) return
+            withContext(NonCancellable) {
+                try {
+                    latencyRepository.record(results, method)
+                } catch (e: Exception) {
+                    SecureLog.w(TAG, "latency verdicts not persisted", e)
                 }
             }
         }
@@ -635,6 +729,7 @@ class ServersViewModel
                     .flatMap { it.items.asSequence() }
                     .associate { it.tag to it.urlTestTime }
             if (baseline.isEmpty()) return
+            _progress.value = LatencyProgress(0, baseline.size)
 
             // The engine attach this run belongs to — floors and verdict
             // marks are scoped to its measurement history; a mid-run
@@ -666,6 +761,7 @@ class ServersViewModel
                         }
                     }
                 }
+                _progress.value = LatencyProgress(succeeded.size + failed.size, baseline.size)
             }
 
             // Stale values and verdicts for covered tags are invalid the
@@ -796,6 +892,20 @@ class ServersViewModel
                     }
                     surface.copy(urlTested = urlTested, urlTestDelays = urlTestDelays)
                 }
+                persistLatency(
+                    buildMap<String, Int?> {
+                        for (tag in baseline.keys) {
+                            when {
+                                tag in succeeded -> put(tag, succeeded.getValue(tag))
+                                // Terminal failure or bound hit while still
+                                // connected = a real verdict; a cancelled
+                                // run's unreached tags keep their old value.
+                                tag in failed || !cancelled -> put(tag, null)
+                            }
+                        }
+                    },
+                    LatencyMethod.Proxy,
+                )
             }
         }
 
@@ -804,9 +914,16 @@ class ServersViewModel
         /** True while a latency probe is in flight — drives the button spinner. */
         val testing: StateFlow<Boolean> = _testing
 
+        private val _progress = MutableStateFlow<LatencyProgress?>(null)
+
+        /** done/total of the active run — null while idle. */
+        val progress: StateFlow<LatencyProgress?> = _progress
+
         companion object {
             /** sing-box outbound group type that performs urltest measurement. */
             internal const val URLTEST_GROUP_TYPE = "urltest"
+
+            private const val TAG = "ServersVM"
 
             /** Bound on dispatch + wait for one urlTest run — the native probe
              *  horizon. Nodes still non-terminal at the bound are the only

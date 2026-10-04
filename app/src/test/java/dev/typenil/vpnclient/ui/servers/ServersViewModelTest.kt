@@ -31,10 +31,16 @@ import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.core.vpn.PostStartHealthProbe
 import dev.typenil.vpnclient.core.vpn.ServiceControl
 import dev.typenil.vpnclient.data.db.DbTransactionRunner
+import dev.typenil.vpnclient.data.LATENCY_TTL_MS
+import dev.typenil.vpnclient.data.db.NodeLatencyEntity
+import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
+import dev.typenil.vpnclient.data.db.FakeNodeLatencyDao
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
+import java.net.InetAddress
+import java.net.ServerSocket
 import dev.typenil.vpnclient.data.db.SubscriptionEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -327,6 +333,9 @@ class ServersViewModelTest {
     private val nodePreferenceDao = FakeNodePreferenceDao()
     private val socketProtector = VpnSocketProtector()
     private val latencyProbe = LatencyProbe(socketProtector)
+    private val latencyDao = FakeNodeLatencyDao()
+    private var clockMs = 1_000_000L
+    private val latencyRepository = NodeLatencyRepository(latencyDao) { clockMs }
 
     private lateinit var engine: FakeEngine
     private lateinit var manager: ConnectionManager
@@ -393,13 +402,16 @@ class ServersViewModelTest {
                 announce = null,
                 fallbackUrl = null,
             )
-        viewModel =
+        viewModel = buildViewModel(latencyProbe)
+    }
+
+    private fun buildViewModel(probe: LatencyProbe): ServersViewModel =
             ServersViewModel(
                 settings,
                 manager,
                 nodeDao,
                 nodePreferenceDao,
-                latencyProbe,
+                probe,
                 SubscriptionRepository(
                     subscriptionDao = subscriptionDao,
                     nodeDao = nodeDao,
@@ -443,8 +455,8 @@ class ServersViewModelTest {
                         },
                     uriListParser = UriListParser(),
                 ),
+                latencyRepository,
             )
-    }
 
     @After
     fun tearDown() {
@@ -1145,5 +1157,174 @@ class ServersViewModelTest {
             val ui = viewModel.uiState.value
             assertFalse("n1" in ui.testedNodeIds)
             assertNull(ui.delays["n1"])
+        }
+
+    // ---- persisted verdicts, Test-all progress and cancel ----
+
+    private fun loopback(): InetAddress = InetAddress.getByName("127.0.0.1")
+
+    /** A probe whose DNS step hangs for [hang] hosts — a run that is
+     *  provably still in flight — and resolves everything else to loopback.
+     *  All on the test dispatcher: virtual time, no real waits. */
+    private fun gatedProbe(hang: Set<String>) =
+        LatencyProbe(socketProtector, dispatcher, dispatcher) { host ->
+            if (host in hang) awaitCancellation() else loopback()
+        }
+
+    @Test
+    fun `connected run stores proxy verdicts with the run clock and a failure as null`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1)))
+            collectUi()
+            connectToRunning()
+            engine.groupsFlow.value = groups(listOf(item("n1"), item("n2")))
+            advanceUntilIdle()
+            clockMs = 5_000_000L
+            engine.onUrlTest = {
+                engine.groupsFlow.value =
+                    groups(listOf(item("n1", delay = 95, time = 800), item("n2")))
+            }
+
+            viewModel.testLatency()
+            advanceUntilIdle() // n2 never answers: rides the bound, a real timeout
+
+            assertEquals(NodeLatencyEntity("n1", 95, 5_000_000L, "proxy"), latencyDao.rows["n1"])
+            assertEquals(NodeLatencyEntity("n2", null, 5_000_000L, "proxy"), latencyDao.rows["n2"])
+        }
+
+    @Test
+    fun `connected run cut short by disconnect stores only what arrived`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1)))
+            val before = NodeLatencyEntity("n2", 77, 1L, "tcp")
+            latencyDao.upsertAll(listOf(before))
+            collectUi()
+            val generation = connectToRunning()
+            engine.groupsFlow.value = groups(listOf(item("n1"), item("n2")))
+            advanceUntilIdle()
+
+            viewModel.testLatency()
+            runCurrent()
+            engine.groupsFlow.value = groups(listOf(item("n1", delay = 150, time = 900), item("n2")))
+            runCurrent()
+            sendDisconnect()
+            settleStopped(generation)
+
+            assertEquals(150, latencyDao.rows["n1"]?.latencyMs)
+            // n2 was never reached: its earlier verdict is untouched, not "timeout".
+            assertEquals(before, latencyDao.rows["n2"])
+        }
+
+    @Test
+    fun `direct run stores TCP verdicts, a closed port is a stored failure`() =
+        testScope.runTest {
+            val open = ServerSocket(0, 50, loopback())
+            val closedPort = ServerSocket(0, 1, loopback()).use { it.localPort }
+            try {
+                nodeDao.upsertAll(
+                    listOf(
+                        nodeEntity("up", 0).copy(port = open.localPort),
+                        nodeEntity("down", 1).copy(port = closedPort),
+                    ),
+                )
+                collectUi()
+                clockMs = 7_000_000L
+
+                viewModel.testLatency()
+                awaitRunEnd()
+
+                val up = latencyDao.rows.getValue("up")
+                assertTrue(up.latencyMs != null)
+                assertEquals(7_000_000L, up.checkedAtEpochMs)
+                assertEquals("tcp", up.method)
+                assertEquals(NodeLatencyEntity("down", null, 7_000_000L, "tcp"), latencyDao.rows["down"])
+                assertNull(viewModel.progress.value)
+            } finally {
+                open.close()
+            }
+        }
+
+    @Test
+    fun `cancel stops a direct run - arrived kept, unreached node keeps its stored verdict`() =
+        testScope.runTest {
+            val open = ServerSocket(0, 50, loopback())
+            try {
+                nodeDao.upsertAll(
+                    listOf(
+                        nodeEntity("a", 0).copy(server = "a.test", port = open.localPort),
+                        nodeEntity("b", 1).copy(server = "b.test"),
+                    ),
+                )
+                val earlierB = NodeLatencyEntity("b", 222, 1L, "tcp")
+                latencyDao.upsertAll(listOf(NodeLatencyEntity("a", 11, 1L, "tcp"), earlierB))
+                viewModel = buildViewModel(gatedProbe(hang = setOf("b.test")))
+                collectUi()
+
+                viewModel.testLatency()
+                runCurrent()
+                assertTrue(viewModel.testing.value)
+                assertEquals(LatencyProgress(done = 1, total = 2), viewModel.progress.value)
+
+                clockMs = 9_000_000L
+                viewModel.cancelLatencyTest()
+                runCurrent()
+
+                assertFalse(viewModel.testing.value)
+                assertNull(viewModel.progress.value)
+                assertEquals(9_000_000L, latencyDao.rows.getValue("a").checkedAtEpochMs)
+                assertEquals(earlierB, latencyDao.rows["b"])
+                val ui = viewModel.uiState.value
+                assertNull(ui.delays["b"])
+                assertFalse("b" in ui.testedNodeIds)
+                assertEquals(222, ui.storedLatency["b"]?.latencyMs)
+            } finally {
+                open.close()
+            }
+        }
+
+    @Test
+    fun `leaving the screen cancels a direct run but not the engine's urltest`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0).copy(server = "a.test")))
+            viewModel = buildViewModel(gatedProbe(hang = setOf("a.test")))
+            collectUi()
+            viewModel.testLatency()
+            runCurrent()
+            assertTrue(viewModel.testing.value)
+            viewModel.onScreenLeft()
+            runCurrent()
+            assertFalse(viewModel.testing.value)
+
+            viewModel = buildViewModel(latencyProbe)
+            collectUi()
+            connectToRunning()
+            engine.groupsFlow.value = groups(listOf(item("n1")))
+            advanceUntilIdle()
+            viewModel.testLatency()
+            runCurrent()
+            viewModel.onScreenLeft()
+            runCurrent()
+            assertTrue(viewModel.testing.value)
+        }
+
+    @Test
+    fun `latency sort ranks fresh stored verdicts and sinks outdated ones`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1), nodeEntity("n3", 2)))
+            latencyDao.upsertAll(
+                listOf(
+                    NodeLatencyEntity("n1", 300, clockMs - 1_000, "tcp"),
+                    // Fastest on paper, but older than the TTL: history, not a rank.
+                    NodeLatencyEntity("n2", 10, clockMs - LATENCY_TTL_MS - 1, "tcp"),
+                    NodeLatencyEntity("n3", 100, clockMs - 5_000, "proxy"),
+                ),
+            )
+            collectUi()
+            viewModel.setSortMode(ServerSortMode.Latency)
+            advanceUntilIdle()
+
+            val ui = viewModel.uiState.value
+            assertEquals(listOf("n3", "n1", "n2"), ui.groups.flatMap { it.nodes }.map { it.id })
+            assertEquals(10, ui.storedLatency["n2"]?.latencyMs)
         }
 }
