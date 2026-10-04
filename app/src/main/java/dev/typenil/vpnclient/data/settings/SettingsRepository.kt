@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.data.settings
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -16,6 +17,7 @@ import dev.typenil.vpnclient.core.engine.DnsMode
 import dev.typenil.vpnclient.core.engine.DnsProfile
 import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import kotlinx.coroutines.flow.Flow
@@ -39,6 +41,7 @@ class SettingsRepository
         private object Keys {
             val SELECTED_NODE_ID = stringPreferencesKey("selected_node_id")
             val HWID = stringPreferencesKey("remnawave_hwid")
+            val HWID_ALLOWED = booleanPreferencesKey("hwid_allowed")
             val RECONNECT_ON_NETWORK_CHANGE = booleanPreferencesKey("reconnect_on_network_change")
             val IPV6_ENABLED = booleanPreferencesKey("ipv6_enabled")
 
@@ -126,26 +129,26 @@ class SettingsRepository
                 .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
                 .map { it[Keys.HWID] }
 
-        override suspend fun getOrCreateHwid(): String {
-            var existing: String? = null
-            context.settingsStore.edit { prefs ->
-                existing =
-                    when (val stored = prefs[Keys.HWID]) {
-                        null -> {
-                            java.util.UUID
-                                .randomUUID()
-                                .toString()
-                                .also { prefs[Keys.HWID] = it }
-                        }
-
-                        // Legacy installs stored an undashed 32-hex id; panels that validate
-                        // HWID format reject it — rewrite to dashed UUID spelling (same id).
-                        else -> {
-                            normalizeHwid(stored)?.also { prefs[Keys.HWID] = it } ?: stored
-                        }
+        override val hwidConsent: Flow<HwidConsent> =
+            context.settingsStore.data
+                .onStart { context.settingsStore.edit { migrateHwidConsent(it) } }
+                .map { prefs ->
+                    when (prefs[Keys.HWID_ALLOWED]) {
+                        true -> HwidConsent.Allowed
+                        false -> HwidConsent.Denied
+                        null -> HwidConsent.Unset
                     }
-            }
-            return existing!!
+                }
+
+        override suspend fun setHwidConsent(consent: HwidConsent) {
+            require(consent != HwidConsent.Unset)
+            context.settingsStore.edit { it[Keys.HWID_ALLOWED] = consent == HwidConsent.Allowed }
+        }
+
+        override suspend fun getOrCreateHwid(): String? {
+            var existing: String? = null
+            context.settingsStore.edit { existing = permittedHwid(it) }
+            return existing
         }
 
         val reconnectOnNetworkChange: Flow<Boolean> =
@@ -448,6 +451,23 @@ class SettingsRepository
             const val RESTART_WINDOW_MS = 10 * 60 * 1000L
 
             private val HEX32 = Regex("[0-9a-fA-F]{32}")
+
+            internal fun migrateHwidConsent(prefs: MutablePreferences) {
+                if (prefs[Keys.HWID_ALLOWED] == null && prefs[Keys.HWID] != null) {
+                    prefs[Keys.HWID_ALLOWED] = true
+                }
+            }
+
+            internal fun permittedHwid(
+                prefs: MutablePreferences,
+                create: () -> String = { java.util.UUID.randomUUID().toString() },
+            ): String? {
+                migrateHwidConsent(prefs)
+                if (prefs[Keys.HWID_ALLOWED] != true) return null
+                val stored = prefs[Keys.HWID]
+                return (stored?.let { normalizeHwid(it) ?: it } ?: create())
+                    .also { prefs[Keys.HWID] = it }
+            }
 
             /** Reformats an undashed 32-hex HWID to dashed UUID form; null if already fine. */
             fun normalizeHwid(stored: String): String? {

@@ -207,9 +207,19 @@ class SubscriptionRepositoryTest {
     }
 
     private class FakeSettings : SubscriptionSettings {
+        override val hwidConsent = MutableStateFlow(dev.typenil.vpnclient.core.subscription.HwidConsent.Allowed)
+        override suspend fun setHwidConsent(consent: dev.typenil.vpnclient.core.subscription.HwidConsent) {
+            hwidConsent.value = consent
+        }
         val selected = MutableStateFlow<String?>(null)
         val autoRefresh = MutableStateFlow(0)
-        override suspend fun getOrCreateHwid() = "00000000-0000-0000-0000-000000000000"
+        var hwidCalls = 0
+        var afterHwid: (() -> Unit)? = null
+        override suspend fun getOrCreateHwid(): String {
+            hwidCalls++
+            afterHwid?.invoke()
+            return "00000000-0000-0000-0000-000000000000"
+        }
         override val selectedNodeId: Flow<String?> get() = selected
         override suspend fun setSelectedNodeId(id: String?) { selected.value = id }
         override suspend fun clearSelectedNodeIdIf(expected: String) {
@@ -391,6 +401,58 @@ class SubscriptionRepositoryTest {
     @After
     fun tearDown() {
         server.shutdown()
+    }
+
+    private fun assertDeviceHeaders(request: okhttp3.mockwebserver.RecordedRequest, allowed: Boolean) {
+        listOf("x-hwid", "x-device-os", "x-ver-os", "x-device-model", "x-app-version").forEach {
+            assertEquals(it, allowed, request.getHeader(it) != null)
+        }
+        assertTrue(request.getHeader("User-Agent") != null)
+    }
+
+    @Test
+    fun `all remote entries gate device headers for each consent state`() = runTest {
+        HwidConsent.entries.forEach { consent ->
+            settings.hwidConsent.value = consent
+            listOf("add", "refresh", "periodic", "launch", "edit").forEach { entry ->
+                seedSubscription()
+                subscriptionDao.subs[1] = subscriptionDao.subs.getValue(1).copy(updateAlways = true)
+                settings.autoRefresh.value = 15
+                val callsBefore = settings.hwidCalls
+                server.enqueue(MockResponse().setBody(uri("192.0.2.1", "Synthetic")))
+                val result = when (entry) {
+                    "add" -> repository.add(server.url("/add").toString(), "Synthetic", true)
+                    "periodic" -> repository.refreshPeriodic(1)
+                    "launch" -> repository.refreshOnLaunch(1)
+                    "edit" -> repository.editUrl(1, server.url("/edit").toString())
+                    else -> repository.refresh(1)
+                }
+                assertTrue("$consent $entry", result.isSuccess)
+                val allowed = consent == HwidConsent.Allowed
+                assertDeviceHeaders(server.takeRequest(), allowed)
+                assertEquals(callsBefore + if (allowed) 1 else 0, settings.hwidCalls)
+            }
+        }
+    }
+
+    @Test
+    fun `cross-origin transport fallback independently gates all device headers`() = runTest {
+        val fallback = MockWebServer()
+        try {
+            fallback.start()
+            HwidConsent.entries.forEach { consent ->
+                settings.hwidConsent.value = consent
+                seedSubscription(1, server.url("/sub").toString(), fallback.url("/sub").toString())
+                val callsBefore = settings.hwidCalls
+                server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+                fallback.enqueue(MockResponse().setBody(uri("192.0.2.1", "Synthetic")))
+                assertTrue(repository.refresh(1).isSuccess)
+                assertDeviceHeaders(fallback.takeRequest(), consent == HwidConsent.Allowed)
+                assertEquals(callsBefore + if (consent == HwidConsent.Allowed) 2 else 0, settings.hwidCalls)
+            }
+        } finally {
+            fallback.shutdown()
+        }
     }
 
     @Test
@@ -636,6 +698,23 @@ class SubscriptionRepositoryTest {
 
             assertTrue(result.isSuccess)
             assertEquals(1, nodeDao.forSubscription(1).size)
+        } finally {
+            fallback.shutdown()
+        }
+    }
+
+    @Test
+    fun `fallback re-reads consent revoked after primary request preparation`() = runTest {
+        val fallback = MockWebServer()
+        try {
+            fallback.start()
+            seedSubscription(1, server.url("/sub").toString(), fallback.url("/sub").toString())
+            settings.afterHwid = { settings.hwidConsent.value = HwidConsent.Denied }
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            fallback.enqueue(MockResponse().setBody(uri("192.0.2.1", "Synthetic")))
+            assertTrue(repository.refresh(1).isSuccess)
+            assertDeviceHeaders(fallback.takeRequest(), false)
+            assertEquals(1, settings.hwidCalls)
         } finally {
             fallback.shutdown()
         }

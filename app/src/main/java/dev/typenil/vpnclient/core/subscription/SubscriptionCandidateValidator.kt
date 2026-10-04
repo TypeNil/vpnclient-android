@@ -19,7 +19,10 @@ interface SubscriptionCandidateValidator {
  * `SettingsRepository`; kept narrow so the repository is JVM-testable.
  */
 interface SubscriptionSettings {
-    suspend fun getOrCreateHwid(): String
+    val hwidConsent: Flow<HwidConsent>
+    suspend fun setHwidConsent(consent: HwidConsent)
+    /** Atomic consent check; never creates an id unless Allowed. */
+    suspend fun getOrCreateHwid(): String?
     val selectedNodeId: Flow<String?>
     suspend fun setSelectedNodeId(id: String?)
     /**

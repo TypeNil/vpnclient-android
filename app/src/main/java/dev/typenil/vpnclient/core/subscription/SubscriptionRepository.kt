@@ -393,12 +393,20 @@ class SubscriptionRepository
             }
         }
 
+        /** Re-read consent for every request, including transport fallback. */
+        private suspend fun fetchWithConsent(url: String, allowInsecure: Boolean) =
+            fetcher.fetch(
+                url,
+                if (settings.hwidConsent.first() == HwidConsent.Allowed) {
+                    settings.getOrCreateHwid()
+                } else null,
+                allowInsecure,
+            )
+
         /**
-         * Phase 1 of [refresh]: row lookup, HWID, the network fetch (with the
-         * provider fallback retried once on transport failures), and the full
-         * parse + engine validation. No DB writes — the only side effect is
-         * `getOrCreateHwid()` creating the device id on first use, which is a
-         * single atomic DataStore edit and needs no lock.
+         * Phase 1: row lookup, gated fetch (fallback once on transport failures),
+         * parse and engine validation. No DB writes; ID creation is an atomic
+         * consent-guarded DataStore edit.
          */
         private suspend fun prepareRefresh(
             id: Long,
@@ -411,11 +419,10 @@ class SubscriptionRepository
             // caller bug. Fail fast rather than feed the fetcher a
             // non-URL.
             if (isManualSubscription(sub.url)) throw SubscriptionError.NotFound
-            val hwid = settings.getOrCreateHwid()
             var usedFallback = false
             val body =
                 try {
-                    fetcher.fetch(sub.url, hwid, sub.allowInsecureHttp)
+                    fetchWithConsent(sub.url, sub.allowInsecureHttp)
                 } catch (e: SubscriptionError) {
                     // Provider-published fallback URL: retry once on transport
                     // failures only — HTTP/parse/policy errors are authoritative.
@@ -425,7 +432,7 @@ class SubscriptionRepository
                     ) {
                         SecureLog.i(TAG, "primary fetch failed sub=$id — trying fallback")
                         usedFallback = true
-                        fetcher.fetch(fallback, hwid, sub.allowInsecureHttp)
+                        fetchWithConsent(fallback, sub.allowInsecureHttp)
                     } else {
                         throw e
                     }
@@ -1011,7 +1018,7 @@ class SubscriptionRepository
                             // Same-URL edit is a manual refresh — never gated.
                             return@withLock refreshLocked(id, RefreshTrigger.Manual)
                         }
-                        val body = fetcher.fetch(trimmed, settings.getOrCreateHwid(), sub.allowInsecureHttp)
+                        val body = fetchWithConsent(trimmed, sub.allowInsecureHttp)
                         val parsed = parseAndValidate(id, body.body, body.contentType)
                         // URL repoint + node swap + success metadata atomically.
                         transactions.run {

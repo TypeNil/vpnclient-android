@@ -140,6 +140,10 @@ class ServersViewModelTest {
     }
 
     private class FakeSettings : SubscriptionSettings {
+        override val hwidConsent = MutableStateFlow(dev.typenil.vpnclient.core.subscription.HwidConsent.Allowed)
+        override suspend fun setHwidConsent(consent: dev.typenil.vpnclient.core.subscription.HwidConsent) {
+            hwidConsent.value = consent
+        }
         val selected = MutableStateFlow<String?>(null)
 
         override suspend fun getOrCreateHwid() = "test-hwid"
