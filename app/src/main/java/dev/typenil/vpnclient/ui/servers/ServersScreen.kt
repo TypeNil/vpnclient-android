@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.servers
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +72,8 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.data.LatencyMethod
+import dev.typenil.vpnclient.data.NodeLatency
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 
@@ -81,6 +85,13 @@ fun ServersScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val testing by viewModel.testing.collectAsStateWithLifecycle()
+    val progress by viewModel.progress.collectAsStateWithLifecycle()
+    // A direct-probe run has nobody to show its progress to once the screen is
+    // gone — but a rotation recreates the composition and must not kill it.
+    val activity = LocalActivity.current
+    DisposableEffect(viewModel) {
+        onDispose { if (activity?.isChangingConfigurations != true) viewModel.onScreenLeft() }
+    }
 
     // One column on phones, two on tablets — 160 dp min cards crushed the
     // name/touch targets into slivers.
@@ -161,11 +172,21 @@ fun ServersScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    TextButton(
-                        onClick = viewModel::testLatency,
-                        enabled = !testing,
-                    ) {
-                        Text(stringResource(R.string.servers_test_latency))
+                    if (testing) {
+                        progress?.let {
+                            Text(
+                                text = stringResource(R.string.servers_latency_progress, it.done, it.total),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = viewModel::cancelLatencyTest) {
+                            Text(stringResource(R.string.servers_latency_stop))
+                        }
+                    } else {
+                        TextButton(onClick = viewModel::testLatency) {
+                            Text(stringResource(R.string.servers_test_latency))
+                        }
                     }
                     Text(
                         // Name the measurement honestly: connected → live
@@ -273,6 +294,7 @@ fun ServersScreen(
                     selected = node.id == ui.selectedNodeId,
                     delayMs = ui.delays[node.id],
                     tested = node.id in ui.testedNodeIds,
+                    stored = ui.storedLatency[node.id],
                     // A disabled node stays rendered (the user manages it) but
                     // tapping it must not persist a selection the engine can't
                     // honor — keep the card, drop the click.
@@ -512,6 +534,7 @@ private fun ServerCard(
     selected: Boolean,
     delayMs: Int?,
     tested: Boolean,
+    stored: NodeLatency?,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onRename: (String?) -> Unit,
@@ -682,7 +705,12 @@ private fun ServerCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ProtocolBadge(node.protocol)
                 Spacer(Modifier.weight(1f))
-                LatencyBadge(delayMs = delayMs, tested = tested)
+                if (delayMs != null || tested || stored == null) {
+                    LatencyBadge(delayMs = delayMs, tested = tested)
+                }
+            }
+            if (delayMs == null && !tested && stored != null) {
+                StoredLatency(stored, Modifier.fillMaxWidth())
             }
         }
     }
@@ -823,6 +851,51 @@ private fun TlsDetailRow(
                 },
         )
     }
+}
+
+/** Age bucket of a stored verdict as (string resource, value) — compact units
+ *  so no plural rules are needed in either language. */
+internal fun latencyAgeLabel(ageMs: Long): Pair<Int, Int> =
+    when {
+        ageMs < 60_000L -> R.string.servers_latency_age_now to 0
+        ageMs < 3_600_000L -> R.string.servers_latency_age_min to (ageMs / 60_000L).toInt()
+        ageMs < 86_400_000L -> R.string.servers_latency_age_hour to (ageMs / 3_600_000L).toInt()
+        else -> R.string.servers_latency_age_day to (ageMs / 86_400_000L).toInt()
+    }
+
+/** A persisted verdict is history: muted value, then which measurement it was
+ *  and how old it is — never styled like a live reading. */
+@Composable
+private fun StoredLatency(
+    stored: NodeLatency,
+    modifier: Modifier = Modifier,
+) {
+    val now = System.currentTimeMillis()
+    val (ageRes, ageValue) = latencyAgeLabel(maxOf(0L, now - stored.checkedAtMs))
+    val method =
+        stringResource(
+            when (stored.method) {
+                LatencyMethod.Tcp -> R.string.servers_latency_method_tcp
+                LatencyMethod.Proxy -> R.string.servers_latency_method_proxy
+            },
+        )
+    val freshness =
+        stringResource(
+            if (stored.isFresh(now)) R.string.servers_latency_earlier else R.string.servers_latency_stale,
+        )
+    val age = stringResource(ageRes, ageValue)
+    Text(
+        text =
+            if (stored.latencyMs != null) {
+                stringResource(R.string.servers_latency_ms, stored.latencyMs)
+            } else {
+                stringResource(R.string.servers_latency_timeout)
+            } + " · $method · $freshness, $age",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.End,
+        modifier = modifier,
+    )
 }
 
 @Composable
