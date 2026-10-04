@@ -1,0 +1,58 @@
+package dev.typenil.vpnclient.data
+
+import dev.typenil.vpnclient.data.db.FakeNodeLatencyDao
+import dev.typenil.vpnclient.data.db.NodeLatencyEntity
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class NodeLatencyRepositoryTest {
+    private val dao = FakeNodeLatencyDao()
+    private var clock = 1_000L
+    private val repo = NodeLatencyRepository(dao) { clock }
+
+    @Test
+    fun `verdicts carry method and the batch timestamp, failures stay null`() =
+        runTest {
+            repo.record(mapOf("a" to 42, "b" to null), LatencyMethod.Tcp)
+
+            val stored = repo.latencies.first()
+            assertEquals(NodeLatency(42, 1_000L, LatencyMethod.Tcp), stored["a"])
+            assertEquals(NodeLatency(null, 1_000L, LatencyMethod.Tcp), stored["b"])
+        }
+
+    @Test
+    fun `a newer verdict replaces the old one including its method`() =
+        runTest {
+            repo.record(mapOf("a" to 42), LatencyMethod.Tcp)
+            clock = 5_000L
+            repo.record(mapOf("a" to 310), LatencyMethod.Proxy)
+
+            assertEquals(
+                NodeLatency(310, 5_000L, LatencyMethod.Proxy),
+                repo.latencies.first().getValue("a"),
+            )
+        }
+
+    @Test
+    fun `rows of nodes that no longer exist are swept on the next write`() =
+        runTest {
+            dao.liveNodeIds = setOf("a", "b")
+            repo.record(mapOf("a" to 1, "b" to 2), LatencyMethod.Tcp)
+
+            dao.liveNodeIds = setOf("b", "c") // a vanished in a refresh
+            repo.record(mapOf("c" to 3), LatencyMethod.Tcp)
+
+            assertEquals(setOf("b", "c"), dao.rows.keys)
+        }
+
+    @Test
+    fun `an unknown method from a newer build is skipped, not mislabelled`() =
+        runTest {
+            dao.upsertAll(listOf(NodeLatencyEntity("a", 9, 1L, "quic")))
+
+            assertNull(repo.latencies.first()["a"])
+        }
+}
