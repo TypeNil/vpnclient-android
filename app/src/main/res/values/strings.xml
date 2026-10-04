@@ -379,8 +379,8 @@
     <string name="subs_card_disabled"> · disabled</string>
     <string name="subs_usage_of">Used %1$s of %2$s</string>
     <string name="subs_usage">Used %1$s</string>
-    <string name="subs_expires"> · expires %1$s</string>
-    <string name="subs_expired"> · expired %1$s</string>
+    <string name="subs_expires">" · expires %1$s"</string>
+    <string name="subs_expired">" · expired %1$s"</string>
     <string name="subs_support">Support</string>
     <string name="subs_add_title">Add subscription</string>
     <string name="subs_url_label">Subscription URL or share link</string>

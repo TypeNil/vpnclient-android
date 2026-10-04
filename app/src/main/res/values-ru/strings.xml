@@ -379,8 +379,8 @@
     <string name="subs_card_disabled"> · отключена</string>
     <string name="subs_usage_of">Использовано %1$s из %2$s</string>
     <string name="subs_usage">Использовано %1$s</string>
-    <string name="subs_expires"> · истекает %1$s</string>
-    <string name="subs_expired"> · истекла %1$s</string>
+    <string name="subs_expires">" · истекает %1$s"</string>
+    <string name="subs_expired">" · истекла %1$s"</string>
     <string name="subs_support">Поддержка</string>
     <string name="subs_add_title">Добавить подписку</string>
     <string name="subs_url_label">URL подписки или ссылка на сервер</string>
