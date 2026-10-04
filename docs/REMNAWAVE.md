@@ -1,29 +1,51 @@
 # Remnawave compatibility
 
 Remnawave support is a compatibility layer over the generic subscription
-pipeline — nothing Remnawave-specific lives in UI or engine code.
+pipeline. The engine is unaffected; UI explains consent and typed refusals.
 
 ## Request contract
 
 `SubscriptionFetcher.fetch(url, hwid)`:
 
-- `User-Agent: sing-box/1.13.0 (VPNClient; android)` — panels keying on UA return
+- `User-Agent: sing-box/<pinned VPN_CORE_VERSION> (VPNClient; android)` — the
+  version comes from `gradle/libs.versions.toml`; panels keying on UA return
   a sing-box JSON subscription; panels without UA rules return the default
   Base64 URI list, which the classifier handles anyway. No special `/singbox`
   path is required, but path-suffixed URLs work too (panel decides).
-- When HWID is known (see below), sends:
-  `x-hwid`, `x-device-os=android`, `x-ver-os=<release>`, `x-device-model=<model>`.
+- Only with Allowed consent (see below), sends:
+  `x-hwid`, `x-device-os=android`, `x-ver-os=<release>`,
+  `x-device-model=<model>`, `x-app-version=<VERSION_NAME>`.
+  Unset/Denied omit all five device headers; UA remains unchanged.
+- Redirects retain device headers only on the exact request origin
+  (scheme/host/port). A transport fallback is a separate request and re-reads
+  consent, including when its origin differs.
 
 ## HWID / device limits
 
-- HWID is generated once per install: a UUID-derived 32-char hex string stored in
-  DataStore (`SettingsRepository.getOrCreateHwid()`). It satisfies the panel's
-  `^[a-zA-Z0-9=-]{10,64}$` rule. It is **not** a hardware identifier — reinstall
-  produces a new device on the panel.
-- Panels with device limits answer **404 for both** "unknown subscription" and
-  "missing/unregistered HWID". We disambiguate by the presence of `x-hwid-*`
-  response headers → `DeviceLimitReached` error surfaced as
-  "device limit / HWID rejected".
+- HWID is a random dashed UUID stored in DataStore, **not** a hardware ID.
+  A new installation starts Unset and creates it only after Allowed consent.
+  A legacy `remnawave_hwid` key with no consent key is grandfathered to Allowed;
+  an explicit Denied is never overridden. Legacy undashed hex is normalized
+  without changing identity; disabling transmission retains the saved ID.
+- Remote add/import asks once before fetching when Unset: Allow or Continue
+  without HWID. Settings has a send toggle and the same explanation under
+  “What is HWID”; no ID display/copy/reset. Background/manual/launch/edit and
+  fallback fetches all obey the same gate without background prompts.
+- Providers receive the ID with OS/version/model and app metadata and may link
+  requests and count devices. Reinstalling may occupy another slot, not free
+  the old one. Ask the provider to remove old devices or raise the limit.
+- Refusal flags are checked before status/body for **any status**, including 200.
+  Only exact trimmed case-insensitive `true` values are accepted (bounded to
+  16 characters and the first 16 values). Duplicate true wins.
+  `x-hwid-max-devices-reached` means max devices; `x-hwid-not-supported`
+  means missing/invalid ID; both true means ambiguous. Explicit flags beat
+  legacy-only `x-hwid-limit` (ambiguous); `x-hwid-active` is informational.
+  False/unknown/active-only values are not refusals; 404 without flags is HTTP.
+- Refusal bodies are never parsed/committed, even valid remark nodes in 200.
+  Last-known-good nodes stay intact. Fixed safe `sub:hwid:*` / `sub:http:<code>`
+  tokens use shared en/ru rendering across card/detail/add/refresh errors;
+  old fixed errors remain recognized, without a database schema migration.
+  The saved-servers suffix appears only when saved nodes exist.
 
 ## Response metadata consumed
 
@@ -34,7 +56,8 @@ pipeline — nothing Remnawave-specific lives in UI or engine code.
 | `announce`                  | decoded for completeness (`base64:` prefix)    |
 | `profile-web-page-url` / `support-url` | support link                        |
 | `profile-update-interval`   | stored; used by WorkManager when provider-following auto-refresh is enabled |
-| `x-hwid-*`                  | device-limit diagnostics                       |
+| `x-hwid-max-devices-reached` / `x-hwid-not-supported` | typed refusal before status/body |
+| `x-hwid-limit` / `x-hwid-active` | legacy ambiguous refusal / informational only |
 
 ## Response formats
 
