@@ -70,7 +70,7 @@ proxy or a direct rule).
 
 | Outcome | Status | EN | RU |
 |---|---|---|---|
-| Answer with >=1 address | Ok | DNS query answered through the VPN's DNS path; server egress and answer content not verified | DNS-запрос получил ответ через DNS-путь VPN; выход через сервер и содержимое ответа не проверены |
+| Answer with >=1 address | Ok | DNS query answered through the VPN DNS path; server egress and answer content not verified | DNS-запрос получил ответ через DNS-путь VPN; выход через сервер и содержимое ответа не проверены |
 | 4 s timeout | Degraded | No DNS answer in time; this does not prove the server is down or a site is blocked | DNS не ответил вовремя; это не значит, что сервер недоступен или сайт заблокирован |
 | Error / empty / NXDOMAIN / parse | Degraded | DNS query returned no usable answer; this does not prove the server is down or a site is blocked | DNS-запрос не вернул пригодного ответа; это не значит, что сервер недоступен или сайт заблокирован |
 | Not run (API < 29, stale, left Connected, setup error) | Unverified | DNS not checked | DNS не проверялся |

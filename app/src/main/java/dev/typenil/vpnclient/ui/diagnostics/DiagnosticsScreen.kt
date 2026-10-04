@@ -252,15 +252,20 @@ private fun healthLabel(value: Enum<*>): String = stringResource(when (value) {
     HealthReason.HttpError -> R.string.health_http_error
     HealthReason.HttpNetworkError -> R.string.health_http_network
     HealthReason.HttpUnexpectedResponse -> R.string.health_http_unexpected
+    HealthReason.DnsAnswered -> R.string.health_dns_answered
+    HealthReason.DnsTimeout -> R.string.health_dns_timeout
+    HealthReason.DnsFailed -> R.string.health_dns_failed
     HealthReason.Expired, HealthFreshness.Expired -> R.string.health_expired
     HealthSource.None, HealthScope.None -> R.string.health_none
     HealthSource.VpnConsent -> R.string.health_source_consent
     HealthSource.ServiceLifecycle -> R.string.health_source_service
     HealthSource.PlatformUnderlay -> R.string.health_source_underlay
     HealthSource.IpEcho -> R.string.health_source_ip_echo
+    HealthSource.DnsQuery -> R.string.health_source_dns_query
     HealthScope.LocalRuntime -> R.string.health_scope_runtime
     HealthScope.PhysicalUnderlay -> R.string.health_scope_underlay
     HealthScope.AppHttpRouteUnverified -> R.string.health_scope_app_http
+    HealthScope.AppDnsQuery -> R.string.health_scope_app_dns
     HealthFreshness.Unobserved -> R.string.health_not_observed
     HealthFreshness.Fresh -> R.string.health_fresh
     else -> R.string.health_unverified

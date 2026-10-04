@@ -41,6 +41,11 @@
     <string name="health_http_error">Ошибка HTTP-проверки; сбой туннеля не установлен</string>
     <string name="health_http_network">Сетевая ошибка HTTP-проверки; сбой туннеля не установлен</string>
     <string name="health_http_unexpected">Неожиданный ответ HTTP-проверки</string>
+    <string name="health_dns_answered">DNS-запрос получил ответ через DNS-путь VPN; выход через сервер и содержимое ответа не проверены</string>
+    <string name="health_dns_timeout">DNS не ответил вовремя; это не значит, что сервер недоступен или сайт заблокирован</string>
+    <string name="health_dns_failed">DNS-запрос не вернул пригодного ответа; это не значит, что сервер недоступен или сайт заблокирован</string>
+    <string name="health_source_dns_query">DNS-запрос приложения</string>
+    <string name="health_scope_app_dns">Только DNS-запрос приложения; прокси и выход не проверены</string>
     <string name="health_source_ip_echo">HTTP-ответ сервиса проверки IP</string>
     <string name="health_scope_app_http">Только HTTP-проверка приложения; прокси, TUN и DNS не проверены</string>
 

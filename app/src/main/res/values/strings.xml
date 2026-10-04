@@ -41,6 +41,11 @@
     <string name="health_http_error">App HTTP check returned an error; tunnel failure not established</string>
     <string name="health_http_network">App HTTP check encountered a network error; tunnel failure not established</string>
     <string name="health_http_unexpected">App HTTP check returned an unexpected response</string>
+    <string name="health_dns_answered">DNS query answered through the VPN DNS path; server egress and answer content not verified</string>
+    <string name="health_dns_timeout">No DNS answer in time; this does not prove the server is down or a site is blocked</string>
+    <string name="health_dns_failed">DNS query returned no usable answer; this does not prove the server is down or a site is blocked</string>
+    <string name="health_source_dns_query">App DNS query</string>
+    <string name="health_scope_app_dns">App DNS query only; proxy and egress not verified</string>
     <string name="health_source_ip_echo">IP-echo HTTP response</string>
     <string name="health_scope_app_http">App HTTP check only; proxy, TUN and DNS not verified</string>
 
