@@ -29,6 +29,7 @@ import dev.typenil.vpnclient.data.settings.SettingsRepository
 import dev.typenil.vpnclient.data.work.WorkManagerRefreshScheduler
 import dev.typenil.vpnclient.data.db.AppDatabase
 import dev.typenil.vpnclient.data.db.NodeDao
+import dev.typenil.vpnclient.data.db.NodeLatencyDao
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.db.RoutingRuleDao
 import dev.typenil.vpnclient.data.db.SubscriptionDao
@@ -50,14 +51,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "vpnclient.db")
-            .addMigrations(
-                AppDatabase.MIGRATION_1_2,
-                AppDatabase.MIGRATION_2_3,
-                AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6,
-                AppDatabase.MIGRATION_6_7,
-            )
+            .addMigrations(*AppDatabase.ALL_MIGRATIONS)
             // Last resort only: every version jump must ship a real migration
             // (schema JSONs are committed for exactly this reason). Destructive
             // fallback loses user-entered subscriptions but beats a crash loop.
@@ -77,6 +71,9 @@ object AppModule {
     @Provides
     fun provideRoutingRuleDao(db: AppDatabase): RoutingRuleDao =
         db.routingRuleDao()
+
+    @Provides
+    fun provideNodeLatencyDao(db: AppDatabase): NodeLatencyDao = db.nodeLatencyDao()
 
     @Provides
     @Singleton

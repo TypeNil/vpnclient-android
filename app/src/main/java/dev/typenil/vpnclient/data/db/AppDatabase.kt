@@ -357,6 +357,48 @@ abstract class NodeDao {
 }
 
 /**
+ * Last latency verdict per node, stored apart from `nodes` for the same
+ * reason as [NodePreferenceEntity]: the node table is rewritten wholesale on
+ * every refresh, so an FK `ON DELETE CASCADE` would wipe every result on each
+ * refresh — even for nodes whose id is unchanged. Rows are keyed by node id
+ * with no FK; [NodeLatencyDao.observeLive] only ever returns rows whose node
+ * still exists and [NodeLatencyDao.record] sweeps the rest.
+ */
+@Entity(tableName = "node_latency")
+data class NodeLatencyEntity(
+    @PrimaryKey val nodeId: String,
+    /** Measured milliseconds; null = the probe ran and failed. */
+    val latencyMs: Int?,
+    val checkedAtEpochMs: Long,
+    /** `LatencyMethod.storage` — "tcp" or "proxy". */
+    val method: String,
+)
+
+@Dao
+abstract class NodeLatencyDao {
+    /** Inner join: results of vanished nodes are invisible even before swept. */
+    @Query(
+        """SELECT l.* FROM node_latency l
+            INNER JOIN nodes n ON n.id = l.nodeId""",
+    )
+    abstract fun observeLive(): Flow<List<NodeLatencyEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun upsertAll(rows: List<NodeLatencyEntity>)
+
+    @Query("DELETE FROM node_latency WHERE nodeId NOT IN (SELECT id FROM nodes)")
+    abstract suspend fun deleteOrphans()
+
+    /** Write + sweep as one transaction: a result for a node that no longer
+     *  exists (refresh raced the probe) never lingers. */
+    @Transaction
+    open suspend fun record(rows: List<NodeLatencyEntity>) {
+        upsertAll(rows)
+        deleteOrphans()
+    }
+}
+
+/**
  * A user-authored routing rule. `kind` selects the match dimension
  * (domain / ip_cidr / port), `action` the outcome. [orderIndex] preserves
  * user ordering — rules compile to sing-box `route.rules` entries evaluated
@@ -405,8 +447,9 @@ interface RoutingRuleDao {
         NodeEntity::class,
         NodePreferenceEntity::class,
         RoutingRuleEntity::class,
+        NodeLatencyEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -417,6 +460,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun nodePreferenceDao(): NodePreferenceDao
 
     abstract fun routingRuleDao(): RoutingRuleDao
+
+    abstract fun nodeLatencyDao(): NodeLatencyDao
 
     companion object {
         /** v2: per-subscription cleartext opt-in. */
@@ -513,5 +558,35 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 }
             }
+
+        /** v8: last latency verdict per node (method + time), see
+         *  [NodeLatencyEntity]. Pure addition — no existing table is touched. */
+        val MIGRATION_7_8 =
+            object : androidx.room.migration.Migration(7, 8) {
+                override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """CREATE TABLE IF NOT EXISTS `node_latency` (
+                            `nodeId` TEXT NOT NULL,
+                            `latencyMs` INTEGER,
+                            `checkedAtEpochMs` INTEGER NOT NULL,
+                            `method` TEXT NOT NULL,
+                            PRIMARY KEY(`nodeId`))""",
+                    )
+                }
+            }
+
+        /** The complete upgrade chain — the one list AppModule registers and
+         *  the migration tests check. A version bump without its entry here
+         *  would fall through to the destructive fallback. */
+        val ALL_MIGRATIONS: Array<androidx.room.migration.Migration> =
+            arrayOf(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+            )
     }
 }
