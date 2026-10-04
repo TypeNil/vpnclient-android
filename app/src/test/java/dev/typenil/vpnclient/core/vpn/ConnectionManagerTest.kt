@@ -54,6 +54,8 @@ class ConnectionManagerTest {
     private lateinit var manager: ConnectionManager
     private var probeCalls = 0
     private var probeCheck: suspend () -> IpCheckResult = { IpCheckResult(null, null, "unexpected response") }
+    private var dnsCalls = 0
+    private var dnsCheck: suspend () -> DnsCheckResult = { DnsCheckResult.NotRun }
 
     private val node =
         NodeSummary(
@@ -285,8 +287,13 @@ class ConnectionManagerTest {
         configProvider = FakeNodeConfigProvider(config)
         engine = FakeEngine()
         probeCalls = 0
+        dnsCalls = 0
         probeCheck = { IpCheckResult(null, null, "unexpected response") }
-        manager = ConnectionManager(serviceControl, configProvider, PostStartHealthProbe {
+        dnsCheck = { DnsCheckResult.NotRun }
+        manager = ConnectionManager(serviceControl, configProvider, PostStartHealthProbe({
+            dnsCalls++
+            dnsCheck()
+        }) {
             probeCalls++
             probeCheck()
         })
@@ -393,6 +400,186 @@ class ConnectionManagerTest {
         assertTrue(manager.health.value.observations.filter {
             it.level == HealthLevel.OutboundReachable || it.level == HealthLevel.DnsReachable
         }.all { it.status == HealthStatus.Unverified })
+    }
+
+    private fun dnsLevel() = manager.health.value.observations.first { it.level == HealthLevel.DnsReachable }
+
+    @Test
+    fun `dns answer is Ok but never substitutes the egress check`() = testScope.runTest {
+        dnsCheck = { DnsCheckResult.Answered }
+        readyForProbe()
+        assertEquals(1, dnsCalls)
+        val dns = dnsLevel()
+        assertEquals(HealthStatus.Ok, dns.status)
+        assertEquals(HealthReason.DnsAnswered, dns.reason)
+        assertEquals(HealthSource.DnsQuery, dns.source)
+        assertEquals(HealthScope.AppDnsQuery, dns.scope)
+        // A-01 failed independently: DNS Ok writes nothing into the egress levels.
+        assertEquals(HealthStatus.Degraded, manager.health.value.observations.first { it.level == HealthLevel.TrafficForwarding }.status)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.OutboundReachable }.status)
+    }
+
+    @Test
+    fun `dns failure is Degraded only and keeps the egress success and session`() = testScope.runTest {
+        probeCheck = { IpCheckResult("192.0.2.1", 1, null) }
+        dnsCheck = { DnsCheckResult.Failed }
+        readyForProbe()
+        val dns = dnsLevel()
+        assertEquals(HealthStatus.Degraded, dns.status)
+        assertEquals(HealthReason.DnsFailed, dns.reason)
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `dns four second deadline cancels once with no retry or lifecycle write`() = testScope.runTest {
+        var cancelled = false
+        dnsCheck = { try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true } }
+        readyForProbe()
+        advanceTimeBy(3_999)
+        runCurrent()
+        assertFalse(cancelled)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        advanceTimeBy(2)
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals(HealthStatus.Degraded, dnsLevel().status)
+        assertEquals(HealthReason.DnsTimeout, dnsLevel().reason)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(1, dnsCalls)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `dns probe that could not run stays Unverified`() = testScope.runTest {
+        dnsCheck = { DnsCheckResult.NotRun }
+        readyForProbe()
+        assertEquals(1, dnsCalls)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        assertNull(dnsLevel().checkedAt)
+    }
+
+    @Test
+    fun `throwing dns probe stays Unverified and leaves the session alone`() = testScope.runTest {
+        dnsCheck = { throw RuntimeException("dns exploded") }
+        readyForProbe()
+        assertEquals(1, dnsCalls)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        assertNull(dnsLevel().checkedAt)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test
+    fun `dns probe waits for Connected`() = testScope.runTest {
+        runCurrent()
+        assertEquals(0, dnsCalls)
+        configProvider.selected.value = node.id
+        engine.groupsFlow.value = listOf(proxyGroup(node.id))
+        manager.connect()
+        runCurrent()
+        val generation = manager.pendingSession!!.generation
+        manager.attachEngine(engine, generation)
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Connecting)
+        assertEquals(0, dnsCalls)
+        manager.onServiceStarted(generation)
+        runCurrent()
+        assertEquals(1, dnsCalls)
+    }
+
+    @Test
+    fun `dns probe is not started when the session already left Connected`() = testScope.runTest {
+        configProvider.selected.value = node.id
+        engine.groupsFlow.value = listOf(proxyGroup(node.id))
+        manager.connect()
+        runCurrent()
+        val generation = manager.pendingSession!!.generation
+        manager.attachEngine(engine, generation)
+        runCurrent()
+        manager.onServiceStarted(generation)
+        manager.onUnderlyingNetworkLost(generation) // queued: Reconnecting before the probe barrier opens
+        runCurrent()
+        assertTrue(manager.state.value is VpnConnectionState.Reconnecting)
+        assertEquals(0, dnsCalls)
+        assertEquals(0, probeCalls)
+    }
+
+    @Test
+    fun `duplicate starts run one dns probe`() = testScope.runTest {
+        val answer = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { answer.await() }
+        val generation = readyForProbe()
+        manager.onServiceStarted(generation)
+        manager.onServiceStarted(generation)
+        runCurrent()
+        assertEquals(1, dnsCalls)
+        answer.complete(DnsCheckResult.Answered)
+        runCurrent()
+        assertEquals(HealthStatus.Ok, dnsLevel().status)
+        assertEquals(1, dnsCalls)
+    }
+
+    @Test
+    fun `old generation dns completion is not published into a newer session`() = testScope.runTest {
+        val oldAnswer = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { oldAnswer.await() } }
+        val oldGeneration = readyForProbe()
+        manager.onServiceStopped(oldGeneration)
+        val generation = manager.adoptSession(node)
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, generation)
+        val current = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { current.await() }
+        manager.onServiceStarted(generation)
+        runCurrent()
+        oldAnswer.complete(DnsCheckResult.Answered)
+        runCurrent()
+        assertEquals(generation, manager.health.value.generation)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        current.complete(DnsCheckResult.Failed)
+        runCurrent()
+        assertEquals(HealthReason.DnsFailed, dnsLevel().reason)
+    }
+
+    @Test
+    fun `leaving Connected during the dns probe publishes nothing`() = testScope.runTest {
+        val answer = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { answer.await() } }
+        val generation = readyForProbe()
+        manager.onUnderlyingNetworkLost(generation)
+        runCurrent()
+        assertFalse(manager.state.value is VpnConnectionState.Connected)
+        answer.complete(DnsCheckResult.Answered)
+        runCurrent()
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+    }
+
+    @Test
+    fun `same generation rebuild rejects the old dns answer and probes the new runtime once`() = testScope.runTest {
+        val old = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { old.await() } }
+        val generation = readyForProbe()
+        manager.onTunnelRebuildStarted(generation)
+        runCurrent()
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, generation)
+        val fresh = kotlinx.coroutines.CompletableDeferred<DnsCheckResult>()
+        dnsCheck = { fresh.await() }
+        manager.onTunnelRebuilt(generation)
+        runCurrent()
+        assertEquals(2, dnsCalls)
+        old.complete(DnsCheckResult.Answered)
+        runCurrent()
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        fresh.complete(DnsCheckResult.Timeout)
+        runCurrent()
+        assertEquals(HealthReason.DnsTimeout, dnsLevel().reason)
     }
 
     @Test

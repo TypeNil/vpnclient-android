@@ -37,11 +37,14 @@ enum class HealthReason {
     HttpError,
     HttpNetworkError,
     HttpUnexpectedResponse,
+    DnsAnswered,
+    DnsTimeout,
+    DnsFailed,
 }
 
-enum class HealthSource { None, VpnConsent, ServiceLifecycle, PlatformUnderlay, IpEcho }
+enum class HealthSource { None, VpnConsent, ServiceLifecycle, PlatformUnderlay, IpEcho, DnsQuery }
 
-enum class HealthScope { None, LocalRuntime, PhysicalUnderlay, AppHttpRouteUnverified }
+enum class HealthScope { None, LocalRuntime, PhysicalUnderlay, AppHttpRouteUnverified, AppDnsQuery }
 
 enum class HealthFreshness { Unobserved, Fresh, Expired }
 

@@ -192,7 +192,35 @@ class ConnectionManager
                 ) return@launch
                 val trafficToken = healthStore.token(HealthLevel.TrafficForwarding) ?: return@launch
                 val successToken = healthStore.token(HealthLevel.LastSuccessfulCheck) ?: return@launch
-                postStartTokens = listOf(trafficToken, successToken)
+                val dnsToken = healthStore.token(HealthLevel.DnsReachable) ?: return@launch
+                postStartTokens = listOf(trafficToken, successToken, dnsToken)
+                // Independent of A-01: own level/token, health writes only — a DNS
+                // failure is Degraded evidence, never a state change or reconnect.
+                launch {
+                    val dnsChecked = System.nanoTime() / 1_000_000
+                    val dns = try {
+                        withTimeoutOrNull(DnsProbe.DEFAULT_TIMEOUT_MS) { postStartProbe.checkDns() } ?: DnsCheckResult.Timeout
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        SecureLog.w(TAG, "post-start dns check threw")
+                        DnsCheckResult.NotRun
+                    }
+                    // No re-check of session state here: every non-Connected publish and
+                    // path/runtime change invalidates the token, and observe() rejects
+                    // stale tokens and generation mismatches (same as A-01).
+                    val (status, dnsReason) = when (dns) {
+                        DnsCheckResult.Answered -> HealthStatus.Ok to HealthReason.DnsAnswered
+                        DnsCheckResult.Timeout -> HealthStatus.Degraded to HealthReason.DnsTimeout
+                        DnsCheckResult.Failed -> HealthStatus.Degraded to HealthReason.DnsFailed
+                        DnsCheckResult.NotRun -> return@launch // not verified, so not written
+                    }
+                    healthStore.observe(
+                        HealthObservation(HealthLevel.DnsReachable, status, dnsReason, HealthSource.DnsQuery,
+                            HealthScope.AppDnsQuery, generation, dnsChecked, Instant.now()),
+                        dnsToken,
+                    )
+                }
                 val checked = System.nanoTime() / 1_000_000
                 val result = try {
                     withTimeoutOrNull(IpProbe.DEFAULT_TIMEOUT_MS) { postStartProbe.check() }
