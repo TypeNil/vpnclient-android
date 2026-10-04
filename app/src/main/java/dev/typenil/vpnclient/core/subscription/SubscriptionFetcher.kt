@@ -64,6 +64,7 @@ class SubscriptionFetcher @Inject constructor(
         private const val TAG = "SubscriptionFetcher"
         private const val MAX_BODY_BYTES = 8L * 1024 * 1024 // 8 MiB — generous for node lists
         private const val MAX_REDIRECTS = 5
+        private const val MAX_EPOCH_SECONDS = 100_000_000_000L // year 5138
 
         /** Container extensions stripped from a Content-Disposition title. */
         private val STRIPPABLE_EXTENSIONS = setOf(
@@ -270,14 +271,21 @@ class SubscriptionFetcher @Inject constructor(
         val parts = value.split(';')
             .mapNotNull {
                 val kv = it.trim().split('=', limit = 2)
-                if (kv.size == 2) kv[0].trim() to kv[1].trim() else null
+                if (kv.size == 2) kv[0].trim().lowercase() to kv[1].trim() else null
             }
             .toMap()
-        val upload = parts["upload"]?.toLongOrNull() ?: 0
-        val download = parts["download"]?.toLongOrNull() ?: 0
-        val total = parts["total"]?.toLongOrNull() ?: 0
-        val expire = parts["expire"]?.toLongOrNull()
-        return SubscriptionUserInfo(upload, download, total, expire)
+        // Panels differ: plain ints, "123.0", "1e9". Values are untrusted —
+        // clamp negatives, saturate huge doubles, never throw.
+        fun bytes(key: String): Long =
+            parts[key]?.let { it.toLongOrNull() ?: it.toDoubleOrNull()?.takeIf(Double::isFinite)?.toLong() }
+                ?.coerceAtLeast(0) ?: 0
+        // expire=0 (and anything <= 0) is the panels' "no expiry"; 13-digit
+        // values are milliseconds. ponytail: magnitude heuristic, seconds
+        // beyond year 5138 are not representable.
+        val expire = parts["expire"]?.let { it.toLongOrNull() ?: it.toDoubleOrNull()?.takeIf(Double::isFinite)?.toLong() }
+            ?.takeIf { it > 0 }
+            ?.let { if (it > MAX_EPOCH_SECONDS) it / 1000 else it }
+        return SubscriptionUserInfo(bytes("upload"), bytes("download"), bytes("total"), expire)
     }
 
     /** Header values may be `base64:<b64>` or plain text. */

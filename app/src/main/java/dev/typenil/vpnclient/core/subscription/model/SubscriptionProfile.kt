@@ -35,7 +35,8 @@ data class SubscriptionUserInfo(
     val totalBytes: Long,
     val expireEpochSeconds: Long?,
 ) {
-    val usedBytes: Long get() = uploadBytes + downloadBytes
+    /** Saturating: untrusted headers must not wrap the sum negative. */
+    val usedBytes: Long get() = (uploadBytes + downloadBytes).let { if (it < 0) Long.MAX_VALUE else it }
 }
 
 /** What a fetched body looks like after classification. */

@@ -417,8 +417,13 @@ private fun SubscriptionCard(
                 } else {
                     stringResource(R.string.subs_usage, formatBytes(info.usedBytes))
                 }
+                // <= 0 guards rows stored before the parser dropped expire=0.
                 val expiry = info.expireEpochSeconds
-                    ?.let { stringResource(R.string.subs_expires, formatDate(it)) }
+                    ?.takeIf { it > 0 }
+                    ?.let {
+                        val past = it * 1000 < System.currentTimeMillis()
+                        stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it))
+                    }
                     .orEmpty()
                 Text(
                     text = usage + expiry,
