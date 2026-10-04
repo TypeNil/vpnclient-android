@@ -34,7 +34,7 @@ class DnsProbe @Inject constructor() {
         continuation.invokeOnCancellation { signal.cancel() }
         DnsResolver.getInstance().query(
             null, PROBE_NAME, DnsResolver.TYPE_A,
-            DnsResolver.FLAG_NO_CACHE_LOOKUP or DnsResolver.FLAG_NO_CACHE_STORE,
+            DnsResolver.FLAG_NO_CACHE_LOOKUP, // lint rejects OR-ing QueryFlag; the answer may still be stored
             Runnable::run, signal,
             object : DnsResolver.Callback<List<InetAddress>> {
                 override fun onAnswer(answer: List<InetAddress>, rcode: Int) {
