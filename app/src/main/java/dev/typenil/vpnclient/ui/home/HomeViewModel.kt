@@ -7,6 +7,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.DnsProfile
 import dev.typenil.vpnclient.core.engine.RouteMode
+import dev.typenil.vpnclient.core.engine.freshDelayMs
+import dev.typenil.vpnclient.core.engine.pickBestLatency
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
@@ -14,13 +16,17 @@ import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import dev.typenil.vpnclient.core.vpn.UnderlyingTransport
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
+import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -111,6 +117,7 @@ class HomeViewModel
         nodePreferenceDao: NodePreferenceDao,
         private val settings: SettingsRepository,
         subscriptions: SubscriptionRepository,
+        private val latencyRepository: NodeLatencyRepository,
     ) : ViewModel() {
         /** The last terminal error the state machine published this process —
          *  the cheapest honest source for the sheet's "last error" row. */
@@ -125,6 +132,17 @@ class HomeViewModel
                 }
             }
         }
+
+        /** Wall clock, re-read periodically: the engine's groups flow only
+         *  emits on change, so without a tick a measurement that ages out
+         *  would stay on screen until something else moved. */
+        private val clockTicks: Flow<Long> =
+            flow {
+                while (true) {
+                    emit(latencyRepository.now())
+                    delay(CLOCK_TICK_MS)
+                }
+            }
 
         val uiState: StateFlow<HomeUiState> =
             combine(
@@ -141,6 +159,7 @@ class HomeViewModel
                 connectionManager.appliedSessionConfig,
                 nodePreferenceDao.observeAll(),
                 settings.dnsProfile,
+                clockTicks,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -175,6 +194,7 @@ class HomeViewModel
                         .map { it.nodeId }
                         .toSet()
                 val dnsProfile = values[12] as DnsProfile
+                val nowMs = values[13] as Long
 
                 // Picker source: usable + not hidden — the engine can't
                 // select a disabled node, and a hidden one has already left
@@ -192,7 +212,9 @@ class HomeViewModel
                 // the urltest group's measured winner. "First enabled
                 // subscription" would name a provider the session isn't using.
                 val autoGroup = groups.firstOrNull { it.tag == NodeSelection.AUTO_ID }
-                val bestItem = autoGroup?.items?.filter { (it.urlTestDelayMs ?: 0) > 0 }?.minByOrNull { it.urlTestDelayMs!! }
+                // Only fresh measurements count: a stale last-good delay of a
+                // dead node must not be named the best (see UrlTestFreshness).
+                val bestItem = autoGroup?.items?.let { pickBestLatency(it, nowMs) }
                 val bestNode = bestItem?.let { item -> nodes.firstOrNull { it.id == item.tag } }
                 val bestLatencyNodeName = bestNode?.let {
                     prefById[it.id]?.customName?.takeIf { n -> n.isNotBlank() } ?: it.name
@@ -201,7 +223,7 @@ class HomeViewModel
                 val selectedDelayMs = if (auto) bestLatencyMs else groups.asSequence()
                     .flatMap { it.items.asSequence() }
                     .firstOrNull { it.tag == selectedId }
-                    ?.urlTestDelayMs?.takeIf { it > 0 }
+                    ?.freshDelayMs(nowMs)
 
                 HomeUiState(
                     connection = connection,
@@ -364,3 +386,6 @@ class HomeViewModel
             }
         }
     }
+
+/** Resolution of "how old is this measurement" on Home; the window is minutes. */
+private const val CLOCK_TICK_MS = 30_000L

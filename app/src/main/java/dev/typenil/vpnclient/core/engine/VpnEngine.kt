@@ -51,9 +51,10 @@ data class OutboundItemInfo(
     val urlTestDelayMs: Int?,
     /**
      * Unix-epoch **seconds** of the last urltest measurement, as reported by
-     * the core. Whole-second granularity — only ever compare against a
-     * previously captured value for the same tag, never against an app
-     * clock. `0` = no recorded result.
+     * the core. Whole-second granularity — order two measurements only by
+     * a previously captured value for the same tag; the app clock is used
+     * solely for the freshness check in [freshDelayMs]. `0` = no recorded
+     * result.
      */
     val urlTestTime: Long = 0,
 )

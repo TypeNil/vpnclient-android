@@ -9,6 +9,7 @@ import dev.typenil.vpnclient.core.engine.GEOSITE_RU_TAG
 import dev.typenil.vpnclient.core.engine.LanBypassRoutes
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.engine.RoutingRule
+import dev.typenil.vpnclient.core.engine.URLTEST_INTERVAL_MINUTES
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
@@ -136,7 +137,7 @@ class ConfigCompiler
                         put("tag", AUTO_TAG)
                         putJsonArray("outbounds") { nodeTags.forEach { add(it) } }
                         put("url", "https://www.gstatic.com/generate_204")
-                        put("interval", "3m")
+                        put("interval", "${URLTEST_INTERVAL_MINUTES}m")
                         put("tolerance", 50)
                         // Stop probing when the group carries no traffic — without
                         // this the core pings every node every 3m forever.
