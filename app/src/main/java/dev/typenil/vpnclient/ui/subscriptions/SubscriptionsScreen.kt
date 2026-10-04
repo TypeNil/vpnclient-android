@@ -454,7 +454,7 @@ private fun SubscriptionCard(
             profile.lastError?.let { error ->
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = error,
+                    text = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -646,7 +646,7 @@ private fun SubscriptionDetailSheet(
             profile.lastError?.let {
                 DetailRow(
                     label = stringResource(R.string.common_last_error),
-                    value = it,
+                    value = subscriptionFailureMessage(it, nodeCount > 0)?.render(LocalContext.current) ?: it,
                     error = true,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 )

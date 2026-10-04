@@ -468,4 +468,10 @@
     <!-- Notifications -->
     <string name="notif_expiry_title">Подписка истекает</string>
     <string name="notif_expiry_text">%1$s истекает %2$s</string>
+    <string name="subs_hwid_limit">Подписка не обновлена: достигнут лимит устройств. Попросите провайдера удалить старое устройство или увеличить лимит.</string>
+    <string name="subs_hwid_limit_kept">Подписка не обновлена: достигнут лимит устройств. Попросите провайдера удалить старое устройство или увеличить лимит. Сохранённые серверы оставлены.</string>
+    <string name="subs_hwid_required">Подписка не обновлена: провайдер требует корректный HWID. Проверьте настройку HWID или обратитесь в поддержку.</string>
+    <string name="subs_hwid_disabled_refusal">Отправка HWID выключена. Этот провайдер отказал в обновлении без него. Проверьте настройку HWID или обратитесь в поддержку.</string>
+    <string name="subs_hwid_ambiguous">Провайдер отклонил идентификацию устройства. Лимит устройств не подтверждён; обратитесь в поддержку.</string>
+    <string name="subs_http_error">Подписка не обновлена: сервер вернул HTTP %1$d.</string>
 </resources>

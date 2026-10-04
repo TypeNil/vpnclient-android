@@ -1238,7 +1238,7 @@ class SubscriptionRepository
 
         private fun SubscriptionError.safeMessage(): String =
             when (this) {
-                is SubscriptionError.Http -> "HTTP $code"
+                is SubscriptionError.Http -> identificationErrorToken()!!
                 is SubscriptionError.Network -> "network unavailable"
                 is SubscriptionError.Timeout -> "request timed out"
                 is SubscriptionError.TooLarge -> "response too large"
@@ -1248,13 +1248,13 @@ class SubscriptionRepository
                 is SubscriptionError.ConfigRejected -> "rejected by engine"
                 is SubscriptionError.InsecureTransport -> "https required"
                 is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"
-                is SubscriptionError.DeviceIdentificationRejected -> "device identification rejected"
-                is SubscriptionError.DeviceLimitReached -> "device limit / HWID rejected"
+                is SubscriptionError.DeviceIdentificationRejected,
+                is SubscriptionError.DeviceLimitReached -> identificationErrorToken()!!
                 is SubscriptionError.NotFound -> "subscription removed"
                 is SubscriptionError.Superseded -> "superseded"
             }
 
-        private fun SubscriptionEntity.toDomain(): SubscriptionProfile =
+        private suspend fun SubscriptionEntity.toDomain(): SubscriptionProfile =
             SubscriptionProfile(
                 id = id,
                 name = name,
@@ -1263,7 +1263,7 @@ class SubscriptionRepository
                 lastUpdatedAt = lastUpdatedAtEpochMs?.let(Instant::ofEpochMilli),
                 lastAttemptAt = lastAttemptAtEpochMs?.let(Instant::ofEpochMilli),
                 lastError = lastError,
-                nodeCount = 0, // filled by UI via nodeDao count if needed
+                nodeCount = nodeDao.countForSubscription(id),
                 enabled = enabled,
                 userInfo = userInfoJson?.let { runCatching { json.decodeFromString<SubscriptionUserInfo>(it) }.getOrNull() },
                 supportUrl = supportUrl,

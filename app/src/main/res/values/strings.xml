@@ -468,4 +468,10 @@
     <!-- Notifications -->
     <string name="notif_expiry_title">Subscription expiring</string>
     <string name="notif_expiry_text">%1$s expires %2$s</string>
+    <string name="subs_hwid_limit">Subscription not updated: device limit reached. Ask your provider to remove an old device or raise the limit.</string>
+    <string name="subs_hwid_limit_kept">Subscription not updated: device limit reached. Ask your provider to remove an old device or raise the limit. Saved servers were kept.</string>
+    <string name="subs_hwid_required">Subscription not updated: provider requires a valid HWID. Review HWID settings or contact support.</string>
+    <string name="subs_hwid_disabled_refusal">HWID sending is off. This provider refused the update without it. Review HWID settings or contact support.</string>
+    <string name="subs_hwid_ambiguous">Provider rejected device identification. A device limit is not confirmed; contact support.</string>
+    <string name="subs_http_error">Subscription not updated: server returned HTTP %1$d.</string>
 </resources>

@@ -8,6 +8,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.subscription.identificationErrorToken
 import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
@@ -66,7 +67,9 @@ class SubscriptionsViewModel
             ) { profiles, nodes, refreshingIds, message, manualNodes ->
                 SubscriptionsUiState(
                     profiles = profiles,
-                    nodeCounts = nodes.groupingBy { it.subscriptionId }.eachCount(),
+                    nodeCounts = profiles.associate { profile ->
+                        profile.id to maxOf(profile.nodeCount, nodes.count { it.subscriptionId == profile.id })
+                    },
                     manualNodes = manualNodes,
                     refreshingIds = refreshingIds,
                     pendingMessage = message,
@@ -108,7 +111,13 @@ class SubscriptionsViewModel
             }
         }
 
-        private fun postSubscriptionFailure(error: Throwable, @StringRes fallbackRes: Int, fallback: String) {
+        private fun postSubscriptionFailure(error: Throwable, @StringRes fallbackRes: Int, fallback: String, hasServers: Boolean = false) {
+            val localized = (error as? SubscriptionError)?.identificationErrorToken()
+                ?.let { subscriptionFailureMessage(it, hasServers) }
+            if (localized != null) {
+                pendingMessage.value = PendingMessage(++nextMessageId, localized)
+                return
+            }
             if (error is SubscriptionError.UnsupportedFormat && error.detail == "xray-json") {
                 postMessage(
                     R.string.subs_xray_json_unsupported,
@@ -191,7 +200,7 @@ class SubscriptionsViewModel
                                 skippedSummary(outcome.skipped)
                             }
                         }.onFailure {
-                            postSubscriptionFailure(it, R.string.subs_refresh_failed, "Refresh failed")
+                            postSubscriptionFailure(it, R.string.subs_refresh_failed, "Refresh failed", (uiState.value.nodeCounts[id] ?: 0) > 0)
                         }
                 } finally {
                     refreshing.update { it - id }
@@ -249,7 +258,7 @@ class SubscriptionsViewModel
                     repository
                         .editUrl(id, newUrl)
                         .onFailure {
-                            postSubscriptionFailure(it, R.string.subs_url_update_failed, "URL update failed")
+                            postSubscriptionFailure(it, R.string.subs_url_update_failed, "URL update failed", (uiState.value.nodeCounts[id] ?: 0) > 0)
                         }
                 } finally {
                     refreshing.update { it - id }

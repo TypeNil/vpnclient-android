@@ -546,7 +546,7 @@ class SubscriptionRepositoryTest {
         assertTrue(result.isFailure)
         assertEquals(0, nodeDao.replaceCalls)
         assertEquals(listOf(old.id), nodeDao.forSubscription(1).map { it.id })
-        assertEquals("HTTP 500", subscriptionDao.lastAttemptError)
+        assertEquals("sub:http:500", subscriptionDao.lastAttemptError)
     }
 
     @Test
