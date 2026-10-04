@@ -163,4 +163,49 @@ class ImportUrlExtractorTest {
         assertNull(ImportUrlExtractor.extract(null, null, null))
         assertNull(ImportUrlExtractor.extract(view, "  ", null))
     }
+
+    @Test
+    fun `hostile or non-http inputs never yield a candidate`() {
+        val inner = listOf(
+            "file%3A%2F%2F%2Fdata%2Fx", "content%3A%2F%2Fx%2Fy", "javascript%3Aalert(1)",
+            "ftp%3A%2F%2Fexample.invalid%2Fs", "%2F%2Fexample.invalid%2Fs", "",
+            // double-encoded: one decode leaves "https%3A%2F%2F…", not a URL
+            "https%253A%252F%252Fexample.invalid%252Fs",
+        )
+        for (scheme in listOf("sing-box://import-remote-profile", "clash://install-config", "clashmeta://install-config")) {
+            for (value in inner) {
+                assertNull("$scheme url=$value", ImportUrlExtractor.extract(view, "$scheme?url=$value", null))
+            }
+        }
+        for (raw in listOf("file:///data/x", "content://x/y", "javascript:alert(1)", "data:text/plain,x", "intent://x#Intent;end")) {
+            assertNull(raw, ImportUrlExtractor.extract(view, raw, null))
+            assertNull(raw, ImportUrlExtractor.extract(send, null, raw))
+        }
+        // Shared prose is not a link: nothing is guessed out of free text.
+        assertNull(ImportUrlExtractor.extract(send, null, "look https://example.invalid/s now"))
+    }
+
+    @Test
+    fun `scheme and host case do not matter and userinfo or fragment pass through unmodified`() {
+        val nested = "https%3A%2F%2Fu%3Ap%40example.invalid%2Fs%3Ft%3D1%23frag"
+        assertEquals(
+            "https://u:p@example.invalid/s?t=1#frag",
+            ImportUrlExtractor.extract(view, "SING-BOX://import-remote-profile?url=$nested", null)?.url,
+        )
+        assertEquals(
+            "HTTPS://example.invalid/s",
+            ImportUrlExtractor.extract(view, "HTTPS://example.invalid/s", null)?.url,
+        )
+    }
+
+    @Test
+    fun `oversized input is rejected`() {
+        val huge = "https://example.invalid/" + "a".repeat(8192)
+        assertNull(ImportUrlExtractor.extract(view, huge, null))
+        assertNull(ImportUrlExtractor.extract(view, "sing-box://import-remote-profile?url=$huge", null))
+        assertNull(ImportUrlExtractor.extract(send, null, "vless://" + "a".repeat(8192)))
+        // a long but sane URL still passes
+        val ok = "https://example.invalid/" + "a".repeat(2000)
+        assertEquals(ok, ImportUrlExtractor.extract(view, ok, null)?.url)
+    }
 }

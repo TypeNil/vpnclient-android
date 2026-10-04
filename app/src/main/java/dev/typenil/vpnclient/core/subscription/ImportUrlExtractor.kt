@@ -29,13 +29,15 @@ object ImportUrlExtractor {
     )
 
     private const val ACTION_SEND = "android.intent.action.SEND"
+    private const val MAX_INPUT_LENGTH = 8192
 
     fun extract(action: String?, data: String?, extraText: String?): ExtractedImport? {
         val raw = when (action) {
             ACTION_SEND -> extraText
             else -> data
         }?.trim().orEmpty()
-        if (raw.isEmpty()) return null
+        // Intents are caller-controlled; the value lands in saveable UI state.
+        if (raw.isEmpty() || raw.length > MAX_INPUT_LENGTH) return null
         // Schemes are case-insensitive per RFC 3986 — OEM browsers and
         // keyboards emit HTTPS://… often enough to matter.
         if (raw.startsWithHttp()) return ExtractedImport(raw, null)
