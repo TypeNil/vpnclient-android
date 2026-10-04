@@ -269,10 +269,8 @@
     <string name="servers_filter_all">Все</string>
     <string name="servers_filter_reset">Сбросить</string>
     <string name="servers_test_latency">Проверить задержку</string>
-    <string name="servers_latency_via_proxy">через узел (HEAD)</string>
-    <string name="servers_latency_via_proxy_retained">через узел (HEAD) · ранее</string>
-    <string name="servers_latency_mixed">порт доступен (TCP) + через узел (HEAD)</string>
-    <string name="servers_latency_tcp">порт доступен (TCP)</string>
+    <string name="servers_latency_next_proxy">Проверит: через узел (HEAD)</string>
+    <string name="servers_latency_next_tcp">Проверит: доступность порта (TCP)</string>
     <string name="servers_latency_method_tcp">порт доступен (TCP)</string>
     <string name="servers_latency_method_proxy">через узел (HEAD)</string>
     <string name="servers_latency_earlier">ранее</string>

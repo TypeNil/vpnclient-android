@@ -269,10 +269,8 @@
     <string name="servers_filter_all">All</string>
     <string name="servers_filter_reset">Reset</string>
     <string name="servers_test_latency">Test latency</string>
-    <string name="servers_latency_via_proxy">via node (HEAD)</string>
-    <string name="servers_latency_via_proxy_retained">via node (HEAD) · earlier run</string>
-    <string name="servers_latency_mixed">port reachable (TCP) + via node (HEAD)</string>
-    <string name="servers_latency_tcp">port reachable (TCP)</string>
+    <string name="servers_latency_next_proxy">Will test: via node (HEAD)</string>
+    <string name="servers_latency_next_tcp">Will test: port reachability (TCP)</string>
     <string name="servers_latency_method_tcp">port reachable (TCP)</string>
     <string name="servers_latency_method_proxy">via node (HEAD)</string>
     <string name="servers_latency_earlier">earlier</string>

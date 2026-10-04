@@ -189,19 +189,16 @@ fun ServersScreen(
                         }
                     }
                     Text(
-                        // Name the measurement honestly: connected → live
-                        // urltest through the proxy chain; disconnected →
-                        // direct TCP, unless the badges carry retained
-                        // urltest verdicts (they must not wear the TCP label).
+                        // Says what the button beside it will do — never what
+                        // the shown badges are (each badge carries its own
+                        // method and age): connected → urltest through the
+                        // proxy chain; disconnected → direct TCP.
                         text =
                             stringResource(
-                                when {
-                                    ui.connected -> R.string.servers_latency_via_proxy
-                                    ui.urlTestResultsShown && ui.tcpResultsShown ->
-                                        R.string.servers_latency_mixed
-                                    ui.urlTestResultsShown ->
-                                        R.string.servers_latency_via_proxy_retained
-                                    else -> R.string.servers_latency_tcp
+                                if (ui.connected) {
+                                    R.string.servers_latency_next_proxy
+                                } else {
+                                    R.string.servers_latency_next_tcp
                                 },
                             ),
                         style = MaterialTheme.typography.labelSmall,
