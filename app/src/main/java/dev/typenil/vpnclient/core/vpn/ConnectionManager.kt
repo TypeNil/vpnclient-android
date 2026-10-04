@@ -206,6 +206,7 @@ class ConnectionManager
                         SecureLog.w(TAG, "post-start dns check threw")
                         DnsCheckResult.NotRun
                     }
+                    SecureLog.d(TAG, "post-start dns check ${dns.name}") // enum name only
                     // No re-check of session state here: every non-Connected publish and
                     // path/runtime change invalidates the token, and observe() rejects
                     // stale tokens and generation mismatches (same as A-01).
