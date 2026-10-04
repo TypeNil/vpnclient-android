@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.LocaleSupport
 import dev.typenil.vpnclient.core.common.ThemeMode
+import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.data.settings.SettingsRepository
@@ -39,6 +40,7 @@ data class SettingsUiState(
     val dynamicColorAvailable: Boolean = false,
     /** Persisted UI language choice — applied by MainActivity. */
     val appLanguage: AppLanguage = AppLanguage.System,
+    val hwidConsent: HwidConsent = HwidConsent.Unset,
 ) {
     val autoRefreshEnabled: Boolean get() = autoRefreshMinutes >= 0
 }
@@ -76,6 +78,7 @@ class SettingsViewModel
                 settings.themeMode,
                 settings.dynamicColor,
                 effectiveAppLanguage(),
+                settings.hwidConsent,
             ) { values ->
                 @Suppress("UNCHECKED_CAST")
                 val state = values[0] as SettingsUiState
@@ -90,6 +93,7 @@ class SettingsViewModel
                     themeMode = themeMode,
                     dynamicColor = dynamicColor,
                     appLanguage = appLanguage,
+                    hwidConsent = values[6] as HwidConsent,
                     dynamicColorAvailable =
                         android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
                 )
@@ -130,6 +134,12 @@ class SettingsViewModel
             } else {
                 settings.appLanguage
             }
+
+        fun setHwidAllowed(allowed: Boolean) {
+            viewModelScope.launch {
+                settings.setHwidConsent(if (allowed) HwidConsent.Allowed else HwidConsent.Denied)
+            }
+        }
 
         fun setReconnectOnNetworkChange(enabled: Boolean) {
             viewModelScope.launch { settings.setReconnectOnNetworkChange(enabled) }

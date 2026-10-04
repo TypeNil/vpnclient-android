@@ -40,6 +40,7 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -389,6 +390,63 @@ class SubscriptionsViewModelTest {
                 viewModel.uiState.value.refreshingIds
                     .isEmpty(),
             )
+        }
+
+    @Test
+    fun `Unset remote import waits for persisted choice and prompts only once`() =
+        testScope.runTest {
+            collectUi()
+            val server = MockWebServer()
+            try {
+                server.start()
+                listOf(false, true).forEach { allowed ->
+                    settings.hwidConsent.value = dev.typenil.vpnclient.core.subscription.HwidConsent.Unset
+                    val before = server.requestCount
+                    viewModel.add(server.url("/synthetic").toString(), null, true)
+                    advanceUntilIdle()
+                    assertTrue(viewModel.hwidPrompt.value)
+                    assertEquals(before, server.requestCount)
+                    server.enqueue(MockResponse().setResponseCode(404))
+                    viewModel.chooseHwidConsent(allowed)
+                    val deadline = System.currentTimeMillis() + 5_000
+                    while (server.requestCount == before && System.currentTimeMillis() < deadline) {
+                        advanceUntilIdle()
+                        Thread.sleep(20)
+                    }
+                    assertFalse(viewModel.hwidPrompt.value)
+                    assertEquals(
+                        if (allowed) dev.typenil.vpnclient.core.subscription.HwidConsent.Allowed
+                        else dev.typenil.vpnclient.core.subscription.HwidConsent.Denied,
+                        settings.hwidConsent.value,
+                    )
+                    assertEquals(allowed, server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)!!.getHeader("x-hwid") != null)
+                    server.enqueue(MockResponse().setResponseCode(404))
+                    viewModel.add(server.url("/again").toString(), null, true)
+                    while (server.requestCount < before + 2 && System.currentTimeMillis() < deadline) {
+                        advanceUntilIdle()
+                        Thread.sleep(20)
+                    }
+                    assertFalse(viewModel.hwidPrompt.value)
+                    assertEquals(allowed, server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)!!.getHeader("x-hwid") != null)
+                }
+            } finally {
+                server.shutdown()
+            }
+        }
+
+    @Test
+    fun `dismissed Unset explanation neither imports nor saves consent`() =
+        testScope.runTest {
+            settings.hwidConsent.value = dev.typenil.vpnclient.core.subscription.HwidConsent.Unset
+            viewModel.add("http://127.0.0.1/synthetic", null, true)
+            advanceUntilIdle()
+            assertTrue(viewModel.hwidPrompt.value)
+            viewModel.dismissHwidPrompt()
+            viewModel.chooseHwidConsent(true)
+            advanceUntilIdle()
+            assertFalse(viewModel.hwidPrompt.value)
+            assertEquals(dev.typenil.vpnclient.core.subscription.HwidConsent.Unset, settings.hwidConsent.value)
+            assertTrue(subscriptionDao.subs.isEmpty())
         }
 
     @Test

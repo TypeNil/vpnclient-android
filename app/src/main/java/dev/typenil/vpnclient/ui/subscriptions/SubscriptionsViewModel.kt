@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -160,33 +162,80 @@ class SubscriptionsViewModel
             }
         }
 
+        private data class PendingImport(val url: String, val name: String?, val insecure: Boolean)
+        private var pendingImport: PendingImport? = null
+        private val _hwidPrompt = MutableStateFlow(false)
+        val hwidPrompt: StateFlow<Boolean> = _hwidPrompt
+
+        fun dismissHwidPrompt() {
+            pendingImport = null
+            _hwidPrompt.value = false
+        }
+
+        fun chooseHwidConsent(allowed: Boolean) {
+            viewModelScope.launch {
+                val pending = pendingImport ?: return@launch
+                dismissHwidPrompt()
+                try {
+                    settings.setHwidConsent(if (allowed) HwidConsent.Allowed else HwidConsent.Denied)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    pendingImport = pending
+                    _hwidPrompt.value = true
+                    postMessage(R.string.subs_add_failed, "Failed to add")
+                    return@launch
+                }
+                performAdd(pending.url, pending.name, pending.insecure)
+            }
+        }
+
         fun add(
             url: String,
             requestedName: String?,
             allowInsecureHttp: Boolean = false,
         ) {
             viewModelScope.launch {
-                val trimmed = url.trim()
-                val candidate = ImportUrlExtractor.extract(null, trimmed, null)
-                val result =
-                    if (candidate?.kind == ImportUrlExtractor.Kind.ShareLink) {
-                        repository.importShareLink(candidate.url)
-                    } else {
-                        repository.add(
-                            candidate?.url ?: trimmed,
-                            requestedName?.trim()?.ifEmpty { null } ?: candidate?.name,
-                            allowInsecureHttp,
-                        )
-                    }
-                result
-                    .onSuccess { outcome ->
-                        if (outcome.skipped.isNotEmpty()) {
-                            skippedSummary(outcome.skipped)
-                        }
-                    }.onFailure {
-                        postSubscriptionFailure(it, R.string.subs_add_failed, "Failed to add")
-                    }
+                val candidate = ImportUrlExtractor.extract(null, url.trim(), null)
+                val needsConsent = try {
+                    candidate?.kind == ImportUrlExtractor.Kind.Subscription &&
+                        settings.hwidConsent.first() == HwidConsent.Unset
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    postMessage(R.string.subs_add_failed, "Failed to add")
+                    return@launch
+                }
+                if (needsConsent) {
+                    pendingImport = PendingImport(url, requestedName, allowInsecureHttp)
+                    _hwidPrompt.value = true
+                } else {
+                    performAdd(url, requestedName, allowInsecureHttp)
+                }
             }
+        }
+
+        private suspend fun performAdd(url: String, requestedName: String?, allowInsecureHttp: Boolean) {
+            val trimmed = url.trim()
+            val candidate = ImportUrlExtractor.extract(null, trimmed, null)
+            val result =
+                if (candidate?.kind == ImportUrlExtractor.Kind.ShareLink) {
+                    repository.importShareLink(candidate.url)
+                } else {
+                    repository.add(
+                        candidate?.url ?: trimmed,
+                        requestedName?.trim()?.ifEmpty { null } ?: candidate?.name,
+                        allowInsecureHttp,
+                    )
+                }
+            result
+                .onSuccess { outcome ->
+                    if (outcome.skipped.isNotEmpty()) {
+                        skippedSummary(outcome.skipped)
+                    }
+                }.onFailure {
+                    postSubscriptionFailure(it, R.string.subs_add_failed, "Failed to add")
+                }
         }
 
         fun refresh(id: Long) {

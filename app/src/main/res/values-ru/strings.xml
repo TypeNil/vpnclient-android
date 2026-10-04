@@ -474,4 +474,10 @@
     <string name="subs_hwid_disabled_refusal">Отправка HWID выключена. Этот провайдер отказал в обновлении без него. Проверьте настройку HWID или обратитесь в поддержку.</string>
     <string name="subs_hwid_ambiguous">Провайдер отклонил идентификацию устройства. Лимит устройств не подтверждён; обратитесь в поддержку.</string>
     <string name="subs_http_error">Подписка не обновлена: сервер вернул HTTP %1$d.</string>
+    <string name="hwid_send">Отправлять HWID</string>
+    <string name="hwid_what">Что такое HWID?</string>
+    <string name="hwid_allow">Разрешить</string>
+    <string name="hwid_continue_without">Продолжить без HWID</string>
+    <string name="hwid_sending_off">Отправка HWID выключена. Этот провайдер может отклонять обновления без него.</string>
+    <string name="hwid_explanation">HWID — случайный идентификатор этой установки приложения, не аппаратный ID. При разрешении провайдеры подписок получают его вместе с ОС, версией, моделью и данными приложения, могут связывать запросы и считать устройства. Переустановка может занять ещё одно место, а не освободить старое.</string>
 </resources>

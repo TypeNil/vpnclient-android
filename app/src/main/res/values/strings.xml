@@ -474,4 +474,10 @@
     <string name="subs_hwid_disabled_refusal">HWID sending is off. This provider refused the update without it. Review HWID settings or contact support.</string>
     <string name="subs_hwid_ambiguous">Provider rejected device identification. A device limit is not confirmed; contact support.</string>
     <string name="subs_http_error">Subscription not updated: server returned HTTP %1$d.</string>
+    <string name="hwid_send">Send HWID</string>
+    <string name="hwid_what">What is HWID?</string>
+    <string name="hwid_allow">Allow</string>
+    <string name="hwid_continue_without">Continue without HWID</string>
+    <string name="hwid_sending_off">HWID sending is off. This provider may refuse updates without it.</string>
+    <string name="hwid_explanation">HWID is a random identifier for this app installation, not a hardware ID. If allowed, subscription providers receive it with OS/version/model and app metadata and can link requests and count devices. Reinstalling may create another device slot, not free the old one.</string>
 </resources>

@@ -109,6 +109,7 @@ fun SubscriptionsScreen(
     viewModel: SubscriptionsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val hwidPrompt by viewModel.hwidPrompt.collectAsStateWithLifecycle()
     val globalAutoRefresh by viewModel.globalAutoRefreshMinutes.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -248,6 +249,24 @@ fun SubscriptionsScreen(
                 dialogName = ""
                 dialogAllowInsecure = false
                 viewModel.add(url, name, allowInsecure)
+            },
+        )
+    }
+
+    if (hwidPrompt) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissHwidPrompt,
+            title = { Text(stringResource(R.string.hwid_what)) },
+            text = { Text(stringResource(R.string.hwid_explanation)) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.chooseHwidConsent(true) }) {
+                    Text(stringResource(R.string.hwid_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.chooseHwidConsent(false) }) {
+                    Text(stringResource(R.string.hwid_continue_without))
+                }
             },
         )
     }

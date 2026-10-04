@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
+import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 
 @Composable
@@ -74,6 +75,8 @@ fun SettingsScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var showHwidExplanation by remember { mutableStateOf(false) }
+    var pendingHwidAllow by remember { mutableStateOf(false) }
     val reconnectMessage = stringResource(R.string.settings_snackbar_reconnect_message)
     val reconnectAction = stringResource(R.string.settings_snackbar_reconnect_action)
     // Pending-state prompt: shows once per recommendation, re-shows after a
@@ -89,6 +92,23 @@ fun SettingsScreen(
         }
     }
 
+    if (showHwidExplanation) {
+        AlertDialog(
+            onDismissRequest = { showHwidExplanation = false; pendingHwidAllow = false },
+            title = { Text(stringResource(R.string.hwid_what)) },
+            text = { Text(stringResource(R.string.hwid_explanation)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (pendingHwidAllow) viewModel.setHwidAllowed(true)
+                    pendingHwidAllow = false
+                    showHwidExplanation = false
+                }) {
+                    Text(stringResource(if (pendingHwidAllow) R.string.hwid_allow else R.string.common_done))
+                }
+            },
+        )
+    }
+
     Column(
         modifier =
             modifier
@@ -96,6 +116,23 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding(),
     ) {
+        SwitchRow(
+            title = stringResource(R.string.hwid_send),
+            subtitle = stringResource(
+                if (ui.hwidConsent == HwidConsent.Allowed) R.string.hwid_what
+                else R.string.hwid_sending_off,
+            ),
+            checked = ui.hwidConsent == HwidConsent.Allowed,
+            onCheckedChange = { allowed ->
+                if (allowed && ui.hwidConsent == HwidConsent.Unset) {
+                    pendingHwidAllow = true
+                    showHwidExplanation = true
+                } else viewModel.setHwidAllowed(allowed)
+            },
+        )
+        TextButton(onClick = { showHwidExplanation = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text(stringResource(R.string.hwid_what))
+        }
         SwitchRow(
             title = stringResource(R.string.settings_reconnect_on_change),
             subtitle = stringResource(R.string.settings_reconnect_on_change_sub),
