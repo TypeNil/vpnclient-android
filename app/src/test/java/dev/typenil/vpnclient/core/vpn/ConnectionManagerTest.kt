@@ -404,6 +404,161 @@ class ConnectionManagerTest {
 
     private fun dnsLevel() = manager.health.value.observations.first { it.level == HealthLevel.DnsReachable }
 
+    private fun pathChanged(generation: Long) {
+        manager.reportHealthUnderlay(true, generation, pathChanged = true)
+        testScope.runCurrent()
+    }
+
+    @Test fun `path retry runs both checks after three stable seconds without reconnect`() = testScope.runTest {
+        dnsCheck = { DnsCheckResult.Answered }
+        probeCheck = { IpCheckResult("192.0.2.1", 1, null) }
+        val generation = readyForProbe()
+        pathChanged(generation)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+        advanceTimeBy(2_999); runCurrent()
+        assertEquals(1, probeCalls)
+        assertEquals(1, dnsCalls)
+        advanceTimeBy(1); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+        assertEquals(HealthStatus.Ok, dnsLevel().status)
+        assertEquals(HealthStatus.Ok, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
+        assertTrue(manager.state.value is VpnConnectionState.Connected)
+        assertEquals(1, serviceControl.connectStarts)
+        assertEquals(0, serviceControl.disconnectStarts)
+    }
+
+    @Test fun `path retry debounces repeated revisions`() = testScope.runTest {
+        val generation = readyForProbe()
+        repeat(3) { pathChanged(generation); advanceTimeBy(2_000); runCurrent() }
+        assertEquals(1, probeCalls)
+        advanceTimeBy(999); runCurrent()
+        assertEquals(1, dnsCalls)
+        advanceTimeBy(1); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(2, probeCalls) // no periodic polling
+    }
+
+    @Test fun `path retry debounces a change during its initialization barrier`() = testScope.runTest {
+        val generation = readyForProbe()
+        engine.groupsFlow.value = emptyList(); runCurrent()
+        advanceTimeBy(3_000); runCurrent() // retry is waiting for groups
+        pathChanged(generation)
+        engine.groupsFlow.value = listOf(proxyGroup(node.id)); runCurrent()
+        advanceTimeBy(2_999); runCurrent()
+        assertEquals(1, probeCalls)
+        advanceTimeBy(1); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+    }
+
+    @Test fun `path retry interval is at least sixty seconds`() = testScope.runTest {
+        val generation = readyForProbe()
+        pathChanged(generation)
+        advanceTimeBy(3_000); runCurrent()
+        assertEquals(2, probeCalls)
+        pathChanged(generation)
+        advanceTimeBy(59_999); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+        advanceTimeBy(1); runCurrent()
+        assertEquals(3, probeCalls)
+        assertEquals(3, dnsCalls)
+    }
+
+    @Test fun `path retry budget is five and resets only for a new generation`() = testScope.runTest {
+        val generation = readyForProbe()
+        repeat(7) { pathChanged(generation); advanceTimeBy(60_000); runCurrent() }
+        assertEquals(6, probeCalls)
+        assertEquals(6, dnsCalls)
+        manager.onServiceStopped(generation)
+        val next = manager.adoptSession(node)
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, next)
+        manager.onServiceStarted(next)
+        runCurrent()
+        assertEquals(7, probeCalls)
+        pathChanged(next)
+        advanceTimeBy(3_000); runCurrent()
+        assertEquals(8, probeCalls)
+        assertEquals(8, dnsCalls)
+    }
+
+    @Test fun `path retry cancels at disconnect during debounce or cooldown`() = testScope.runTest {
+        val generation = readyForProbe()
+        pathChanged(generation)
+        advanceTimeBy(3_000); runCurrent()
+        pathChanged(generation) // waiting for cooldown
+        manager.disconnect(); runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+        manager.onServiceStopped(generation)
+        pathChanged(generation)
+        advanceTimeBy(3_000); runCurrent()
+        assertEquals(2, probeCalls)
+    }
+
+    @Test fun `path retry never runs while Connecting or Reconnecting`() = testScope.runTest {
+        configProvider.selected.value = node.id
+        engine.groupsFlow.value = listOf(proxyGroup(node.id))
+        manager.connect(); runCurrent()
+        val generation = manager.pendingSession!!.generation
+        manager.attachEngine(engine, generation); runCurrent()
+        manager.reportHealthUnderlay(true, generation, pathChanged = true)
+        advanceTimeBy(10_000); runCurrent()
+        assertEquals(0, probeCalls)
+        manager.onServiceStarted(generation); runCurrent()
+        manager.onUnderlyingNetworkLost(generation); runCurrent()
+        pathChanged(generation)
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(1, probeCalls)
+        assertEquals(1, dnsCalls)
+    }
+
+    @Test fun `path retry waits for cancelled probes cleanup with no parallel requests`() = testScope.runTest {
+        var active = 0
+        probeCheck = {
+            active++
+            try { kotlinx.coroutines.awaitCancellation() } finally {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { kotlinx.coroutines.delay(4_000) }
+                active--
+            }
+        }
+        val generation = readyForProbe()
+        pathChanged(generation)
+        advanceTimeBy(3_000); runCurrent()
+        assertEquals(1, probeCalls)
+        assertEquals(1, active)
+        probeCheck = { assertEquals(0, active); IpCheckResult(null, null, "timeout") }
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+    }
+
+    @Test fun `path retry from stale generation cannot start or publish`() = testScope.runTest {
+        val late = CompletableDeferred<Unit>()
+        dnsCheck = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { late.await() }; DnsCheckResult.Answered }
+        val old = readyForProbe()
+        pathChanged(old)
+        manager.onServiceStopped(old)
+        val next = manager.adoptSession(node)
+        engine = FakeEngine().also { it.groupsFlow.value = listOf(proxyGroup(node.id)) }
+        manager.attachEngine(engine, next)
+        dnsCheck = { DnsCheckResult.NotRun }
+        manager.onServiceStarted(next)
+        runCurrent()
+        pathChanged(old)
+        late.complete(Unit); runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(2, probeCalls)
+        assertEquals(2, dnsCalls)
+        assertEquals(next, dnsLevel().generation)
+        assertEquals(HealthStatus.Unverified, dnsLevel().status)
+    }
+
     @Test
     fun `dns answer is Ok but never substitutes the egress check`() = testScope.runTest {
         dnsCheck = { DnsCheckResult.Answered }
@@ -573,9 +728,10 @@ class ConnectionManagerTest {
         dnsCheck = { fresh.await() }
         manager.onTunnelRebuilt(generation)
         runCurrent()
-        assertEquals(2, dnsCalls)
+        assertEquals(1, dnsCalls) // replacement waits for old request cleanup
         old.complete(DnsCheckResult.Answered)
         runCurrent()
+        assertEquals(2, dnsCalls)
         assertEquals(HealthStatus.Unverified, dnsLevel().status)
         fresh.complete(DnsCheckResult.Timeout)
         runCurrent()
@@ -719,9 +875,10 @@ class ConnectionManagerTest {
         probeCheck = { newResult.await() }
         manager.onTunnelRebuilt(generation)
         runCurrent()
-        assertEquals(2, probeCalls)
+        assertEquals(1, probeCalls) // replacement waits for old request cleanup
         oldResult.complete(IpCheckResult("192.0.2.1", 1, null))
         runCurrent()
+        assertEquals(2, probeCalls)
         assertEquals(HealthStatus.Unverified, manager.health.value.observations.first { it.level == HealthLevel.LastSuccessfulCheck }.status)
         newResult.complete(IpCheckResult("192.0.2.2", 1, null))
         runCurrent()

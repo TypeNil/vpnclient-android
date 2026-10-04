@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -157,6 +158,11 @@ class ConnectionManager
         private var postStartTokens: List<HealthEvidenceToken> = emptyList()
         private var checkedEngine: VpnEngine? = null
         private var checkedGeneration = -1L
+        private var pathRetryJob: Job? = null
+        private var retryCooldown: Job? = null
+        private var retryGeneration = -1L
+        private var pathRetries = 0
+        private var preparingPathRetry = false
         private val healthStore = ConnectionHealthStore()
         val health: StateFlow<ConnectionHealth> = healthStore.state
 
@@ -171,14 +177,32 @@ class ConnectionManager
             schedulePostStartCheck(generation)
         }
 
-        private fun schedulePostStartCheck(generation: Long) {
+        private fun schedulePathCheck(generation: Long) {
+            pathRetryJob?.cancel()
+            if (generation != sessionGeneration || _state.value !is VpnConnectionState.Connected) return
+            pathRetryJob = scope.launch {
+                delay(PATH_STABLE_MS)
+                retryCooldown?.join()
+                postStartJob?.cancelAndJoin() // include both probes' cancellation cleanup
+                if (generation != sessionGeneration || _state.value !is VpnConnectionState.Connected ||
+                    teardownRequested || pathRetries >= MAX_PATH_RETRIES
+                ) return@launch
+                schedulePostStartCheck(generation, restart = true)
+            }
+        }
+
+        private fun schedulePostStartCheck(generation: Long, restart: Boolean = false) {
             val runtime = engine ?: return
-            if (checkedGeneration == generation && checkedEngine === runtime) return
+            if (!restart && checkedGeneration == generation && checkedEngine === runtime) return
             checkedGeneration = generation
             checkedEngine = runtime
-            postStartJob?.cancel()
+            val previous = postStartJob
+            previous?.cancel()
+            val pathRevision = health.value.revision
             postStartTokens = emptyList()
+            preparingPathRetry = restart
             postStartJob = scope.launch {
+                previous?.join()
                 // Let start/rebuild publish Connected and the service's initial underlay report land.
                 yield()
                 // Bounded initialization barrier: no retries and no endless wait for a silent core.
@@ -190,10 +214,17 @@ class ConnectionManager
                 if (generation != sessionGeneration || engine !== runtime || teardownRequested ||
                     _state.value !is VpnConnectionState.Connected
                 ) return@launch
+                if (restart) {
+                    if (pathRevision != health.value.revision || pathRetries >= MAX_PATH_RETRIES) return@launch
+                    pathRetries++
+                    retryCooldown = scope.launch { delay(PATH_RETRY_INTERVAL_MS) }
+                    SecureLog.d(TAG, "post-start path check Restarted")
+                }
                 val trafficToken = healthStore.token(HealthLevel.TrafficForwarding) ?: return@launch
                 val successToken = healthStore.token(HealthLevel.LastSuccessfulCheck) ?: return@launch
                 val dnsToken = healthStore.token(HealthLevel.DnsReachable) ?: return@launch
                 postStartTokens = listOf(trafficToken, successToken, dnsToken)
+                preparingPathRetry = false
                 // Independent of A-01: own level/token, health writes only — a DNS
                 // failure is Degraded evidence, never a state change or reconnect.
                 launch {
@@ -243,6 +274,7 @@ class ConnectionManager
                     result.error == "unexpected response" -> HealthReason.HttpUnexpectedResponse
                     else -> HealthReason.HttpNetworkError
                 }
+                SecureLog.d(TAG, "post-start ip check ${reason.name}") // outcome only, never the address
                 val displayTime = Instant.now()
                 healthStore.observe(
                     HealthObservation(HealthLevel.TrafficForwarding,
@@ -292,13 +324,31 @@ class ConnectionManager
 
         init {
             scope.launch {
+                var pathRevision = -1L
                 health.collect { evidence ->
+                    if (retryGeneration != evidence.generation) {
+                        pathRetryJob?.cancel()
+                        retryCooldown?.cancel()
+                        retryCooldown = null
+                        pathRetries = 0
+                        retryGeneration = evidence.generation
+                    }
                     // Revisions emit even when invalidated slots were already Unverified.
                     // Preparation tolerates initial path reports; an actual request never does.
                     val runtime = evidence.observations.first { it.level == HealthLevel.EngineRunning }
                     if (runtime.status != HealthStatus.Ok || healthStore.token(HealthLevel.EngineRunning) == null ||
                         postStartTokens.any { !healthStore.isCurrent(it) }
                     ) postStartJob?.cancel()
+                    if (runtime.status != HealthStatus.Ok) pathRetryJob?.cancel()
+                    if (pathRevision != evidence.revision) {
+                        pathRevision = evidence.revision
+                        // Initial preparation captures the latest path; a retry's preparation
+                        // must itself restart its debounce if another path revision lands.
+                        if (runtime.status == HealthStatus.Ok && (postStartTokens.isNotEmpty() || preparingPathRetry) && evidence.observations.any {
+                                it.level in ConnectionHealthStore.PATH_LEVELS && it.reason == HealthReason.PathChanged
+                            }
+                        ) schedulePathCheck(evidence.generation)
+                    }
                 }
             }
             // The persisted pick is the desired outbound for any live session:
@@ -1289,6 +1339,7 @@ class ConnectionManager
         /** Evidence from an actual usable-network evaluation, not transport classification. */
         fun reportHealthUnderlay(available: Boolean, generation: Long, pathChanged: Boolean = false) {
             if (pathChanged) {
+                if (generation == sessionGeneration) SecureLog.d(TAG, "health underlay PathChanged")
                 healthStore.invalidate(generation, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
             }
             healthStore.record(
@@ -1427,6 +1478,10 @@ class ConnectionManager
         private fun isCurrent(generation: Long): Boolean = if (generation < 0) engine == null else generation == sessionGeneration
 
         private fun publish(next: VpnConnectionState, healthGeneration: Long = sessionGeneration) {
+            if (next !is VpnConnectionState.Connected) {
+                pathRetryJob?.cancel()
+                postStartJob?.cancel()
+            }
             val acceptedHealthGeneration = if (healthGeneration < 0) sessionGeneration else healthGeneration
             when (next) {
                 is VpnConnectionState.Error -> healthStore.end(acceptedHealthGeneration, HealthReason.StartFailed)
@@ -1445,6 +1500,10 @@ class ConnectionManager
 
         companion object {
             const val TAG = "ConnectionManager"
+
+            internal const val PATH_STABLE_MS = 3_000L
+            internal const val PATH_RETRY_INTERVAL_MS = 60_000L
+            internal const val MAX_PATH_RETRIES = 5
 
             /** Consecutive engine failures retried before giving up to Error. */
             internal const val MAX_FAILURE_RECONNECTS = 5
