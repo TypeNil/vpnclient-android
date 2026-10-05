@@ -376,7 +376,6 @@
     <string name="diag_core_log_empty">No core warnings or errors in the current engine session.</string>
     <string name="diag_core_log_previous">Previous session</string>
     <string name="diag_core_log_clear">Clear core logs</string>
-    <string name="diag_export_empty">Nothing to export yet</string>
     <string name="diag_share_chooser">Share diagnostics log</string>
 
     <!-- Subscriptions -->

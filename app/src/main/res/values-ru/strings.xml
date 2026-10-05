@@ -376,7 +376,6 @@
     <string name="diag_core_log_empty">В текущем сеансе движка нет предупреждений или ошибок ядра.</string>
     <string name="diag_core_log_previous">Предыдущая сессия</string>
     <string name="diag_core_log_clear">Очистить логи ядра</string>
-    <string name="diag_export_empty">Пока нечего экспортировать</string>
     <string name="diag_share_chooser">Поделиться логом диагностики</string>
 
     <!-- Subscriptions -->

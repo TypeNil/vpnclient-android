@@ -289,16 +289,22 @@ Connected → (Reconnecting | Stopping | Error)`; `Idle` again after stop.
   through `Redactor.redactCore` with a context list built from the compiled
   config (`coreLogSecrets`: node name/server plus string values under keys
   such as `server`, `server_name`, `password`, `uuid`, `token`, `auth`,
-  `public_key`, `private_key`, `short_id`, `username`). `redactCore` also
+  `public_key`, `private_key`, `short_id`, `username`), plus transport
+  `path`/`service_name`/`host` and nested header strings (trimmed length >=4;
+  old short credentials remain protected). `redactCore` also
   replaces URLs, IPv4/IPv6 addresses and host names, `name`/`tag`/credential
   `key=value` pairs, and the generic `Redactor.redact` patterns (UUIDs, long
   opaque tokens, `user@host`).
 - The subscription is lifecycle-gated: the command client subscribes to core
   logs only while the state is `Connecting`/`Connected` and the screen is on;
   tokens (epoch) make callbacks from a disconnected client no-ops, and
-  `engine.stop()` clears the buffer (see `docs/SECURITY.md` for the limit).
+  stop drops keys but retains redacted lines. Guarded detach copies only the
+  bounded tail into ConnectionManager; export labels it previous session.
+  New engine epoch/start, explicit Diagnostics clear or process death erase it.
 - Share path: `LogExporter` renders app log + core section (an explicit note
-  when empty) and publishes the bytes to `DiagnosticShareStore`;
+  when empty) + safe typed health enums/evidence timestamps. Health uses an
+  active-only synchronized snapshot with TTL projected at read; no session
+  means `not available`, never guessed health. It publishes the bytes to `DiagnosticShareStore`;
   `DiagnosticProvider` (non-exported, `grantUriPermissions`, read-only)
   serves them through an in-memory pipe (`openPipeHelper`) as
   `vpn-diagnostics.txt`. No cache file, no filesystem path. Each export gets a

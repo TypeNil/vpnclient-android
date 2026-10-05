@@ -136,20 +136,26 @@ Redaction coverage:
   under sensitive keys of the session's compiled config (`server`,
   `server_name`, `password`, `uuid`, `token`, `auth`, `auth_str`,
   `public_key`, `private_key`, `pre_shared_key`, `short_id`, `username`) and
-  the node name/server, matched case-insensitively. Core logs keep only
+  the node name/server, matched case-insensitively. Transport `path`,
+  `service_name`, `host` and all nested strings under `headers` are included
+  when trimmed length is at least 4; existing short credentials stay protected.
+  Redaction happens before insertion. Core logs keep only
   panic/fatal/error/warn levels, 512 characters per line, 500 lines.
 
 Known limits:
-- Redaction is pattern + context based, not a proof. Config values under keys
-  that are **not** in the context list (for example `path`, `service_name`,
-  header values) are covered only by the generic patterns, so a short value
-  without a URL/host shape that appears in free text could survive. Treat the
-  export as sensitive and review it before sharing.
+- Redaction is pattern + context based, not a proof. Unlisted config keys and
+  context fragments shorter than 4 characters may survive generic patterns.
+  Treat the export as sensitive and review it before sharing.
 - Recipients that require a seekable descriptor cannot read the pipe; we do
   not fall back to a file. Receiver behavior is not verified on a device.
-- The core tail is cleared when the engine stops (and is not collected while
-  disconnected or with the screen off), so a failure that already tore the
-  engine down leaves no core section to export.
+- Stop drops config-sensitive keys and rejects callbacks; the bounded redacted
+  tail remains in memory, labelled previous session after guarded detach.
+  New engine epoch/start, explicit Diagnostics clear and process death erase it.
+  Nothing is collected while disconnected or with the screen off; synchronous
+  startup failures before native log subscription can still have no core lines.
+- Health exports only actual active evidence: enum names and evidence times,
+  with TTL projected at read. No active session is explicitly `not available`;
+  no addresses, probe responses or node/config payloads enter this block.
 - Verified on CPH2449 (WP-4b): secret scans over the export and logcat found 0
   matches for the session's real credentials. This is one device and one
   node set, not a general guarantee.
