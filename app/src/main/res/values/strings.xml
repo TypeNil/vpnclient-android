@@ -485,4 +485,9 @@
     <string name="hwid_continue_without">Continue without HWID</string>
     <string name="hwid_sending_off">HWID sending is off. This provider may refuse updates without it.</string>
     <string name="hwid_explanation">HWID is a random identifier for this app installation, not a hardware ID. If allowed, subscription providers receive it with OS/version/model and app metadata and can link requests and count devices. Reinstalling may create another device slot, not free the old one.</string>
+    <string name="battery_hint_title">Background work</string>
+    <string name="battery_hint_body">On some devices, the system may stop the VPN in the background. You can review battery settings. This does not explain a particular disconnect, and changing settings may not prevent the VPN from stopping.</string>
+    <string name="battery_hint_open">Open battery settings</string>
+    <string name="battery_hint_dismiss">Dismiss background-work hint</string>
+    <string name="battery_hint_unavailable">This screen is unavailable. Review this app’s battery options manually in system settings.</string>
 </resources>

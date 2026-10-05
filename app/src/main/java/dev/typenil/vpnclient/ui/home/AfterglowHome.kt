@@ -98,6 +98,7 @@ internal fun AfterglowHomeContent(
     onOpenSettings: () -> Unit = {},
     onDismissGuard: () -> Unit,
     errorMessage: String?,
+    batteryHint: @Composable () -> Unit = {},
 ) {
     val colors = AfterglowTheme.colors
     val state = ui.connection
@@ -134,6 +135,7 @@ internal fun AfterglowHomeContent(
                     modifier = Modifier.padding(top = 12.dp), fontSize = 14.sp)
             }
             if (ui.restartGuardTripped) StatusNotice(stringResource(R.string.home_restart_guard_text), onDismissGuard, false)
+            batteryHint()
             Spacer(Modifier.height(18.dp))
             // Selected server + routing and live stats carry the session —
             // shortcuts trail them instead of pushing them below the fold.

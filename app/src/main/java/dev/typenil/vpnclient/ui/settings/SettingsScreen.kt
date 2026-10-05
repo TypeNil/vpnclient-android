@@ -196,6 +196,7 @@ fun SettingsScreen(
             )
         }
         AlwaysOnRow()
+        dev.typenil.vpnclient.ui.common.BatteryHintCard()
         SwitchRow(
             title = stringResource(R.string.settings_auto_refresh),
             subtitle =

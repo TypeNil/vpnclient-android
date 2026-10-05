@@ -91,6 +91,16 @@ fun HomeScreen(
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val connection = ui.connection
+    val batteryHintVisible by viewModel.batteryHintVisible.collectAsStateWithLifecycle()
+    val batteryLifecycle = LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(batteryLifecycle, viewModel) {
+        viewModel.refreshBatteryStatus()
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshBatteryStatus()
+        }
+        batteryLifecycle.lifecycle.addObserver(observer)
+        onDispose { batteryLifecycle.lifecycle.removeObserver(observer) }
+    }
 
     var showPicker by remember { mutableStateOf(false) }
     var showDetails by remember { mutableStateOf(false) }
@@ -109,6 +119,11 @@ fun HomeScreen(
         onOpenSubscriptions = onOpenSubscriptions,
         onOpenSettings = onOpenSettings,
         onDismissGuard = viewModel::dismissRestartGuardWarning,
+        batteryHint = {
+            if (batteryHintVisible && connection is VpnConnectionState.Connected) {
+                dev.typenil.vpnclient.ui.common.BatteryHintCard(onDismiss = viewModel::dismissBatteryHint)
+            }
+        },
         errorMessage = (connection as? VpnConnectionState.Error)?.let { errorText(it.error) }
             ?: ui.selectionError?.let { stringResource(R.string.home_selection_unencrypted) },
     )
