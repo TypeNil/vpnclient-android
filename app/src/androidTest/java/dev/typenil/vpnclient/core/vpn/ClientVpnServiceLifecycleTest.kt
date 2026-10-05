@@ -1,5 +1,8 @@
 package dev.typenil.vpnclient.core.vpn
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -7,12 +10,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
+import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.EngineConfig
 import dev.typenil.vpnclient.core.engine.EngineError
 import dev.typenil.vpnclient.core.engine.EngineEvent
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.engine.VpnEngineFactory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -183,8 +188,40 @@ class ClientVpnServiceLifecycleTest {
         // first intent's behavior is deterministic.
         runBlocking {
             fakeConfig().config = FakeNodeConfigProvider.defaultConfig()
+            // Persisted across runs: enough automatic starts trip the restart guard.
+            settings.resetVpnRestartAttempts()
+            fakeConfig().failure = null
+            fakeConfig().selected.value = null
+            fakeTun().consentRequired = false
         }
+        // The Hilt test app does not run VpnClientApp's channel setup, and the
+        // notice needs the runtime permission the production app asks for.
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(VpnNotification.ALERT_CHANNEL_ID, "test alerts", NotificationManager.IMPORTANCE_HIGH),
+        )
+        InstrumentationRegistry.getInstrumentation().uiAutomation
+            .grantRuntimePermission(context.packageName, "android.permission.POST_NOTIFICATIONS")
+        notificationManager().cancel(VpnNotification.ALERT_NOTIFICATION_ID)
     }
+
+    private fun notificationManager() = context.getSystemService(NotificationManager::class.java)
+
+    private fun noticeText(): String? =
+        notificationManager().activeNotifications
+            .firstOrNull { it.id == VpnNotification.ALERT_NOTIFICATION_ID }
+            ?.notification?.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+
+    private suspend fun awaitNoticeText(resId: Int) {
+        val expected = context.getString(resId)
+        withTimeout(STATE_TIMEOUT_MS) { while (noticeText() != expected) delay(50) }
+    }
+
+    private suspend fun awaitNoNotice() {
+        withTimeout(STATE_TIMEOUT_MS) { while (noticeText() != null) delay(50) }
+    }
+
+    private fun alwaysOnStart() =
+        startService(Intent(context, ClientVpnService::class.java).setAction(android.net.VpnService.SERVICE_INTERFACE))
 
     @After
     fun tearDown() {
@@ -194,6 +231,7 @@ class ClientVpnServiceLifecycleTest {
         settleService()
         runCatching { stopService() }
         settleService()
+        notificationManager().cancel(VpnNotification.ALERT_NOTIFICATION_ID)
     }
 
     // ---- the happy path -----------------------------------------------
@@ -406,6 +444,61 @@ class ClientVpnServiceLifecycleTest {
     }
 
     @Test
+    fun alwaysOn_failures_postOneReplacedNotice_thenSuccessClearsIt() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(false)
+        fakeConfig().selected.value = null
+        alwaysOnStart()
+        awaitNoticeText(R.string.notification_autostart_no_server)
+
+        // A different failure replaces the text under the same id.
+        fakeConfig().selected.value = FakeNodeConfigProvider.NODE.id
+        fakeTun().consentRequired = true
+        alwaysOnStart()
+        awaitNoticeText(R.string.notification_autostart_vpn_permission)
+        assertEquals(1, notificationManager().activeNotifications.count { it.id == VpnNotification.ALERT_NOTIFICATION_ID })
+
+        fakeTun().consentRequired = false
+        fakeFactory().next = FakeVpnEngine()
+        alwaysOnStart()
+        awaitState<VpnConnectionState.Connected>()
+        awaitNoNotice()
+    }
+
+    @Test
+    fun restore_unencryptedConfig_postsTypedNoticeWithoutNodeDetails() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(true)
+        fakeConfig().failure = EngineError.UnencryptedTransport
+        restore()
+        awaitNoticeText(R.string.notification_autostart_unencrypted)
+        val extras = notificationManager().activeNotifications
+            .first { it.id == VpnNotification.ALERT_NOTIFICATION_ID }.notification.extras.toString()
+        assertTrue(!extras.contains(FakeNodeConfigProvider.NODE.name) && !extras.contains(FakeNodeConfigProvider.NODE.id))
+    }
+
+    @Test
+    fun manualConnect_engineStartFailure_postsNoNotice() = runBlocking<Unit> {
+        fakeFactory().next = FakeVpnEngine(startFailure = EngineError.StartFailed("synthetic"))
+        connectionManager.connect()
+        awaitState<VpnConnectionState.Error>()
+        settleService()
+        assertNull(noticeText()) // the UI already shows a manual start's error
+        // Singleton manager: end the failure retry chain so it cannot leak into the next test.
+        connectionManager.disconnect()
+        awaitState<VpnConnectionState.Idle>()
+    }
+
+    @Test
+    fun alwaysOn_engineStartFailure_postsGenericNotice() = runBlocking<Unit> {
+        settings.setDesiredVpnRunning(false)
+        fakeConfig().selected.value = FakeNodeConfigProvider.NODE.id
+        fakeFactory().next = FakeVpnEngine(startFailure = EngineError.StartFailed("synthetic"))
+        alwaysOnStart()
+        awaitNoticeText(R.string.notification_autostart_start_failed)
+        connectionManager.disconnect()
+        awaitState<VpnConnectionState.Idle>()
+    }
+
+    @Test
     fun disconnect_duringAlwaysOnStart_doesNotResurrectDesire() = runBlocking<Unit> {
         settings.setDesiredVpnRunning(false)
         fakeConfig().selected.value = FakeNodeConfigProvider.NODE.id
@@ -431,6 +524,7 @@ class ClientVpnServiceLifecycleTest {
             settleService()
             assertEquals(0, fakeFactory().createCalls.get())
             requireState<VpnConnectionState.Idle>()
+            assertNull(noticeText()) // Stop branch is a decision, not a failure
         }
     }
 

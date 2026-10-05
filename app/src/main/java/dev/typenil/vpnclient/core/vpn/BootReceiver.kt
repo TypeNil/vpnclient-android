@@ -58,6 +58,10 @@ class BootReceiver : BroadcastReceiver() {
                             context, ClientVpnService.restoreIntent(context),
                         )
                     }.onFailure { SecureLog.w(TAG, "boot restore start failed") }
+                } else if (wanted) {
+                    // Protection was expected but consent is gone: say so instead of staying silent.
+                    AutoStartNotifier(AndroidNoticeSink(context))
+                        .failed(AutomaticStartBranch.Restore, VpnError.PermissionDenied)
                 }
             } finally {
                 pending.finish()

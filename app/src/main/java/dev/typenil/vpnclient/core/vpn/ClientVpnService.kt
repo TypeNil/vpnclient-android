@@ -157,6 +157,7 @@ class ClientVpnService :
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val notification = VpnNotification(this)
+    private val autoStartNotifier by lazy { AutoStartNotifier(AndroidNoticeSink(this)) }
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
 
     private var engine: VpnEngine? = null
@@ -592,7 +593,11 @@ class ClientVpnService :
                         when (branch) {
                             AutomaticStartBranch.Stop -> { stopSelf(); return@launch }
                             AutomaticStartBranch.MissingPrerequisites -> {
-                                rejectAlwaysOn(if (prepared) VpnError.NoNodeSelected else VpnError.PermissionDenied, startGuard.begin())
+                                failAutomatic(
+                                    branch,
+                                    if (prepared) VpnError.NoNodeSelected else VpnError.PermissionDenied,
+                                    startGuard.begin(),
+                                )
                                 return@launch
                             }
                             else -> Unit
@@ -605,7 +610,7 @@ class ClientVpnService :
                         if (autoStartLostOwnership()) return@launch
                         if (allowed) {
                             SecureLog.i(TAG, "rebuilding tunnel after service restart")
-                            startTunnel(alwaysOn = alwaysOn)
+                            startTunnel(alwaysOn = alwaysOn, automatic = true)
                         } else {
                             SecureLog.w(
                                 TAG,
@@ -659,7 +664,7 @@ class ClientVpnService :
         }
     }
 
-    private fun startTunnel(alwaysOn: Boolean = false) {
+    private fun startTunnel(alwaysOn: Boolean = false, automatic: Boolean = false) {
         if (destroyed || engine != null) {
             // Nothing to start — a live engine already serves whatever the
             // queued request was for.
@@ -689,7 +694,7 @@ class ClientVpnService :
             scope.launch {
                 val attempt = startGuard.begin()
                 try {
-                    runStartAttempt(attempt, session, alwaysOn)
+                    runStartAttempt(attempt, session, alwaysOn, automatic)
                 } finally {
                     startJob = null
                     // A start whose ACTION_CONNECT the single-flight guard rejected
@@ -712,7 +717,9 @@ class ClientVpnService :
         attempt: Long,
         session: ConnectionManager.PendingSession?,
         alwaysOn: Boolean,
+        automatic: Boolean,
     ) {
+        val branch = if (alwaysOn) AutomaticStartBranch.AlwaysOn else AutomaticStartBranch.Restore
         // Same-process fast path uses the handed-off session; after a
         // process death the service rebuilds from persisted state itself.
         // A connect() racing this job leaves a pendingSession — adopt it
@@ -747,7 +754,7 @@ class ClientVpnService :
                                 // Genuinely nothing enabled — the user must
                                 // pick a server; that is a state, not a
                                 // defect.
-                                if (alwaysOn) rejectAlwaysOn(VpnError.NoNodeSelected, attempt)
+                                if (automatic) failAutomatic(branch, VpnError.NoNodeSelected, attempt)
                                 else failStart(VpnError.NoNodeSelected, attempt)
                                 return
                             }
@@ -755,7 +762,9 @@ class ClientVpnService :
                             is CompileOutcome.Failed -> {
                                 // A config the engine refused is not "no
                                 // servers".
-                                failStart(engineFailure(outcome.cause, "config rebuild failed"), attempt)
+                                val error = engineFailure(outcome.cause, "config rebuild failed")
+                                if (automatic) failAutomatic(branch, error, attempt)
+                                else failStart(error, attempt)
                                 return
                             }
                         }
@@ -768,7 +777,7 @@ class ClientVpnService :
             // Reject stale/disabled picks that the ordinary compiler falls back from.
             // AUTO's compiled summary has the same persisted sentinel id.
             if (selected != config.node.id) {
-                rejectAlwaysOn(VpnError.NoNodeSelected, attempt)
+                failAutomatic(branch, VpnError.NoNodeSelected, attempt)
                 return
             }
         }
@@ -817,7 +826,10 @@ class ClientVpnService :
             text = launchConfig.node.name,
             showDisconnect = true,
         )
-        if (!launchEngine(launchConfig, generation)) return
+        // Only a start nobody asked for interactively may notify: a handed-off
+        // session (manual connect) already surfaces its error in the UI.
+        val noticeBranch = if (automatic && effective == null) branch else null
+        if (!launchEngine(launchConfig, generation, noticeBranch)) return
         // A connect() that raced this start may have superseded our
         // generation while the engine was coming up (its ACTION_CONNECT
         // was dropped by the in-flight guard). Hand the live engine to
@@ -830,6 +842,7 @@ class ClientVpnService :
             activeGeneration = generation
         }
         connectionManager.onServiceStarted(generation)
+        autoStartNotifier.started()
         if (alwaysOn) {
             // Commit only after openTun/start succeeded, and test ownership inside
             // DataStore's caller-context transaction (not before a suspended write).
@@ -854,6 +867,7 @@ class ClientVpnService :
     private suspend fun launchEngine(
         config: EngineConfig,
         generation: Long,
+        noticeBranch: AutomaticStartBranch? = null,
     ): Boolean {
         var created: VpnEngine? = null
         try {
@@ -943,8 +957,13 @@ class ClientVpnService :
                     // not a spurious error over the user's Idle.
                     connectionManager.onServiceStopped(generation)
                 } else {
+                    val error = engineFailure(e, "engine start failed")
+                    // A connect() waiting in pendingSession owns the error instead.
+                    if (noticeBranch != null && connectionManager.pendingSession == null) {
+                        autoStartNotifier.failed(noticeBranch, error)
+                    }
                     connectionManager.onServiceFailed(
-                        engineFailure(e, "engine start failed"),
+                        error,
                         // A connect() may have superseded our generation —
                         // the error belongs to the session now waiting.
                         connectionManager.pendingSession?.generation ?: generation,
@@ -1134,13 +1153,10 @@ class ClientVpnService :
      * stale error, and a newer connect owns the outcome through
      * [ConnectionManager.onSessionlessStartFailed].
      */
-    private suspend fun rejectAlwaysOn(error: VpnError, attempt: Long) {
+    private suspend fun failAutomatic(branch: AutomaticStartBranch, error: VpnError, attempt: Long) {
         if (!stillOwns(attempt)) return
-        SecureLog.w(TAG, "always-on prerequisites missing")
-        runCatching { notification.postAlert(
-            getString(R.string.notification_always_on_unavailable_title),
-            getString(R.string.notification_always_on_unavailable_text),
-        ) }
+        SecureLog.w(TAG, "automatic start failed: branch=${branch.name}")
+        autoStartNotifier.failed(branch, error)
         failStart(error, attempt)
     }
 

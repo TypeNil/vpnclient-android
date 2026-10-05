@@ -53,8 +53,12 @@
     <string name="notification_channel_vpn_alerts">VPN alerts</string>
     <string name="notification_restart_guard_title">VPN auto-restart stopped</string>
     <string name="notification_restart_guard_text">Repeated failures — tap to reconnect manually</string>
-    <string name="notification_always_on_unavailable_title">Always-on VPN could not start</string>
-    <string name="notification_always_on_unavailable_text">Select an enabled server (or Auto) and grant VPN permission, then re-enable Always-on VPN in system settings.</string>
+    <string name="notification_autostart_title">VPN could not start automatically</string>
+    <string name="notification_autostart_no_server">No server is selected. Choose an enabled server or Auto, then connect again.</string>
+    <string name="notification_autostart_vpn_permission">VPN permission is missing. Open the app, allow it, then connect.</string>
+    <string name="notification_autostart_unencrypted">The selected server is not encrypted and was blocked. Choose another server.</string>
+    <string name="notification_autostart_invalid_config">The server settings are invalid. Refresh the subscription or choose another server.</string>
+    <string name="notification_autostart_start_failed">The VPN could not start. Open the app and connect again.</string>
     <string name="notification_connecting">Connecting…</string>
     <string name="notification_connected">Connected</string>
     <string name="notification_reconnecting">Reconnecting…</string>
