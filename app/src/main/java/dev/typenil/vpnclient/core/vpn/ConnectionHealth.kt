@@ -115,6 +115,10 @@ class ConnectionHealthStore(
         mutable.value = ConnectionHealth(generation, nextRevision, HealthLevel.entries.map { HealthObservation(it, generation = generation) })
     }
 
+    /** No ended-session evidence is presented as current; TTL is projected at read. */
+    @Synchronized
+    fun snapshot(): ConnectionHealth? = if (active) mutable.value.at(monotonicMillis()) else null
+
     @Synchronized
     fun token(level: HealthLevel): HealthEvidenceToken? =
         if (active) HealthEvidenceToken(mutable.value.generation, level, revisions.getValue(level)) else null

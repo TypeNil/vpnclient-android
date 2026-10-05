@@ -171,6 +171,7 @@ class ConnectionManager
         private var preparingPathRetry = false
         private val healthStore = ConnectionHealthStore()
         val health: StateFlow<ConnectionHealth> = healthStore.state
+        fun healthSnapshot(): ConnectionHealth? = healthStore.snapshot()
 
         private fun recordConsent(status: HealthStatus, reason: HealthReason) {
             healthStore.record(sessionGeneration, HealthLevel.VpnConsent, status, reason, HealthSource.VpnConsent, HealthScope.LocalRuntime)

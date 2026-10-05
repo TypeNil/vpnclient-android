@@ -1,10 +1,11 @@
 package dev.typenil.vpnclient.core.common.log
 
+import dev.typenil.vpnclient.core.vpn.ConnectionHealth
 import java.util.UUID
 
 internal object DiagnosticExport {
     fun render(app: List<String>, core: List<String>, title: String, empty: String,
-               previousSession: String? = null): String = buildString {
+               previousSession: String? = null, health: ConnectionHealth? = null): String = buildString {
         appendLine("VPN Client diagnostics — sensitive data is redacted.")
         appendLine("Recent app and core logs only; no raw proxy configurations.")
         appendLine("generated: " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
@@ -15,6 +16,17 @@ internal object DiagnosticExport {
         appendLine(title)
         previousSession?.let { appendLine(it) }
         if (core.isEmpty()) appendLine(empty) else core.forEach { appendLine(it) }
+        appendLine()
+        if (health == null) {
+            appendLine("Health: not available")
+        } else {
+            appendLine("Health")
+            health.observations.forEach {
+                appendLine("${it.level.name}: ${it.status.name}; reason=${it.reason.name}; " +
+                    "source=${it.source.name}; scope=${it.scope.name}; freshness=${it.freshness.name}; " +
+                    "checkedAt=${it.checkedAt ?: "not available"}")
+            }
+        }
     }
 }
 

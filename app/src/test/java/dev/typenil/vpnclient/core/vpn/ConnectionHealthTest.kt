@@ -13,6 +13,27 @@ class ConnectionHealthTest {
     private fun runtimeToken() = store.token(HealthLevel.EngineRunning)!!
     private fun slot(level: HealthLevel = HealthLevel.EngineRunning) = store.state.value.observations.first { it.level == level }
 
+    @Test fun `export snapshot requires active session and projects current ttl`() {
+        assertNull(store.snapshot())
+        store.begin(1)
+        assertTrue(store.observe(evidence(), runtimeToken()))
+        assertEquals(HealthStatus.Ok, store.snapshot()!!.observations.first { it.level == HealthLevel.EngineRunning }.status)
+        now += 10
+        val expired = store.snapshot()!!.observations.first { it.level == HealthLevel.EngineRunning }
+        assertEquals(HealthStatus.Unverified, expired.status)
+        assertEquals(HealthReason.Expired, expired.reason)
+        assertEquals(HealthFreshness.Expired, expired.freshness)
+        assertEquals(HealthStatus.Ok, slot().status)
+        store.end(0)
+        assertNotNull(store.snapshot())
+        store.end(1)
+        assertNull(store.snapshot())
+        assertEquals(1L, store.state.value.generation)
+        store.begin(2)
+        assertNotNull(store.snapshot())
+        assertTrue(store.snapshot()!!.observations.all { it.checkedAt == null })
+    }
+
     @Test fun `initial slots have no invented time or success`() {
         assertEquals(8, store.state.value.observations.size)
         assertNull(store.token(HealthLevel.EngineRunning))

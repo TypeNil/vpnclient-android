@@ -96,8 +96,10 @@ class ConnectionManagerTest {
     }
 
     @Test fun `core diagnostics follow active state screen suppression and engine epoch`() = testScope.runTest {
+        assertNull(manager.healthSnapshot())
         val generation = connectToRunning()
         runCurrent()
+        assertTrue(manager.healthSnapshot()!!.observations.any { it.level == HealthLevel.EngineRunning && it.status == HealthStatus.Ok })
         assertTrue(engine.coreLogsEnabled)
         engine.emitCoreWarning("first timeout")
         assertEquals(listOf("WARN first timeout"), manager.coreLogSnapshot())
@@ -131,6 +133,7 @@ class ConnectionManagerTest {
         manager.onServiceStopped(generation)
         assertEquals(listOf("WARN fresh warning"), manager.coreLogSnapshot())
         assertTrue(manager.coreLogSessionSnapshot().previousSession)
+        assertNull(manager.healthSnapshot())
         manager.detachEngine(generation)
         assertEquals(1, manager.coreLogSnapshot().size)
         oldEngine.emitCoreWarning("cannot change detached copy")

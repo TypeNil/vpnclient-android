@@ -19,6 +19,7 @@ class LogExporter @Inject constructor(private val connectionManager: ConnectionM
             context.getString(R.string.diag_core_log_title),
             context.getString(R.string.diag_core_log_empty),
             if (core.previousSession) context.getString(R.string.diag_core_log_previous) else null,
+            connectionManager.healthSnapshot(),
         )
         val id = DiagnosticProvider.store.publish(text)
         val uri = Uri.Builder().scheme("content").authority("${context.packageName}.diagnostics").appendPath(id).build()

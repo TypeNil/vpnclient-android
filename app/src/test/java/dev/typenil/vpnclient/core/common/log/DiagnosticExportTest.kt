@@ -1,5 +1,7 @@
 package dev.typenil.vpnclient.core.common.log
 
+import dev.typenil.vpnclient.core.vpn.*
+import java.time.Instant
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,6 +19,30 @@ class DiagnosticExportTest {
         assertTrue(previous.contains("Core\nPrevious session\nWARN retained"))
         val current = DiagnosticExport.render(emptyList(), listOf("WARN current"), "Core", "Empty")
         assertFalse(current.contains("Previous session"))
+    }
+
+    @Test fun `health exports only enum names and evidence times without addresses`() {
+        val health = ConnectionHealth(observations = HealthLevel.entries.map { level ->
+            HealthObservation(level, HealthStatus.Degraded, HealthReason.HttpTimeout,
+                HealthSource.IpEcho, HealthScope.AppHttpRouteUnverified,
+                checkedAt = Instant.EPOCH, freshness = HealthFreshness.Fresh)
+        })
+        val text = DiagnosticExport.render(emptyList(), emptyList(), "Core", "Empty", health = health)
+        val block = text.substringAfter("\nHealth\n")
+        val expected = HealthLevel.entries.joinToString("") {
+            "${it.name}: Degraded; reason=HttpTimeout; source=IpEcho; scope=AppHttpRouteUnverified; " +
+                "freshness=Fresh; checkedAt=1970-01-01T00:00:00Z\n"
+        }
+        assertEquals(expected, block)
+        assertFalse(Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b|https?://|\.invalid|\.net|\[.*:.*\]""").containsMatchIn(block))
+    }
+
+    @Test fun `unavailable health is explicit and unobserved time is not invented`() {
+        val ended = DiagnosticExport.render(emptyList(), listOf("WARN retained"), "Core", "Empty", "Previous session")
+        assertEquals("Health: not available\n", ended.substringAfterLast("\n\n"))
+        val unobserved = DiagnosticExport.render(emptyList(), emptyList(), "Core", "Empty", health = ConnectionHealth())
+        assertEquals(HealthLevel.entries.size, Regex("checkedAt=not available").findAll(unobserved).count())
+        assertTrue(unobserved.contains("OutboundReachable: Unverified; reason=NotObserved"))
     }
 
     @Test fun `memory share is isolated from previous grants and caller mutation`() {
