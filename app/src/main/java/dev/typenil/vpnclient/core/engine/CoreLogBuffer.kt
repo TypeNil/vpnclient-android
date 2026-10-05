@@ -50,7 +50,7 @@ class CoreLogBuffer {
     @Synchronized fun add(token: Long, level: Int, message: String) {
         if (!subscribed || token != epoch || level !in 0..3) return
         val label = listOf("PANIC", "FATAL", "ERROR", "WARN")[level]
-        val text = message.replace(terminal, "").replaceFirst(nativePrefix, "")
+        val text = message.replace(Redactor.terminalControl, "").replaceFirst(nativePrefix, "")
         ring.add(("$label " + Redactor.redactCore(text, sensitiveValues)).take(512))
     }
 
@@ -59,8 +59,5 @@ class CoreLogBuffer {
     private companion object {
         /** sing-box prefixes its own `LEVEL[0042] ` (elapsed seconds); [add] already labels the level. */
         val nativePrefix = Regex("^(?:PANIC|FATAL|ERROR|WARN|INFO|DEBUG|TRACE)\\[\\d+]\\s*")
-
-        /** Native colour escapes and other control chars are noise (and could split a secret). */
-        val terminal = Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]|[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]")
     }
 }

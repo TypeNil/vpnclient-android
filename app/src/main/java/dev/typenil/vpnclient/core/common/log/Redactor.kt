@@ -46,10 +46,13 @@ object Redactor {
             "\\b(?:[a-zA-Z0-9_-]+\\.)+[a-zA-Z]{2,}\\b",
     )
 
+    /** Native colour escapes and other control chars are noise (and could split a secret). */
+    internal val terminalControl = Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]|[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]")
+
     /** Core diagnostics hide endpoints too. Context covers arbitrary names and
      * short credentials that cannot be distinguished from ordinary prose. */
     fun redactCore(text: String, sensitiveValues: Collection<String> = emptyList()): String {
-        var safe = text
+        var safe = text.replace(terminalControl, "")
         for (value in sensitiveValues.filter { it.isNotBlank() }.sortedByDescending { it.length }) {
             safe = safe.replace(value, "<redacted>", ignoreCase = true)
         }

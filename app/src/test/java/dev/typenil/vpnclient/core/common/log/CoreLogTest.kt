@@ -24,6 +24,15 @@ class CoreLogTest {
         }
     }
 
+    @Test fun `redactCore drops terminal colour escapes before redacting`() {
+        val esc = 27.toChar()
+        val raw = "${esc}[31mERROR${esc}[0m[0042] dial ${esc}[1mpassword${esc}[0m=Hunter22 failed"
+        val out = Redactor.redactCore(raw)
+        assertFalse(out, out.contains(esc))
+        assertFalse(out, out.contains("Hunter22"))
+        assertTrue(out, out.startsWith("ERROR[0042] dial "))
+    }
+
     @Test fun `bounds apply after redaction and newline normalization`() {
         val buffer = CoreLogBuffer()
         buffer.start(listOf("hidden"))
