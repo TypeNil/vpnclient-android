@@ -140,12 +140,11 @@ class HomeViewModel
         private val settings: SettingsRepository,
         subscriptions: SubscriptionRepository,
         private val latencyRepository: NodeLatencyRepository,
-        batteryStatus: dev.typenil.vpnclient.ui.common.AndroidBatteryOptimizationStatus,
+        private val batteryStatus: dev.typenil.vpnclient.ui.common.BatteryOptimizationStatus,
     ) : ViewModel() {
         /** The last terminal error the state machine published this process —
          *  the cheapest honest source for the sheet's "last error" row. */
         private val lastErrorMessage = MutableStateFlow<VpnError?>(null)
-        private val batteryStatus: dev.typenil.vpnclient.ui.common.BatteryOptimizationStatus = batteryStatus
         private val batteryEnabled = MutableStateFlow<Boolean?>(null)
         val batteryHintVisible = combine(connectionManager.state, batteryEnabled, settings.batteryHintDismissed) { state, enabled, dismissed ->
             dev.typenil.vpnclient.ui.common.showBatteryHint(state, enabled, dismissed)

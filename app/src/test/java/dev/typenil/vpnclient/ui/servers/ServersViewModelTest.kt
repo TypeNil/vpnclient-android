@@ -685,10 +685,6 @@ class ServersViewModelTest {
             // n2 never received a result → untested "—", never "timeout".
             assertFalse("n2" in ui.testedNodeIds)
             assertNull(ui.delays["n2"])
-            // The displayed delay is a retained urltest number — the caption
-            // must name it, not claim TCP.
-            assertTrue(ui.urlTestResultsShown)
-            assertFalse(ui.tcpResultsShown)
         }
 
     @Test
@@ -1021,8 +1017,6 @@ class ServersViewModelTest {
             val disconnectedUi = viewModel.uiState.value
             assertTrue("n1" in disconnectedUi.testedNodeIds)
             assertTrue("tcp" in disconnectedUi.testedNodeIds)
-            assertTrue(disconnectedUi.tcpResultsShown)
-            assertFalse(disconnectedUi.urlTestResultsShown)
 
             // Connect and run urltest — only n1 is covered; its fresh result
             // is retained while the TCP mark on the uncovered node survives.
@@ -1051,8 +1045,6 @@ class ServersViewModelTest {
             assertTrue("n1" in ui.testedNodeIds)
             assertTrue("tcp" in ui.testedNodeIds)
             assertNull(ui.delays["tcp"])
-            assertTrue(ui.urlTestResultsShown)
-            assertTrue(ui.tcpResultsShown)
         }
 
     // ---- engine-session scoping: a fresh engine must not inherit the

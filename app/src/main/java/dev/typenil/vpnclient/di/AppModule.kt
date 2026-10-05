@@ -125,6 +125,11 @@ object AppModule {
     @Singleton
     abstract fun bindSubscriptionSettings(impl: SettingsRepository): SubscriptionSettings
 
+    @Binds
+    abstract fun bindBatteryOptimizationStatus(
+        impl: dev.typenil.vpnclient.ui.common.AndroidBatteryOptimizationStatus,
+    ): dev.typenil.vpnclient.ui.common.BatteryOptimizationStatus
+
 }
 
 /**

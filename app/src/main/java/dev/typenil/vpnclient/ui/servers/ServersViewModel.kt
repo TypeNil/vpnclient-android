@@ -111,12 +111,6 @@ data class ServersUiState(
      *  proxy); disconnected → direct TCP-connect probe. Names the
      *  measurement so the UI doesn't imply one means the other. */
     val connected: Boolean = false,
-    /** Displayed badges include retained urltest verdicts from a
-     *  connected-mode run (while disconnected) — never label them TCP. */
-    val urlTestResultsShown: Boolean = false,
-    /** Displayed badges include TCP-connect verdicts (while disconnected) —
-     *  with [urlTestResultsShown] the caption must admit both sources. */
-    val tcpResultsShown: Boolean = false,
     // ---- search / sort / filters ----
     val query: String = "",
     val sortMode: ServerSortMode = ServerSortMode.Default,
@@ -485,14 +479,6 @@ class ServersViewModel
                     protocolOptions = protocolOptions,
                     showHeaders = !flat,
                     noSubscriptions = surface.nodes.isEmpty(),
-                    // Caption provenance: per-source flags over the
-                    // displayed nodes — TCP-only, proxy-retained-only, or
-                    // mixed each get honest wording; never claim one
-                    // source for rows measured by the other.
-                    urlTestResultsShown =
-                        !engine.connected && sorted.any { it.id in probe.urlTested },
-                    tcpResultsShown =
-                        !engine.connected && sorted.any { it.id in probe.tested },
                 )
             }.stateIn(
                 scope = viewModelScope,
