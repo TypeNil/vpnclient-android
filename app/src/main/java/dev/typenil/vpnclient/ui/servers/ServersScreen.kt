@@ -687,7 +687,7 @@ private fun ServerCard(
             if (!node.encrypted) {
                 Text(stringResource(R.string.servers_unencrypted),
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                if (node.tunnelAllowed) Text(stringResource(R.string.servers_local_sidecar),
+                Text(stringResource(if (node.tunnelAllowed) R.string.servers_local_sidecar else R.string.servers_connection_blocked),
                     style = MaterialTheme.typography.labelSmall)
             }
             if (!node.enabled) {

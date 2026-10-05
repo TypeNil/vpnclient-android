@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.core.engine.pickBestLatency
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.isEncrypted
+import dev.typenil.vpnclient.core.subscription.model.isTunnelAllowed
 import dev.typenil.vpnclient.core.vpn.VpnError
 import dev.typenil.vpnclient.data.toDomain
 import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
@@ -23,6 +24,8 @@ import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,6 +91,7 @@ data class ServerOption(
     /** Host + name text the search matches; falls back to the Auto tag. */
     val searchText: String? = title,
     val encrypted: Boolean = true,
+    val tunnelAllowed: Boolean = true,
 )
 
 /** Sheet payload — assembled per state emission so it stays in lockstep
@@ -234,7 +238,8 @@ class HomeViewModel
 
                 HomeUiState(
                     connection = connection,
-                    selectionError = values[14] as VpnError?,
+                    selectionError = if (connection is VpnConnectionState.Connected || connection is VpnConnectionState.Reconnecting)
+                        values[14] as VpnError? else null,
                     // Auto resolves to a member only at the engine; the UI keeps
                     // the mode label stable and reports a measured winner separately.
                     // Custom name applies to the header too — same presentation
@@ -294,6 +299,7 @@ class HomeViewModel
                                             // knows its address, not its name.
                                             searchText = "${node.name} ${node.server}",
                                             encrypted = isEncrypted(node.toDomain()),
+                                            tunnelAllowed = isTunnelAllowed(node.toDomain()),
                                         ),
                                     )
                                 }
@@ -372,7 +378,7 @@ class HomeViewModel
                             null
                         },
                 )
-            }.stateIn(
+            }.flowOn(Dispatchers.Default).stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
                 // Seed with the live state — Idle would flash "Disconnected" for a

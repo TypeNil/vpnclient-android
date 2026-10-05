@@ -138,7 +138,11 @@ class ConnectionManagerTest {
         val selected = MutableStateFlow<String?>(null)
         var summaries = mapOf<String, NodeSummary>()
         var blockedIds = emptySet<String>()
-        override suspend fun isSelectionAllowed(id: String): Boolean = id !in blockedIds
+        var selectionGate: CompletableDeferred<Unit>? = null
+        override suspend fun isSelectionAllowed(id: String): Boolean {
+            selectionGate?.await()
+            return id !in blockedIds
+        }
 
         /** Fingerprint of the enabled set the live session compares against. */
         val enabledFingerprint = MutableStateFlow("fingerprint-a")
@@ -1853,6 +1857,24 @@ class ConnectionManagerTest {
             assertEquals(node2, (manager.state.value as VpnConnectionState.Connected).node)
             assertEquals(0, serviceControl.disconnectStarts)
         }
+
+    @Test
+    fun `policy query completing after stop cannot resurrect a selection error`() = testScope.runTest {
+        val generation = connectToRunning()
+        configProvider.blockedIds = setOf("node-2")
+        val gate = CompletableDeferred<Unit>()
+        configProvider.selectionGate = gate
+        configProvider.selected.value = "node-2"
+        runCurrent()
+        manager.disconnect()
+        runCurrent()
+        manager.onServiceStopped(generation)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(VpnConnectionState.Idle, manager.state.value)
+        assertNull(manager.selectionError.value)
+        assertTrue(engine.selections.isEmpty())
+    }
 
     @Test
     fun `unsafe live selection never switches or tears down a working tunnel`() = testScope.runTest {

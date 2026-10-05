@@ -60,6 +60,15 @@ class EncryptedConfigTest {
         assertEquals(listOf("unsafe"), tags(candidate.configJson, "auto"))
     }
 
+    @Test fun `native WireGuard type controls endpoint placement not metadata`() {
+        val wg = node("wg").let { it.copy(outboundJson = it.outboundJson.replace("\"http\"", "\"wireguard\"")) }
+        val config = compiler.build(listOf(wg), "wg", true)
+        val root = Json.parseToJsonElement(config.configJson).jsonObject
+        assertEquals("wg", root["endpoints"]!!.jsonArray.single().jsonObject["tag"]!!.jsonPrimitive.content)
+        assertEquals(listOf("wg"), tags(config.configJson, "auto"))
+        assertEquals(3, root["outbounds"]!!.jsonArray.size)
+    }
+
     @Test fun `localhost is pinned so sidecar never uses hostile network DNS`() {
         val config = compiler.build(listOf(node("local", "LOCALHOST")), "local", true)
         val outbound = Json.parseToJsonElement(config.configJson).jsonObject["outbounds"]!!.jsonArray

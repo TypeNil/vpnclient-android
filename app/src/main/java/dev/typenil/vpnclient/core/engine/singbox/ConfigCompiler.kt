@@ -165,6 +165,9 @@ class ConfigCompiler
                     }
                 }
             val nodeTags = nodes.map { it.id }
+            val (endpointNodes, outboundNodes) = nodes.partition {
+                (json.parseToJsonElement(it.outboundJson) as JsonObject)["type"] == JsonPrimitive("wireguard")
+            }
 
             val outbounds =
                 buildJsonArray {
@@ -193,7 +196,7 @@ class ConfigCompiler
                     // Outbound-shaped nodes only — WireGuard nodes compile to
                     // `endpoints[]` below (the wireguard outbound was removed in
                     // sing-box 1.13; endpoint tags are still selectable/urltestable).
-                    nodes.filter { it.protocol != ProtocolType.WIREGUARD }.forEach { node ->
+                    outboundNodes.forEach { node ->
                         add(runtimeOutbound(node))
                     }
                     addJsonObject {
@@ -201,7 +204,6 @@ class ConfigCompiler
                         put("tag", "direct")
                     }
                 }
-            val endpointNodes = nodes.filter { it.protocol == ProtocolType.WIREGUARD }
 
             val config =
                 buildJsonObject {

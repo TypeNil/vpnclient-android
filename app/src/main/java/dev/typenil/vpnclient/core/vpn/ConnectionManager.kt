@@ -842,7 +842,10 @@ class ConnectionManager
                 ) {
                     return@withLock
                 }
-                if (!configProvider.isSelectionAllowed(desired ?: return@withLock)) {
+                val allowed = configProvider.isSelectionAllowed(desired ?: return@withLock)
+                if (engine !== eng || (_state.value !is VpnConnectionState.Connected &&
+                        _state.value !is VpnConnectionState.Reconnecting)) return@withLock
+                if (!allowed) {
                     _selectionError.value = VpnError.UnencryptedTransport
                     return@withLock
                 }

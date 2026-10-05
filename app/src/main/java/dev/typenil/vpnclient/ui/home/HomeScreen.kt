@@ -109,7 +109,8 @@ fun HomeScreen(
         onOpenSubscriptions = onOpenSubscriptions,
         onOpenSettings = onOpenSettings,
         onDismissGuard = viewModel::dismissRestartGuardWarning,
-        errorMessage = ((connection as? VpnConnectionState.Error)?.error ?: ui.selectionError)?.let { errorText(it) },
+        errorMessage = (connection as? VpnConnectionState.Error)?.let { errorText(it.error) }
+            ?: ui.selectionError?.let { stringResource(R.string.home_selection_unencrypted) },
     )
     if (showPicker) {
         ServerPickerSheet(
@@ -295,8 +296,12 @@ private fun PickerRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!option.encrypted) Text(stringResource(R.string.servers_unencrypted),
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            if (!option.encrypted) {
+                Text(stringResource(R.string.servers_unencrypted),
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                Text(stringResource(if (option.tunnelAllowed) R.string.servers_local_sidecar else R.string.servers_connection_blocked),
+                    style = MaterialTheme.typography.labelSmall)
+            }
             val optionSubtitle = option.subtitle ?: option.subtitleRes?.let { stringResource(it) }
             optionSubtitle?.let {
                 Text(

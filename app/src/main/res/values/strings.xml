@@ -227,6 +227,8 @@
     <string name="home_status_failed">Connection failed</string>
     <string name="home_error_permission_denied">VPN permission denied</string>
     <string name="home_error_permission_revoked">VPN was turned off by the system or another VPN app. Tap Connect to turn it on again.</string>
+    <string name="servers_connection_blocked">Connection blocked</string>
+    <string name="home_selection_unencrypted">Selection not applied: this remote server is unencrypted. The current tunnel is unchanged.</string>
     <string name="servers_unencrypted">Unencrypted</string>
     <string name="servers_local_sidecar">Local sidecar exception</string>
     <string name="home_error_unencrypted">Unencrypted remote transports are blocked. Choose an encrypted server or a local sidecar.</string>
