@@ -150,6 +150,9 @@ interface VpnEngine {
     /** Already-redacted, memory-only warn/error tail for this engine instance. */
     fun coreLogSnapshot(): List<String> = emptyList()
 
+    /** Explicit user action; does not alter ingestion or session lifecycle. */
+    fun clearCoreLogs() = Unit
+
     /** ConnectionManager's active-state gate; screen suppression is independent. */
     suspend fun setCoreLogsEnabled(enabled: Boolean) = Unit
 

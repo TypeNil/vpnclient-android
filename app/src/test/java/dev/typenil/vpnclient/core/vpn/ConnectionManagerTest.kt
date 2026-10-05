@@ -127,7 +127,37 @@ class ConnectionManagerTest {
         manager.disconnect()
         runCurrent()
         assertFalse(engine.coreLogsEnabled)
+        engine.stop()
         manager.onServiceStopped(generation)
+        assertEquals(listOf("WARN fresh warning"), manager.coreLogSnapshot())
+        assertTrue(manager.coreLogSessionSnapshot().previousSession)
+        manager.detachEngine(generation)
+        assertEquals(1, manager.coreLogSnapshot().size)
+        oldEngine.emitCoreWarning("cannot change detached copy")
+        assertEquals(listOf("WARN fresh warning"), manager.coreLogSnapshot())
+        manager.clearCoreLogs()
+        assertTrue(manager.coreLogSnapshot().isEmpty())
+    }
+
+    @Test fun `new epoch clears retained tail while stale detach cannot replace it`() = testScope.runTest {
+        val generation = connectToRunning()
+        runCurrent()
+        engine.emitCoreWarning("old warning")
+        manager.detachEngine(generation)
+        assertEquals(listOf("WARN old warning"), manager.coreLogSnapshot())
+        manager.attachEngine(FakeEngine(), generation - 1)
+        assertEquals(1, manager.coreLogSnapshot().size)
+        engine = FakeEngine()
+        manager.attachEngine(engine, generation)
+        runCurrent()
+        assertFalse(manager.coreLogSessionSnapshot().previousSession)
+        assertTrue(manager.coreLogSnapshot().isEmpty())
+        engine.emitCoreWarning("new warning")
+        manager.detachEngine(generation - 1)
+        assertEquals(listOf("WARN new warning"), manager.coreLogSnapshot())
+        assertFalse(manager.coreLogSessionSnapshot().previousSession)
+        manager.clearCoreLogs()
+        manager.detachEngine(generation)
         assertTrue(manager.coreLogSnapshot().isEmpty())
     }
 
@@ -211,6 +241,7 @@ class ConnectionManagerTest {
         val coreLogs = dev.typenil.vpnclient.core.engine.CoreLogBuffer().apply { start(emptyList()) }
         private var logToken = -1L
         override fun coreLogSnapshot() = coreLogs.snapshot()
+        override fun clearCoreLogs() = coreLogs.clear()
         override suspend fun setCoreLogsEnabled(enabled: Boolean) {
             coreLogsEnabled = enabled
             logToken = if (enabled && statusUpdatesFlow.value) coreLogs.subscribe() else {
@@ -230,6 +261,7 @@ class ConnectionManagerTest {
 
         override suspend fun stop() {
             stopCalls++
+            coreLogs.stop()
         }
 
         override suspend fun onUnderlyingNetworkChanged() = Unit

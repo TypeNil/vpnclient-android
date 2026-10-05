@@ -3,7 +3,8 @@ package dev.typenil.vpnclient.core.common.log
 import java.util.UUID
 
 internal object DiagnosticExport {
-    fun render(app: List<String>, core: List<String>, title: String, empty: String): String = buildString {
+    fun render(app: List<String>, core: List<String>, title: String, empty: String,
+               previousSession: String? = null): String = buildString {
         appendLine("VPN Client diagnostics — sensitive data is redacted.")
         appendLine("Recent app and core logs only; no raw proxy configurations.")
         appendLine("generated: " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
@@ -12,6 +13,7 @@ internal object DiagnosticExport {
         app.forEach { appendLine(it) }
         appendLine()
         appendLine(title)
+        previousSession?.let { appendLine(it) }
         if (core.isEmpty()) appendLine(empty) else core.forEach { appendLine(it) }
     }
 }

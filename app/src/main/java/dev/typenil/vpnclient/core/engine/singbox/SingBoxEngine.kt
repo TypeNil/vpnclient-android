@@ -99,6 +99,7 @@ class SingBoxEngine(
     private val coreLogs = CoreLogBuffer()
     private var coreLogsEnabled = false
     override fun coreLogSnapshot(): List<String> = coreLogs.snapshot()
+    override fun clearCoreLogs() = coreLogs.clear()
 
     override suspend fun setCoreLogsEnabled(enabled: Boolean) {
         val stale = clientMutex.withLock {

@@ -13,10 +13,12 @@ import javax.inject.Singleton
 @Singleton
 class LogExporter @Inject constructor(private val connectionManager: ConnectionManager) {
     fun buildShareIntent(context: Context): Intent {
+        val core = connectionManager.coreLogSessionSnapshot()
         val text = DiagnosticExport.render(
-            SecureLog.ring.snapshot(), connectionManager.coreLogSnapshot(),
+            SecureLog.ring.snapshot(), core.lines,
             context.getString(R.string.diag_core_log_title),
             context.getString(R.string.diag_core_log_empty),
+            if (core.previousSession) context.getString(R.string.diag_core_log_previous) else null,
         )
         val id = DiagnosticProvider.store.publish(text)
         val uri = Uri.Builder().scheme("content").authority("${context.packageName}.diagnostics").appendPath(id).build()

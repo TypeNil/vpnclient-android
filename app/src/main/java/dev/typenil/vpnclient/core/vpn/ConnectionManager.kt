@@ -380,12 +380,20 @@ class ConnectionManager
         @Volatile private var engine: VpnEngine? = null
         private var coreLogStateJob: Job? = null
 
-        /** Read only the currently attached epoch; never retain a previous engine tail. */
-        fun coreLogSnapshot(): List<String> {
-            val epoch = engineEpoch.value
-            val current = engine ?: return emptyList()
-            val lines = current.coreLogSnapshot()
-            return if (current === engine && epoch == engineEpoch.value) lines else emptyList()
+        private var previousCoreLines: List<String> = emptyList()
+
+        data class CoreLogSnapshot(val lines: List<String>, val previousSession: Boolean)
+
+        /** Only already-redacted bounded text survives detach, never an engine/config. */
+        @Synchronized fun coreLogSessionSnapshot(): CoreLogSnapshot = engine?.let {
+            CoreLogSnapshot(it.coreLogSnapshot(), previousSession = false)
+        } ?: CoreLogSnapshot(previousCoreLines, previousSession = true)
+
+        fun coreLogSnapshot(): List<String> = coreLogSessionSnapshot().lines
+
+        @Synchronized fun clearCoreLogs() {
+            previousCoreLines = emptyList()
+            engine?.clearCoreLogs()
         }
         private var statsJob: Job? = null
         private var eventsJob: Job? = null
@@ -686,7 +694,7 @@ class ConnectionManager
          * [generation] tags the session the engine belongs to; emissions tagged
          * with a stale generation are dropped.
          */
-        fun attachEngine(
+        @Synchronized fun attachEngine(
             engine: VpnEngine,
             generation: Long,
         ) {
@@ -695,6 +703,7 @@ class ConnectionManager
                 return
             }
             healthStore.invalidate(generation, ConnectionHealthStore.RUNTIME_LEVELS, HealthReason.RuntimeInvalidated)
+            previousCoreLines = emptyList()
             this.engine = engine
             _engineEpoch.update { it + 1 }
             coreLogStateJob?.cancel()
@@ -795,8 +804,9 @@ class ConnectionManager
          * detach; a tagged call only acts when it still owns the session — a stale
          * teardown must not strip a newer session's collectors.
          */
-        fun detachEngine(generation: Long = -1L) {
+        @Synchronized fun detachEngine(generation: Long = -1L) {
             if (generation >= 0 && generation != sessionGeneration) return
+            engine?.let { previousCoreLines = it.coreLogSnapshot().takeLast(500).map { line -> line.take(512) } }
             coreLogStateJob?.cancel()
             coreLogStateJob = null
             statsJob?.cancel()

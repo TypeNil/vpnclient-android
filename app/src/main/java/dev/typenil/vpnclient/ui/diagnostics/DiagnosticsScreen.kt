@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -187,6 +188,9 @@ fun DiagnosticsScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.diag_export_log))
+            }
+            TextButton(onClick = viewModel::clearCoreLogs, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.diag_core_log_clear))
             }
             Text(
                 text = stringResource(R.string.diag_export_log_sub, LogRing.DEFAULT_CAPACITY),

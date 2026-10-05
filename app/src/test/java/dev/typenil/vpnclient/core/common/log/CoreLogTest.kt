@@ -38,6 +38,23 @@ class CoreLogTest {
         assertEquals("WARN <redacted> warning", buffer.snapshot().last())
     }
 
+    @Test fun `explicit clear works without a subscription and does not end ingestion`() {
+        val buffer = CoreLogBuffer()
+        buffer.start(listOf("retained-secret"))
+        val token = buffer.subscribe()
+        buffer.add(token, 3, "embedded-retained-secret failure")
+        buffer.stop()
+        assertEquals(listOf("WARN embedded-<redacted> failure"), buffer.snapshot())
+        buffer.clear()
+        assertTrue(buffer.snapshot().isEmpty())
+        buffer.start(emptyList())
+        val next = buffer.subscribe()
+        buffer.add(next, 3, "first")
+        buffer.clear()
+        buffer.add(next, 3, "second")
+        assertEquals(listOf("WARN second"), buffer.snapshot())
+    }
+
     @Test fun `fake subscription rejects stale callbacks pause and stopped session`() {
         val buffer = CoreLogBuffer()
         // Before start, even a subscription request cannot enable ingestion.
@@ -60,8 +77,12 @@ class CoreLogTest {
         assertEquals(3, buffer.snapshot().size)
         buffer.stop()
         buffer.add(resumed, 3, "stopped ignored")
-        assertTrue(buffer.snapshot().isEmpty())
+        buffer.clear(resumed)
+        assertEquals(3, buffer.snapshot().size)
+        buffer.stop()
+        assertEquals(3, buffer.snapshot().size)
         buffer.start(emptyList())
+        assertTrue(buffer.snapshot().isEmpty())
         val restarted = buffer.subscribe()
         buffer.add(resumed, 3, "previous engine ignored")
         buffer.add(restarted, 3, "fresh warning")

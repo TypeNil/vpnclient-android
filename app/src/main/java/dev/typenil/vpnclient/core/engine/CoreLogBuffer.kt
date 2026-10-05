@@ -14,6 +14,7 @@ class CoreLogBuffer {
 
     @Synchronized fun start(values: Collection<String>) {
         stop()
+        ring.clear()
         sensitiveValues = values.filter { it.isNotBlank() }.distinct()
         running = true
     }
@@ -37,8 +38,9 @@ class CoreLogBuffer {
         pause()
         running = false
         sensitiveValues = emptyList()
-        ring.clear()
     }
+
+    @Synchronized fun clear() = ring.clear()
 
     @Synchronized fun clear(token: Long) {
         if (subscribed && token == epoch) ring.clear()

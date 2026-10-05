@@ -88,6 +88,8 @@ class DiagnosticsViewModel
                 initialValue = DiagnosticsUiState(connection = connectionManager.state.value),
             )
 
+        fun clearCoreLogs() = connectionManager.clearCoreLogs()
+
         /** Run the app-HTTP IP echo probe — its route stays unverified. One at
          *  a time: a new tap while a probe is in flight is ignored rather than
          *  stacking requests. */

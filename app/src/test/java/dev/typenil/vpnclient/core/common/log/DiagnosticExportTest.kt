@@ -12,6 +12,13 @@ class DiagnosticExportTest {
         assertFalse(empty.contains("null"))
     }
 
+    @Test fun `previous session label accompanies retained lines only when supplied`() {
+        val previous = DiagnosticExport.render(emptyList(), listOf("WARN retained"), "Core", "Empty", "Previous session")
+        assertTrue(previous.contains("Core\nPrevious session\nWARN retained"))
+        val current = DiagnosticExport.render(emptyList(), listOf("WARN current"), "Core", "Empty")
+        assertFalse(current.contains("Previous session"))
+    }
+
     @Test fun `memory share is isolated from previous grants and caller mutation`() {
         val store = DiagnosticShareStore()
         val first = store.publish("first")
