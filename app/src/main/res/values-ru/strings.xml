@@ -227,6 +227,7 @@
     <string name="home_status_failed">Не удалось подключиться</string>
     <string name="home_error_permission_denied">Разрешение VPN отклонено</string>
     <string name="home_error_permission_revoked">VPN отключён системой или другим VPN-приложением. Нажмите «Подключить», чтобы включить снова.</string>
+    <string name="home_error_unencrypted">Нешифрованные удалённые соединения запрещены. Выберите сервер с шифрованием или локальный sidecar.</string>
     <string name="home_error_no_node">Сервер не выбран — выберите его на вкладке «Серверы»</string>
     <string name="home_error_config">Неверная конфигурация: %1$s</string>
     <string name="home_error_engine">Сбой ядра VPN: %1$s</string>

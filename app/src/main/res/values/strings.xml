@@ -227,6 +227,7 @@
     <string name="home_status_failed">Connection failed</string>
     <string name="home_error_permission_denied">VPN permission denied</string>
     <string name="home_error_permission_revoked">VPN was turned off by the system or another VPN app. Tap Connect to turn it on again.</string>
+    <string name="home_error_unencrypted">Unencrypted remote transports are blocked. Choose an encrypted server or a local sidecar.</string>
     <string name="home_error_no_node">No server selected — pick one in Servers</string>
     <string name="home_error_config">Invalid configuration: %1$s</string>
     <string name="home_error_engine">VPN core failed: %1$s</string>

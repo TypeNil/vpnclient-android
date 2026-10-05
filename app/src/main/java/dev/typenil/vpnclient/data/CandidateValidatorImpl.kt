@@ -28,10 +28,8 @@ class CandidateValidatorImpl @Inject constructor(
             // Validate the config the user would actually run — the active
             // route mode with its local rule sets, not a default ALL.
             val routeMode = settings.routeMode.first()
-            compiler.compile(
+            compiler.validateCandidates(
                 nodes = nodes,
-                selectedNodeId = null,
-                ipv6Enabled = true,
                 routeMode = routeMode,
                 ruleSetPaths = ruleSetStore.ensureReady(routeMode),
             )

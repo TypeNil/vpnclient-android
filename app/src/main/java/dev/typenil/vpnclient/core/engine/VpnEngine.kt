@@ -105,6 +105,7 @@ sealed interface EngineEvent {
 
 /** Engine failures mapped to typed errors. */
 sealed class EngineError : Exception() {
+    data object UnencryptedTransport : EngineError()
     data class InvalidConfig(override val message: String) : EngineError()
     data class StartFailed(override val message: String) : EngineError()
     data class CoreError(override val message: String) : EngineError()

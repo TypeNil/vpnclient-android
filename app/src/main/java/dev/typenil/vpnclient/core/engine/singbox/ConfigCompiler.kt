@@ -14,6 +14,9 @@ import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.summary
+import dev.typenil.vpnclient.core.subscription.model.isTunnelAllowed
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import io.nekohasekai.libbox.Libbox
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -69,18 +72,61 @@ class ConfigCompiler
                         dnsProfile,
                         userRules,
                     )
-                try {
-                    Libbox.checkConfig(compiled.configJson)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    throw EngineError.InvalidConfig(e.message ?: "invalid config")
-                }
+                checkNative(compiled)
                 compiled
             }
 
         /** Pure JSON construction — JVM-testable (no native calls). */
         fun build(
+            nodes: List<ProxyNode>,
+            selectedNodeId: String?,
+            ipv6Enabled: Boolean,
+            routeMode: RouteMode = RouteMode.ALL,
+            underlayIpv6: Boolean = true,
+            ruleSetPaths: Map<String, String> = emptyMap(),
+            selectAuto: Boolean = false,
+            bypassLan: Boolean = false,
+            dnsProfile: DnsProfile = DnsProfile(DnsMode.POLICY, DnsUpstream.Cloudflare),
+            userRules: List<RoutingRule> = emptyList(),
+        ): EngineConfig {
+            require(nodes.isNotEmpty()) { "no nodes to compile" }
+            if (selectedNodeId != null && !selectAuto) {
+                val selected = nodes.firstOrNull { it.id == selectedNodeId }
+                    ?: throw EngineError.InvalidConfig("selected node no longer exists")
+                if (!isTunnelAllowed(selected)) throw EngineError.UnencryptedTransport
+            }
+            val allowed = nodes.filter(::isTunnelAllowed)
+            if (allowed.isEmpty()) throw EngineError.UnencryptedTransport
+            return assemble(allowed, selectedNodeId, ipv6Enabled, routeMode, underlayIpv6,
+                ruleSetPaths, selectAuto, bypassLan, dnsProfile, userRules)
+        }
+
+        /** Import validation keeps every candidate; never used for a running tunnel. */
+        suspend fun validateCandidates(
+            nodes: List<ProxyNode>,
+            routeMode: RouteMode,
+            ruleSetPaths: Map<String, String>,
+        ) = withContext(Dispatchers.IO) {
+            checkNative(buildCandidate(nodes, routeMode, ruleSetPaths))
+        }
+
+        internal fun buildCandidate(
+            nodes: List<ProxyNode>,
+            routeMode: RouteMode = RouteMode.ALL,
+            ruleSetPaths: Map<String, String> = emptyMap(),
+        ): EngineConfig = assemble(nodes, null, true, routeMode, ruleSetPaths = ruleSetPaths)
+
+        private fun checkNative(config: EngineConfig) {
+            try {
+                Libbox.checkConfig(config.configJson)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                throw EngineError.InvalidConfig("config rejected")
+            }
+        }
+
+        private fun assemble(
             nodes: List<ProxyNode>,
             selectedNodeId: String?,
             ipv6Enabled: Boolean,
@@ -148,7 +194,7 @@ class ConfigCompiler
                     // `endpoints[]` below (the wireguard outbound was removed in
                     // sing-box 1.13; endpoint tags are still selectable/urltestable).
                     nodes.filter { it.protocol != ProtocolType.WIREGUARD }.forEach { node ->
-                        add(json.parseToJsonElement(node.outboundJson))
+                        add(runtimeOutbound(node))
                     }
                     addJsonObject {
                         put("type", "direct")
@@ -433,6 +479,15 @@ class ConfigCompiler
                 bypassLan = bypassLan,
                 dnsProfile = dnsProfile,
             )
+        }
+
+        private fun runtimeOutbound(node: ProxyNode): JsonObject {
+            val outbound = json.parseToJsonElement(node.outboundJson) as JsonObject
+            // localhost must never be sent to network DNS under the sidecar exception.
+            val server = outbound["server"] as? JsonPrimitive
+            return if (server?.isString == true && server.content.equals("localhost", true)) {
+                JsonObject(outbound + ("server" to JsonPrimitive("127.0.0.1")))
+            } else outbound
         }
 
         companion object {

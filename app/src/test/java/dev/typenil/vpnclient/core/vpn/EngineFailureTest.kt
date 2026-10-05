@@ -11,6 +11,11 @@ import org.junit.Test
  */
 class EngineFailureTest {
     @Test
+    fun `unencrypted transport failure stays typed`() {
+        assertEquals(VpnError.UnencryptedTransport, engineFailure(EngineError.UnencryptedTransport, "fallback"))
+    }
+
+    @Test
     fun `an engine error keeps its typed kind`() {
         assertEquals(
             VpnError.ConfigInvalid("bad outbound"),

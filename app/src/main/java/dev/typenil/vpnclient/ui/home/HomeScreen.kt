@@ -131,6 +131,7 @@ private fun errorText(error: VpnError): String =
         VpnError.PermissionDenied -> stringResource(R.string.home_error_permission_denied)
         VpnError.PermissionRevoked -> stringResource(R.string.home_error_permission_revoked)
         VpnError.NoNodeSelected -> stringResource(R.string.home_error_no_node)
+        VpnError.UnencryptedTransport -> stringResource(R.string.home_error_unencrypted)
         is VpnError.ConfigInvalid -> stringResource(R.string.home_error_config, error.detail)
         is VpnError.EngineFailed -> stringResource(R.string.home_error_engine, error.detail)
         is VpnError.TunnelFailed -> stringResource(R.string.home_error_tunnel, error.detail)

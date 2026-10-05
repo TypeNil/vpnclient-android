@@ -32,7 +32,7 @@ class ConfigCompilerTest {
         protocol = ProtocolType.VLESS,
         server = "example.com",
         port = 443,
-        outboundJson = """{"type":"vless","tag":"$id","server":"example.com","server_port":443,"uuid":"u"}""",
+        outboundJson = """{"type":"vless","tag":"$id","server":"example.com","server_port":443,"uuid":"u","tls":{"enabled":true}}""",
         rawUri = null,
     )
 
