@@ -114,6 +114,8 @@ class ServersViewModelTest {
 
         override val selectedNodeId: Flow<String?> get() = selected
 
+        override suspend fun isSelectionAllowed(id: String): Boolean = true
+
         override suspend fun nodeSummary(id: String): NodeSummary? = null
 
         override val enabledNodeSetFingerprint: Flow<String> = MutableStateFlow("fp")

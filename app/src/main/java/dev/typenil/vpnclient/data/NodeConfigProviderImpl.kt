@@ -12,6 +12,7 @@ import dev.typenil.vpnclient.core.subscription.model.NodeSummary
 import dev.typenil.vpnclient.core.subscription.model.ProtocolType
 import dev.typenil.vpnclient.core.subscription.model.ProxyNode
 import dev.typenil.vpnclient.core.subscription.model.summary
+import dev.typenil.vpnclient.core.subscription.model.isTunnelAllowed
 import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodeEntity
@@ -105,6 +106,14 @@ class NodeConfigProviderImpl
                 ConfigCompiler.AUTO_NODE_SUMMARY
             } else {
                 nodeDao.get(id)?.toDomain()?.summary()
+            }
+
+        override suspend fun isSelectionAllowed(id: String): Boolean =
+            if (id == NodeSelection.AUTO_ID) {
+                nodeDao.getUsable().any { isTunnelAllowed(it.toDomain()) }
+            } else {
+                // Missing nodes retain the compiler's existing stale-selection handling.
+                nodeDao.get(id)?.let { isTunnelAllowed(it.toDomain()) } ?: true
             }
 
         override suspend fun compileSelected(): EngineConfig? {

@@ -99,6 +99,9 @@ interface NodeConfigProvider {
     /** Display summary for a node id, or null when the node is gone. */
     suspend fun nodeSummary(id: String): NodeSummary?
 
+    /** Check policy before a live switch, which does not pass through compilation. */
+    suspend fun isSelectionAllowed(id: String): Boolean
+
     /**
      * Fingerprint of the enabled node set's tunnel-relevant content. Changes
      * whenever the compiled outbound list would change — the signal a live
@@ -153,6 +156,9 @@ class ConnectionManager
 
         private val _state = MutableStateFlow<VpnConnectionState>(VpnConnectionState.Idle)
         val state: StateFlow<VpnConnectionState> = _state
+        private val _selectionError = MutableStateFlow<VpnError?>(null)
+        /** A rejected pick is not a terminal failure of the existing live tunnel. */
+        val selectionError: StateFlow<VpnError?> = _selectionError
 
         private var postStartJob: Job? = null
         private var postStartTokens: List<HealthEvidenceToken> = emptyList()
@@ -830,14 +836,19 @@ class ConnectionManager
             selectionMutex.withLock {
                 val eng = engine ?: return@withLock
                 val desired = configProvider.selectedNodeId.first()
-                if (desired != sessionNode?.id) {
-                    healthStore.invalidate(sessionGeneration, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
-                }
                 val selection = NodeSelection.fromId(desired) ?: return@withLock
                 if (_state.value !is VpnConnectionState.Connected &&
                     _state.value !is VpnConnectionState.Reconnecting
                 ) {
                     return@withLock
+                }
+                if (!configProvider.isSelectionAllowed(desired ?: return@withLock)) {
+                    _selectionError.value = VpnError.UnencryptedTransport
+                    return@withLock
+                }
+                _selectionError.value = null
+                if (desired != sessionNode?.id) {
+                    healthStore.invalidate(sessionGeneration, ConnectionHealthStore.PATH_LEVELS, HealthReason.PathChanged)
                 }
                 // The outbound the pick resolves to: a node id, or the urltest
                 // group's tag when the user picked Auto.
@@ -1495,6 +1506,9 @@ class ConnectionManager
             }
             val reason = (next as? VpnConnectionState.Reconnecting)?.reason?.name?.let { "($it)" } ?: ""
             SecureLog.d(TAG, "state ${state.value.javaClass.simpleName} -> ${next.javaClass.simpleName}$reason")
+            if (next !is VpnConnectionState.Connected && next !is VpnConnectionState.Reconnecting) {
+                _selectionError.value = null
+            }
             _state.value = next
         }
 

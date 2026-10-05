@@ -253,6 +253,8 @@ class FakeNodeConfigProvider(
 
     override val selectedNodeId: Flow<String?> get() = selected
 
+    override suspend fun isSelectionAllowed(id: String): Boolean = true
+
     override suspend fun nodeSummary(id: String): NodeSummary? = summaries[id] ?: defaultConfig().node.takeIf { it.id == id }
 
     override val enabledNodeSetFingerprint: Flow<String> get() = enabledFingerprint

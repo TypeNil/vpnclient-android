@@ -137,6 +137,8 @@ class ConnectionManagerTest {
     ) : NodeConfigProvider {
         val selected = MutableStateFlow<String?>(null)
         var summaries = mapOf<String, NodeSummary>()
+        var blockedIds = emptySet<String>()
+        override suspend fun isSelectionAllowed(id: String): Boolean = id !in blockedIds
 
         /** Fingerprint of the enabled set the live session compares against. */
         val enabledFingerprint = MutableStateFlow("fingerprint-a")
@@ -1851,6 +1853,22 @@ class ConnectionManagerTest {
             assertEquals(node2, (manager.state.value as VpnConnectionState.Connected).node)
             assertEquals(0, serviceControl.disconnectStarts)
         }
+
+    @Test
+    fun `unsafe live selection never switches or tears down a working tunnel`() = testScope.runTest {
+        connectToRunning()
+        engine.groupsFlow.value = listOf(proxyGroup(selected = "node-1"))
+        configProvider.blockedIds = setOf("node-2")
+        configProvider.selected.value = "node-2"
+        advanceUntilIdle()
+        assertTrue(engine.selections.isEmpty())
+        assertEquals(0, serviceControl.disconnectStarts)
+        assertEquals("node-1", (manager.state.value as VpnConnectionState.Connected).node.id)
+        assertEquals(VpnError.UnencryptedTransport, manager.selectionError.value)
+        configProvider.selected.value = "node-1"
+        advanceUntilIdle()
+        assertNull(manager.selectionError.value)
+    }
 
     @Test
     fun `selection change live-switches the engine and updates the shown node`() =
