@@ -80,7 +80,7 @@ is outside this policy's guarantee.
 Native-invalid imports still reject the whole candidate, including missing
 mandatory QUIC TLS. Runtime marking is not permission to bypass validation.
 VMess default verified in sing-box v1.14.1 `protocol/vmess/outbound.go`;
-SS methods: https://sing-box.sagernet.org/configuration/outbound/shadowsocks/.
+SS methods verified in official sing-box documentation, outbound/shadowsocks.
 Legacy supported SS ciphers still encrypt, but do not imply integrity/security.
 
 JVM matrix covers every supported row, malformed/unknown types, TLS/Reality,
