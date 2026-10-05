@@ -41,6 +41,7 @@ the network may be stranded. A manual start already shows an Error in the UI: no
 | superseded by a connect, live session owns it, stop/destroy raced | never: the newer owner decides |
 | onRevoke, rebuild failure, node set emptied | never: a running session ended, not a start |
 | BootReceiver: desired but consent missing | VpnPermission |
+| BootReceiver: startForegroundService throws | StartFailed |
 | manual connect, any failure | never: UI Error / selectionError |
 
 ## WP-8g log follow-ups

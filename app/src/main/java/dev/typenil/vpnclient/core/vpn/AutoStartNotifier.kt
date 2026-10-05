@@ -52,6 +52,8 @@ internal fun AutoStartNotice.textRes(): Int = when (this) {
 /** Posts on the existing alerts channel with the shared alert id, so a newer notice replaces the old one. */
 internal class AndroidNoticeSink(private val context: Context) : NoticeSink {
     override fun post(notice: AutoStartNotice): Boolean {
+        // areNotificationsEnabled also covers an app-level block on every API level.
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
