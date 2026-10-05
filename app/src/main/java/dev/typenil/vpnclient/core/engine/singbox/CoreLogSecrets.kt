@@ -11,16 +11,18 @@ import kotlinx.serialization.json.JsonPrimitive
 internal fun coreLogSecrets(config: EngineConfig): List<String> = buildList {
     add(config.node.name)
     add(config.node.server)
-    fun visit(value: JsonElement, sensitive: Boolean = false) {
+    fun visit(value: JsonElement, sensitive: Boolean = false, context: Boolean = false) {
         when (value) {
             is JsonObject -> value.forEach { (key, child) ->
-                visit(child, key in setOf(
+                visit(child, sensitive || key in setOf(
                     "server", "server_name", "password", "uuid", "token", "auth", "auth_str",
                     "public_key", "private_key", "pre_shared_key", "short_id", "username",
-                ))
+                ), context || key in setOf("path", "service_name", "host", "headers"))
             }
-            is JsonArray -> value.forEach { visit(it, sensitive) }
-            is JsonPrimitive -> if (sensitive && value.isString) add(value.content)
+            is JsonArray -> value.forEach { visit(it, sensitive, context) }
+            // Only new context has a minimum: existing short credentials stay protected.
+            is JsonPrimitive -> if (value.isString &&
+                (sensitive || (context && value.content.trim().length >= 4))) add(value.content)
         }
     }
     visit(Json.parseToJsonElement(config.configJson))
