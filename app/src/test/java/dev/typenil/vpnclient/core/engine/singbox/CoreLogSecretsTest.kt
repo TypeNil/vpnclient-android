@@ -39,6 +39,7 @@ class CoreLogSecretsTest {
         val secrets = coreLogSecrets(config)
         listOf("/", "a", "ab", "abc", "", "   ", "  x  ").forEach { assertFalse(it in secrets) }
         assertTrue("  abcd  " in secrets)
+        assertTrue("abcd" in secrets)
         val line = "a path / abc refused a handshake"
         assertEquals(line, Redactor.redactCore(line, secrets))
     }

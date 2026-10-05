@@ -388,7 +388,7 @@ class ConnectionManager
         /** Only already-redacted bounded text survives detach, never an engine/config. */
         @Synchronized fun coreLogSessionSnapshot(): CoreLogSnapshot = engine?.let {
             CoreLogSnapshot(it.coreLogSnapshot(), previousSession = false)
-        } ?: CoreLogSnapshot(previousCoreLines, previousSession = true)
+        } ?: CoreLogSnapshot(previousCoreLines, previousSession = previousCoreLines.isNotEmpty())
 
         fun coreLogSnapshot(): List<String> = coreLogSessionSnapshot().lines
 

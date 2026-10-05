@@ -22,7 +22,11 @@ internal fun coreLogSecrets(config: EngineConfig): List<String> = buildList {
             is JsonArray -> value.forEach { visit(it, sensitive, context) }
             // Only new context has a minimum: existing short credentials stay protected.
             is JsonPrimitive -> if (value.isString &&
-                (sensitive || (context && value.content.trim().length >= 4))) add(value.content)
+                (sensitive || (context && value.content.trim().length >= 4))) {
+                add(value.content)
+                // Logs usually print the value without surrounding whitespace.
+                value.content.trim().takeIf { it.length >= 4 }?.let(::add)
+            }
         }
     }
     visit(Json.parseToJsonElement(config.configJson))

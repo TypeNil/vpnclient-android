@@ -50,8 +50,13 @@ class CoreLogBuffer {
     @Synchronized fun add(token: Long, level: Int, message: String) {
         if (!subscribed || token != epoch || level !in 0..3) return
         val label = listOf("PANIC", "FATAL", "ERROR", "WARN")[level]
-        ring.add(("$label " + Redactor.redactCore(message, sensitiveValues)).take(512))
+        ring.add(("$label " + Redactor.redactCore(message.replace(terminal, ""), sensitiveValues)).take(512))
     }
 
     @Synchronized fun snapshot(): List<String> = ring.snapshot()
+
+    private companion object {
+        /** Native colour escapes and other control chars are noise (and could split a secret). */
+        val terminal = Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]|[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]")
+    }
 }

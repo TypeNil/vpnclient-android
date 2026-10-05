@@ -38,6 +38,13 @@ class CoreLogTest {
         assertEquals("WARN <redacted> warning", buffer.snapshot().last())
     }
 
+    @Test fun `terminal escapes and control characters are stripped before redaction`() {
+        val buffer = CoreLogBuffer()
+        buffer.start(listOf("split-secret"))
+        buffer.add(buffer.subscribe(), 2, "\u001B[31mERROR\u001B[0m[0000] split-\u0007secret refused")
+        assertEquals(listOf("ERROR ERROR[0000] <redacted> refused"), buffer.snapshot())
+    }
+
     @Test fun `explicit clear works without a subscription and does not end ingestion`() {
         val buffer = CoreLogBuffer()
         buffer.start(listOf("retained-secret"))

@@ -140,6 +140,7 @@ class ConnectionManagerTest {
         assertEquals(listOf("WARN fresh warning"), manager.coreLogSnapshot())
         manager.clearCoreLogs()
         assertTrue(manager.coreLogSnapshot().isEmpty())
+        assertFalse(manager.coreLogSessionSnapshot().previousSession)
     }
 
     @Test fun `new epoch clears retained tail while stale detach cannot replace it`() = testScope.runTest {
