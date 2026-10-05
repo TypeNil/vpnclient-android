@@ -109,7 +109,7 @@ fun HomeScreen(
         onOpenSubscriptions = onOpenSubscriptions,
         onOpenSettings = onOpenSettings,
         onDismissGuard = viewModel::dismissRestartGuardWarning,
-        errorMessage = (connection as? VpnConnectionState.Error)?.let { errorText(it.error) },
+        errorMessage = ((connection as? VpnConnectionState.Error)?.error ?: ui.selectionError)?.let { errorText(it) },
     )
     if (showPicker) {
         ServerPickerSheet(
@@ -295,6 +295,8 @@ private fun PickerRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (!option.encrypted) Text(stringResource(R.string.servers_unencrypted),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
             val optionSubtitle = option.subtitle ?: option.subtitleRes?.let { stringResource(it) }
             optionSubtitle?.let {
                 Text(
@@ -401,7 +403,8 @@ internal fun SessionDetailsSheet(
             DetailRow(stringResource(R.string.common_vpn_core), CORE_VERSION)
             // Most recent Error seen this process — historical context, not
             // live state, so it renders even when the session is healthy.
-            details?.lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
+            val lastError = details?.lastErrorRes?.let { stringResource(it) } ?: details?.lastError
+            lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
         }
     }
 }

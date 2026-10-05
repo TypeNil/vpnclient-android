@@ -684,6 +684,12 @@ private fun ServerCard(
                     )
                 }
             }
+            if (!node.encrypted) {
+                Text(stringResource(R.string.servers_unencrypted),
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                if (node.tunnelAllowed) Text(stringResource(R.string.servers_local_sidecar),
+                    style = MaterialTheme.typography.labelSmall)
+            }
             if (!node.enabled) {
                 Text(
                     stringResource(R.string.servers_disabled_label),
@@ -793,6 +799,11 @@ private fun NodeTlsDialog(
                             },
                         ),
                 )
+                if (!node.encrypted) {
+                    Text(stringResource(R.string.servers_unencrypted), color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(if (node.tunnelAllowed) R.string.servers_local_sidecar
+                        else R.string.home_error_unencrypted))
+                }
                 if (tls.insecure) {
                     TlsDetailRow(
                         label = stringResource(R.string.servers_tls_insecure_row),

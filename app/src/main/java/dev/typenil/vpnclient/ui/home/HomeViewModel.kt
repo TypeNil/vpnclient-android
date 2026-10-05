@@ -11,6 +11,9 @@ import dev.typenil.vpnclient.core.engine.freshDelayMs
 import dev.typenil.vpnclient.core.engine.pickBestLatency
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
+import dev.typenil.vpnclient.core.subscription.model.isEncrypted
+import dev.typenil.vpnclient.core.vpn.VpnError
+import dev.typenil.vpnclient.data.toDomain
 import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.PerAppMode
@@ -66,6 +69,7 @@ data class HomeUiState(
     val serverOptions: List<ServerOption> = emptyList(),
     /** The persisted pick — used to mark the current option in the sheet. */
     val selectedOptionId: String? = null,
+    val selectionError: VpnError? = null,
 )
 
 /** One row in the Home server picker. [id] is the raw `selected_node_id`
@@ -83,6 +87,7 @@ data class ServerOption(
     @param:StringRes val subtitleRes: Int? = null,
     /** Host + name text the search matches; falls back to the Auto tag. */
     val searchText: String? = title,
+    val encrypted: Boolean = true,
 )
 
 /** Sheet payload — assembled per state emission so it stays in lockstep
@@ -106,6 +111,7 @@ data class SessionDetails(
     /** Message of the most recent Error state this process observed —
      *  shown as history context, never presented as live state. */
     val lastError: String?,
+    @param:StringRes val lastErrorRes: Int? = null,
 )
 
 @HiltViewModel
@@ -121,13 +127,13 @@ class HomeViewModel
     ) : ViewModel() {
         /** The last terminal error the state machine published this process —
          *  the cheapest honest source for the sheet's "last error" row. */
-        private val lastErrorMessage = MutableStateFlow<String?>(null)
+        private val lastErrorMessage = MutableStateFlow<VpnError?>(null)
 
         init {
             viewModelScope.launch {
                 connectionManager.state.collect { state ->
                     if (state is VpnConnectionState.Error) {
-                        lastErrorMessage.value = state.error.message
+                        lastErrorMessage.value = state.error
                     }
                 }
             }
@@ -160,6 +166,7 @@ class HomeViewModel
                 nodePreferenceDao.observeAll(),
                 settings.dnsProfile,
                 clockTicks,
+                connectionManager.selectionError,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -180,7 +187,7 @@ class HomeViewModel
                 val perAppPackages = perAppPolicy.second
                 val routeMode = values[7] as RouteMode
                 val underlay = values[8] as UnderlyingTransport
-                val lastError = values[9] as String?
+                val lastError = values[9] as VpnError?
                 val appliedConfig = values[10] as AppliedSessionConfig?
 
                 @Suppress("UNCHECKED_CAST")
@@ -227,6 +234,7 @@ class HomeViewModel
 
                 HomeUiState(
                     connection = connection,
+                    selectionError = values[14] as VpnError?,
                     // Auto resolves to a member only at the engine; the UI keeps
                     // the mode label stable and reports a measured winner separately.
                     // Custom name applies to the header too — same presentation
@@ -285,6 +293,7 @@ class HomeViewModel
                                             // for a specific server usually
                                             // knows its address, not its name.
                                             searchText = "${node.name} ${node.server}",
+                                            encrypted = isEncrypted(node.toDomain()),
                                         ),
                                     )
                                 }
@@ -355,7 +364,9 @@ class HomeViewModel
                                         }
                                     },
                                 underlay = underlay,
-                                lastError = lastError,
+                                lastError = lastError?.message,
+                                lastErrorRes = if (lastError == VpnError.UnencryptedTransport)
+                                    R.string.home_error_unencrypted else null,
                             )
                         } else {
                             null
