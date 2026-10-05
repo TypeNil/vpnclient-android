@@ -75,6 +75,18 @@ data class HomeUiState(
     val selectionError: VpnError? = null,
 )
 
+/** A rejected desired pick must not relabel the still-running server card. */
+internal fun HomeUiState.withAppliedServerOnRejection(): HomeUiState {
+    if (selectionError == null) return this
+    val node = when (val state = connection) {
+        is VpnConnectionState.Connected -> state.node
+        is VpnConnectionState.Reconnecting -> state.node
+        else -> return this
+    }
+    return copy(selectedNodeName = node.name, selectedNodeProtocol = node.protocol.label,
+        autoSelected = node.id == NodeSelection.AUTO_ID, selectedDelayMs = null)
+}
+
 /** One row in the Home server picker. [id] is the raw `selected_node_id`
  *  value to persist — [NodeSelection.AUTO_ID] for the Auto row. [searchText]
  *  carries the fields the picker's search matches (name + host) without

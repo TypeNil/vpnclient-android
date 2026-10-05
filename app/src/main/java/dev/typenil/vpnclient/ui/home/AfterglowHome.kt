@@ -137,7 +137,7 @@ internal fun AfterglowHomeContent(
             Spacer(Modifier.height(18.dp))
             // Selected server + routing and live stats carry the session —
             // shortcuts trail them instead of pushing them below the fold.
-            ServerAndRouting(ui, onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
+            ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
                 SessionStats(state, onOpenConnections, onOpenDetails)
             }
