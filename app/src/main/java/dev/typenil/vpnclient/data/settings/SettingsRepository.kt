@@ -67,6 +67,7 @@ class SettingsRepository
 
             /** Opt-in: pause the core in Doze (drops open TCP connections). */
             val DOZE_POWER_SAVE = booleanPreferencesKey("doze_power_save")
+            val BATTERY_HINT_DISMISSED = booleanPreferencesKey("battery_hint_dismissed")
 
             /** Crash-loop guard: start of the current counting window (epoch ms). */
             val VPN_RESTART_WINDOW_START = longPreferencesKey("vpn_restart_window_start")
@@ -295,6 +296,17 @@ class SettingsRepository
             context.settingsStore.edit { it[Keys.DOZE_POWER_SAVE] = enabled }
         }
 
+        /** Read errors remain unknown: never re-show a dismissed hint on I/O failure. */
+        val batteryHintDismissed: Flow<Boolean?> =
+            context.settingsStore.data.map<androidx.datastore.preferences.core.Preferences, Boolean?> {
+                it[Keys.BATTERY_HINT_DISMISSED] ?: false
+            }
+                .catch { if (it is IOException) emit(null) else throw it }
+
+        suspend fun dismissBatteryHint() {
+            context.settingsStore.edit { persistBatteryHintDismissal(it) }
+        }
+
         /**
          * Crash-loop guard for automatic (sticky-restart / boot) tunnel starts.
          * A native crash kills the process before any catch block runs, so the
@@ -449,6 +461,10 @@ class SettingsRepository
             /** Automatic starts allowed inside one window before giving up. */
             const val RESTART_MAX_ATTEMPTS = 3
             const val RESTART_WINDOW_MS = 10 * 60 * 1000L
+
+            internal fun persistBatteryHintDismissal(prefs: MutablePreferences) {
+                prefs[Keys.BATTERY_HINT_DISMISSED] = true
+            }
 
             private val HEX32 = Regex("[0-9a-fA-F]{32}")
 
