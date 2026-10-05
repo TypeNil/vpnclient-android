@@ -807,6 +807,8 @@ class ConnectionManager
          */
         @Synchronized fun detachEngine(generation: Long = -1L) {
             if (generation >= 0 && generation != sessionGeneration) return
+            // Copied here, not read lazily: the engine ring is frozen by stop(), but a detach
+            // that precedes stop() (engine-terminated event) misses teardown lines — accepted.
             engine?.let { previousCoreLines = it.coreLogSnapshot().takeLast(500).map { line -> line.take(512) } }
             coreLogStateJob?.cancel()
             coreLogStateJob = null

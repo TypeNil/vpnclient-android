@@ -42,7 +42,21 @@ class CoreLogTest {
         val buffer = CoreLogBuffer()
         buffer.start(listOf("split-secret"))
         buffer.add(buffer.subscribe(), 2, "\u001B[31mERROR\u001B[0m[0000] split-\u0007secret refused")
-        assertEquals(listOf("ERROR ERROR[0000] <redacted> refused"), buffer.snapshot())
+        assertEquals(listOf("ERROR <redacted> refused"), buffer.snapshot())
+    }
+
+    @Test fun `native level prefix is not repeated after our own label`() {
+        val buffer = CoreLogBuffer()
+        buffer.start(emptyList())
+        val epoch = buffer.subscribe()
+        buffer.add(epoch, 2, "ERROR[0042] dial refused")
+        buffer.add(epoch, 3, "[33mWARN[0m[0001] slow")
+        buffer.add(epoch, 3, "WARN: kept, not a native prefix")
+        buffer.add(epoch, 2, "error[0001] lowercase stays")
+        assertEquals(
+            listOf("ERROR dial refused", "WARN slow", "WARN WARN: kept, not a native prefix", "ERROR error[0001] lowercase stays"),
+            buffer.snapshot(),
+        )
     }
 
     @Test fun `explicit clear works without a subscription and does not end ingestion`() {
