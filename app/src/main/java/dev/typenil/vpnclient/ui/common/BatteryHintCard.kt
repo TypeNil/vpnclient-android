@@ -40,11 +40,11 @@ internal fun openBatterySettings(context: Context): Boolean = try {
 internal fun BatteryHintCard(onDismiss: (() -> Unit)? = null, openSettings: ((Context) -> Boolean) = ::openBatterySettings) {
     val context = LocalContext.current
     var unavailable by remember { mutableStateOf(false) }
-    val body = stringResource(R.string.battery_hint_body)
     AfterglowNotice(
         NoticeTone.Info,
-        if (unavailable) body + "\n" + stringResource(R.string.battery_hint_unavailable) else body,
+        stringResource(R.string.battery_hint_body),
         title = stringResource(R.string.battery_hint_title),
+        detail = if (unavailable) stringResource(R.string.battery_hint_unavailable) else null,
         actionLabel = stringResource(R.string.battery_hint_open),
         onAction = { unavailable = !openSettings(context) },
         dismissLabel = stringResource(R.string.battery_hint_dismiss),

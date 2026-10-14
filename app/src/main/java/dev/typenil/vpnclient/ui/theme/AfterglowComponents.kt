@@ -140,7 +140,7 @@ enum class NoticeTone { Error, Warning, Info }
 
 /**
  * The one inline notice: tone icon (shape, not colour, tells the tone) + optional bold title + text,
- * at most one text action and an optional close. Targets are >= [AfterglowTokens.touchTarget].
+ * optional extra line, at most one text action and an optional close. Targets are >= [AfterglowTokens.touchTarget].
  */
 @Composable
 fun AfterglowNotice(
@@ -148,6 +148,7 @@ fun AfterglowNotice(
     text: String,
     modifier: Modifier = Modifier,
     title: String? = null,
+    detail: String? = null,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     dismissLabel: String? = null,
@@ -172,6 +173,7 @@ fun AfterglowNotice(
         Column(Modifier.weight(1f)) {
             if (title != null) Text(title, style = AfterglowType.rowCaption, fontWeight = FontWeight.Bold, color = c.ink)
             Text(text, style = AfterglowType.rowCaption, color = c.ink)
+            if (detail != null) Text(detail, style = AfterglowType.rowCaption, color = c.ink)
             if (actionLabel != null && onAction != null) {
                 TextButton(onClick = onAction, modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget)) {
                     Text(actionLabel, color = c.coral, fontWeight = FontWeight.Bold)
