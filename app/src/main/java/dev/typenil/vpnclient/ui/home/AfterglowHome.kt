@@ -68,7 +68,11 @@ import dev.typenil.vpnclient.ui.common.formatRate
 import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.uptimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.AfterglowInsetDivider
+import dev.typenil.vpnclient.ui.theme.AfterglowOverline
+import dev.typenil.vpnclient.ui.theme.AfterglowRow
 import dev.typenil.vpnclient.ui.theme.AfterglowSectionHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowType
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.StateTone
@@ -140,7 +144,7 @@ internal fun AfterglowHomeContent(
         Column(Modifier.align(Alignment.TopCenter).fillMaxHeight()
             .widthIn(max = HomeContentMaxWidth).fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = AfterglowTokens.screenPadding)
             // The transparent action overlay includes the bottom bar inset;
             // its entire measured height is reserved below the scroll content.
             .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
@@ -155,6 +159,7 @@ internal fun AfterglowHomeContent(
                 }
             }
             ConnectionHero(state.visual(), noServers, ui.selectedDelayMs, ui.healthHint, ui.selectedDelayStaleMinutes)
+            Spacer(Modifier.height(AfterglowTokens.cardGap))
             if (errorMessage != null) {
                 if (onDismissNotice != null) {
                     StatusNotice(errorMessage, onDismissNotice, false, null, stringResource(R.string.common_dismiss))
@@ -164,7 +169,7 @@ internal fun AfterglowHomeContent(
             }
             if (state == VpnConnectionState.PermissionRequired) {
                 Text(stringResource(R.string.afterglow_permission_explanation), color = colors.muted,
-                    modifier = Modifier.padding(top = 12.dp), fontSize = 14.sp)
+                    fontSize = 14.sp)
             }
             if (ui.restartGuardTripped) {
                 StatusNotice(
@@ -173,14 +178,14 @@ internal fun AfterglowHomeContent(
                 )
             }
             batteryHint()
-            Spacer(Modifier.height(18.dp))
+            if (errorMessage != null || state == VpnConnectionState.PermissionRequired || ui.restartGuardTripped) Spacer(Modifier.height(AfterglowTokens.cardGap))
             // Selected server + routing and live stats carry the session —
             // shortcuts trail them instead of pushing them below the fold.
             ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
                 SessionStats(state, onOpenConnections, onOpenDetails, statsExpanded) { statsExpanded = !statsExpanded }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(AfterglowTokens.sectionGap))
             AfterglowSectionHeader(stringResource(R.string.afterglow_quick_access),
                 Modifier.padding(start = AfterglowTokens.headerInset, bottom = AfterglowTokens.headerGap))
             if (compact) {
@@ -212,7 +217,7 @@ internal fun AfterglowHomeContent(
                 if (ui.noNodesAtAll) onAddServer else onOpenServers
             } else onConnect, onDisconnect,
                 Modifier.align(Alignment.TopCenter).widthIn(max = HomeContentMaxWidth)
-                    .fillMaxWidth().padding(horizontal = 16.dp),
+                    .fillMaxWidth().padding(horizontal = AfterglowTokens.screenPadding),
                 hasNodes = !ui.noNodesAtAll)
         }
     }
@@ -508,21 +513,53 @@ private fun ServerListBadge() {
 }
 
 @Composable
-private fun ServerBadge(modifier: Modifier = Modifier) {
+private fun ServerIcon() {
     val colors = AfterglowTheme.colors
-    Box(modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(20.dp)) {
-            // Globe: outer circle + two meridians + equator. Distinct from the
-            // horizontal-stack "server list" glyph used on the shortcut card.
-            val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round)
-            val c = Offset(size.width / 2f, size.height / 2f)
-            val r = size.minDimension / 2f - stroke.width
-            drawCircle(colors.coral, r, c, style = stroke)
-            drawOval(colors.coral, topLeft = Offset(c.x - r * .45f, c.y - r),
-                size = androidx.compose.ui.geometry.Size(r * .9f, r * 2f), style = stroke)
-            drawLine(colors.coral, Offset(c.x - r, c.y), Offset(c.x + r, c.y), strokeWidth = stroke.width)
+    Canvas(Modifier.size(AfterglowTokens.iconSize)) {
+        // Globe: outer circle + two meridians + equator. Distinct from the
+        // horizontal-stack "server list" glyph used on the shortcut card.
+        val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round)
+        val c = Offset(size.width / 2f, size.height / 2f)
+        val r = size.minDimension / 2f - stroke.width
+        drawCircle(colors.coral, r, c, style = stroke)
+        drawOval(colors.coral, topLeft = Offset(c.x - r * .45f, c.y - r),
+            size = androidx.compose.ui.geometry.Size(r * .9f, r * 2f), style = stroke)
+        drawLine(colors.coral, Offset(c.x - r, c.y), Offset(c.x + r, c.y), strokeWidth = stroke.width)
+    }
+}
+
+@Composable
+private fun RoutingIcon() {
+    val colors = AfterglowTheme.colors
+    Canvas(Modifier.size(AfterglowTokens.iconSize)) {
+        val stroke = Stroke(width = 1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val w = size.width
+        val h = size.height
+        val topPath = Path().apply {
+            // Stem from mid-left going up then turning right
+            moveTo(w * 0.18f, h * 0.55f)
+            lineTo(w * 0.18f, h * 0.32f)
+            quadraticTo(w * 0.18f, h * 0.18f, w * 0.36f, h * 0.18f)
+            lineTo(w * 0.82f, h * 0.18f)
+            // Arrowhead pointing right
+            moveTo(w * 0.64f, h * 0.05f)
+            lineTo(w * 0.84f, h * 0.18f)
+            lineTo(w * 0.64f, h * 0.31f)
         }
+        drawPath(topPath, colors.coral, style = stroke)
+
+        val bottomPath = Path().apply {
+            // Stem from mid-right going down then turning left
+            moveTo(w * 0.82f, h * 0.45f)
+            lineTo(w * 0.82f, h * 0.68f)
+            quadraticTo(w * 0.82f, h * 0.82f, w * 0.64f, h * 0.82f)
+            lineTo(w * 0.18f, h * 0.82f)
+            // Arrowhead pointing left
+            moveTo(w * 0.36f, h * 0.69f)
+            lineTo(w * 0.16f, h * 0.82f)
+            lineTo(w * 0.36f, h * 0.95f)
+        }
+        drawPath(bottomPath, colors.coral, style = stroke)
     }
 }
 
@@ -563,77 +600,28 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
     }
     val protocolLabel = if (ui.autoSelected) null else (ui.selectedNodeProtocol ?: live?.protocol?.label)
         ?.takeIf { it.isNotBlank() && !it.equals("Other", ignoreCase = true) }
-    val card = Modifier.fillMaxWidth().clip(AfterglowTokens.cardShape)
-        .border(1.dp, colors.border, AfterglowTokens.cardShape).background(colors.paperSecondary)
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(card.semantics { role = Role.Button }
-            .clickable(onClick = if (noServers) onAdd else onPick)
-            .heightIn(min = 72.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ServerBadge()
-            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(bottom = 4.dp)) {
-                    Text(stringResource(R.string.afterglow_selected_server), color = colors.muted,
-                        fontSize = 11.sp, lineHeight = 12.sp,
-                        fontWeight = FontWeight.Bold, letterSpacing = .5.sp)
-                    val modeLabel = if (ui.autoSelected) stringResource(R.string.afterglow_auto) else protocolLabel
-                    if (!noServers && modeLabel != null) Text(modeLabel,
-                        color = colors.coral, fontSize = 11.sp, lineHeight = 12.sp,
-                        fontWeight = FontWeight.Medium)
+    val modeLabel = if (ui.autoSelected) stringResource(R.string.afterglow_auto) else protocolLabel
+    AfterglowCard {
+        AfterglowRow(
+            title = title,
+            onClick = if (noServers) onAdd else onPick,
+            overline = {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    AfterglowOverline(stringResource(R.string.afterglow_selected_server))
+                    if (!noServers && modeLabel != null) Text(modeLabel, style = AfterglowType.overline, color = colors.coral)
                 }
-                Text(title, color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 17.sp,
-                    lineHeight = 22.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-            CircledChevron()
-        }
-        Row(card.semantics { role = Role.Button }
-            .clickable(onClick = onRouting).heightIn(min = 72.dp)
-            .padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Symmetrical rounded square badge matching the two-line text block height.
-            Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
-                contentAlignment = Alignment.Center) {
-                Canvas(Modifier.size(20.dp)) {
-                    val stroke = Stroke(width = 1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    val w = size.width
-                    val h = size.height
-                    val topPath = Path().apply {
-                        // Stem from mid-left going up then turning right
-                        moveTo(w * 0.18f, h * 0.55f)
-                        lineTo(w * 0.18f, h * 0.32f)
-                        quadraticTo(w * 0.18f, h * 0.18f, w * 0.36f, h * 0.18f)
-                        lineTo(w * 0.82f, h * 0.18f)
-                        // Arrowhead pointing right
-                        moveTo(w * 0.64f, h * 0.05f)
-                        lineTo(w * 0.84f, h * 0.18f)
-                        lineTo(w * 0.64f, h * 0.31f)
-                    }
-                    drawPath(topPath, colors.coral, style = stroke)
-
-                    val bottomPath = Path().apply {
-                        // Stem from mid-right going down then turning left
-                        moveTo(w * 0.82f, h * 0.45f)
-                        lineTo(w * 0.82f, h * 0.68f)
-                        quadraticTo(w * 0.82f, h * 0.82f, w * 0.64f, h * 0.82f)
-                        lineTo(w * 0.18f, h * 0.82f)
-                        // Arrowhead pointing left
-                        moveTo(w * 0.36f, h * 0.69f)
-                        lineTo(w * 0.16f, h * 0.82f)
-                        lineTo(w * 0.36f, h * 0.95f)
-                    }
-                    drawPath(bottomPath, colors.coral, style = stroke)
-                }
-            }
-            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                Text(stringResource(R.string.afterglow_routing_title).uppercase(),
-                    color = colors.muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                Text(ui.routingMode?.let { routeModeSummary(it) } ?: stringResource(R.string.common_none),
-                    color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 16.sp,
-                    modifier = Modifier.padding(top = 2.dp))
-                if (ui.routingPending) Text(stringResource(R.string.afterglow_pending), color = colors.coral, fontSize = 12.sp)
-            }
-            CircledChevron()
-        }
+            },
+            leading = { ServerIcon() },
+        )
+        AfterglowInsetDivider()
+        AfterglowRow(
+            title = ui.routingMode?.let { routeModeSummary(it) } ?: stringResource(R.string.common_none),
+            onClick = onRouting,
+            caption = if (ui.routingPending) stringResource(R.string.afterglow_pending) else null,
+            captionColor = colors.coral,
+            overline = { AfterglowOverline(stringResource(R.string.afterglow_routing_title)) },
+            leading = { RoutingIcon() },
+        )
     }
 }
 
