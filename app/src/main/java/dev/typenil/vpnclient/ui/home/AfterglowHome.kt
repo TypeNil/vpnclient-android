@@ -65,6 +65,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
+import dev.typenil.vpnclient.ui.common.BatteryHintCard
 import dev.typenil.vpnclient.ui.common.disclosureSemantics
 import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
@@ -72,12 +73,14 @@ import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.uptimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowCard
 import dev.typenil.vpnclient.ui.theme.AfterglowInsetDivider
+import dev.typenil.vpnclient.ui.theme.AfterglowNotice
 import dev.typenil.vpnclient.ui.theme.AfterglowOverline
 import dev.typenil.vpnclient.ui.theme.AfterglowRow
 import dev.typenil.vpnclient.ui.theme.AfterglowSectionHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowType
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
+import dev.typenil.vpnclient.ui.theme.NoticeTone
 import dev.typenil.vpnclient.ui.theme.StateTone
 import dev.typenil.vpnclient.ui.theme.stateColors
 import kotlinx.coroutines.delay
@@ -126,10 +129,9 @@ internal fun AfterglowHomeContent(
     onOpenSubscriptions: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onDismissGuard: () -> Unit,
-    errorMessage: String?,
-    /** Non-null when [errorMessage] is a dismissible pick rejection, not a failure. */
-    onDismissNotice: (() -> Unit)? = null,
-    batteryHint: @Composable () -> Unit = {},
+    notices: List<HomeNotice>,
+    onDismissSelection: () -> Unit = {},
+    onDismissBatteryHint: () -> Unit = {},
 ) {
     val colors = AfterglowTheme.colors
     val state = ui.connection
@@ -137,7 +139,7 @@ internal fun AfterglowHomeContent(
     // Measured, not fixed: the scroll reserve tracks the real action height
     // (+ modest gap) so large fonts can't bury the tail of the content.
     var actionHeightPx by remember { mutableIntStateOf(0) }
-    val actionReserve = with(LocalDensity.current) { actionHeightPx.toDp() } + 12.dp
+    val actionReserve = with(LocalDensity.current) { actionHeightPx.toDp() } + AfterglowTokens.cardGap
     // View-only: collapsed by default, survives rotation, never written to settings.
     var statsExpanded by rememberSaveable { mutableStateOf(false) }
     Box(modifier.fillMaxSize().background(colors.paper)) {
@@ -160,25 +162,10 @@ internal fun AfterglowHomeContent(
             }
             ConnectionHero(state.visual(), noServers, ui.selectedDelayMs, ui.healthHint, ui.selectedDelayStaleMinutes)
             Spacer(Modifier.height(AfterglowTokens.cardGap))
-            if (errorMessage != null) {
-                if (onDismissNotice != null) {
-                    StatusNotice(errorMessage, onDismissNotice, false, null, stringResource(R.string.common_dismiss))
-                } else {
-                    StatusNotice(errorMessage, onOpenDiagnostics, true, null, stringResource(R.string.afterglow_open_diagnostics))
-                }
+            notices.forEach { notice ->
+                HomeNoticeView(notice, onOpenDiagnostics, onDismissSelection, onDismissGuard, onDismissBatteryHint)
+                Spacer(Modifier.height(AfterglowTokens.cardGap))
             }
-            if (state == VpnConnectionState.PermissionRequired) {
-                Text(stringResource(R.string.afterglow_permission_explanation), color = colors.muted,
-                    fontSize = 14.sp)
-            }
-            if (ui.restartGuardTripped) {
-                StatusNotice(
-                    stringResource(R.string.home_restart_guard_text), onDismissGuard, false,
-                    stringResource(R.string.afterglow_restart_guard_title), stringResource(R.string.common_dismiss),
-                )
-            }
-            batteryHint()
-            if (errorMessage != null || state == VpnConnectionState.PermissionRequired || ui.restartGuardTripped) Spacer(Modifier.height(AfterglowTokens.cardGap))
             // Selected server + routing and live stats carry the session —
             // shortcuts trail them instead of pushing them below the fold.
             ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
@@ -533,7 +520,7 @@ private fun CircledChevron() {
     Box(Modifier.size(32.dp).border(1.dp, colors.border, CircleShape),
         contentAlignment = Alignment.Center) {
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = colors.coral, modifier = Modifier.size(20.dp))
+            tint = colors.coral, modifier = Modifier.size(AfterglowTokens.iconSize))
     }
 }
 
@@ -570,7 +557,7 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
             title = title,
             onClick = if (noServers) onAdd else onPick,
             overline = {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap), verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
                     AfterglowOverline(stringResource(R.string.afterglow_selected_server))
                     if (!noServers && modeLabel != null) Text(modeLabel, style = AfterglowType.overline, color = colors.coral)
                 }
@@ -647,8 +634,8 @@ private fun SessionStats(
             // Collapsed: the two live rates only (session time sits in the header);
             // charts, totals and technical rows stay behind "Details".
             FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.sectionGap),
+                verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
                 RateSummary(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec, true)
                 RateSummary(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec, false)
             }
@@ -657,22 +644,22 @@ private fun SessionStats(
             // widths — stack them at full width instead.
             SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
                 s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.fillMaxWidth())
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+            Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
             SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
                 s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.fillMaxWidth())
         } else {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
                 SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
                     s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.weight(1f))
-                Box(Modifier.width(1.dp).fillMaxHeight().background(colors.border))
+                Box(Modifier.width(AfterglowTokens.border).fillMaxHeight().background(colors.border))
                 SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
                     s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.weight(1f))
             }
         }
         if (expanded) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+            Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
             Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
-                .clickable(onClick = onOpenConnections).heightIn(min = 48.dp)
+                .clickable(onClick = onOpenConnections).heightIn(min = AfterglowTokens.touchTarget)
                 .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.home_stat_connections), color = colors.ink,
                     fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -689,19 +676,19 @@ private fun SessionStats(
                 }
                 CircledChevron()
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+            Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
             Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
-                .clickable(onClick = onOpenDetails).heightIn(min = 48.dp)
+                .clickable(onClick = onOpenDetails).heightIn(min = AfterglowTokens.touchTarget)
                 .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.home_details_title), color = colors.ink,
                     fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 CircledChevron()
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.border))
+        Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
         // Explicit toggle: the label names the action, the chevron shows direction.
         Row(Modifier.fillMaxWidth().disclosureSemantics(expanded)
-            .clickable(onClick = onToggle).heightIn(min = 48.dp)
+            .clickable(onClick = onToggle).heightIn(min = AfterglowTokens.touchTarget)
             .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Chevron hugs the label (not the far edge): the bar mascot perches there.
             Text(stringResource(if (expanded) R.string.home_stats_hide else R.string.home_stats_show),
@@ -805,16 +792,30 @@ private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, do
 }
 
 @Composable
-private fun StatusNotice(message: String, onClick: () -> Unit, error: Boolean, title: String?, actionLabel: String) {
-    val colors = AfterglowTheme.colors
-    Column(Modifier.fillMaxWidth().background(if (error) colors.errorSurface else colors.paperSecondary)
-        .semantics { role = Role.Button }
-        .clickable(onClick = onClick).padding(16.dp)) {
-        // A notice never repeats the hero headline ("Connection failed"): the hero
-        // names the state, the notice carries the reason and its action.
-        if (title != null) Text(title, color = colors.ink, fontWeight = FontWeight.Bold)
-        Text(message, color = colors.ink, fontSize = 14.sp, modifier = Modifier.padding(top = if (title == null) 0.dp else 4.dp))
-        Text(actionLabel,
-            color = colors.coral, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+private fun HomeNoticeView(
+    notice: HomeNotice,
+    onOpenDiagnostics: () -> Unit,
+    onDismissSelection: () -> Unit,
+    onDismissGuard: () -> Unit,
+    onDismissBatteryHint: () -> Unit,
+) {
+    val dismiss = stringResource(R.string.common_dismiss)
+    // A notice never repeats the hero headline ("Connection failed"): the hero
+    // names the state, the notice carries the reason and its action.
+    when (notice) {
+        is HomeNotice.Failure -> AfterglowNotice(
+            NoticeTone.Error, errorText(notice.error),
+            actionLabel = stringResource(R.string.afterglow_open_diagnostics), onAction = onOpenDiagnostics,
+        )
+        is HomeNotice.SelectionRejected -> AfterglowNotice(
+            NoticeTone.Warning, stringResource(R.string.home_selection_unencrypted),
+            actionLabel = dismiss, onAction = onDismissSelection,
+        )
+        HomeNotice.PermissionExplanation -> AfterglowNotice(NoticeTone.Info, stringResource(R.string.afterglow_permission_explanation))
+        HomeNotice.RestartGuard -> AfterglowNotice(
+            NoticeTone.Warning, stringResource(R.string.home_restart_guard_text),
+            title = stringResource(R.string.afterglow_restart_guard_title), actionLabel = dismiss, onAction = onDismissGuard,
+        )
+        HomeNotice.BatteryHint -> BatteryHintCard(onDismiss = onDismissBatteryHint)
     }
 }

@@ -132,17 +132,9 @@ fun HomeScreen(
         onOpenSubscriptions = onOpenSubscriptions,
         onOpenSettings = onOpenSettings,
         onDismissGuard = viewModel::dismissRestartGuardWarning,
-        batteryHint = {
-            if (batteryHintVisible && connection is VpnConnectionState.Connected) {
-                dev.typenil.vpnclient.ui.common.BatteryHintCard(onDismiss = viewModel::dismissBatteryHint)
-            }
-        },
-        errorMessage = when (val notice = ui.notice()) {
-            is HomeNotice.Failure -> errorText(notice.error)
-            is HomeNotice.SelectionRejected -> stringResource(R.string.home_selection_unencrypted)
-            null -> null
-        },
-        onDismissNotice = if (ui.notice() is HomeNotice.SelectionRejected) viewModel::dismissSelectionNotice else null,
+        notices = homeNotices(ui, batteryHintVisible),
+        onDismissSelection = viewModel::dismissSelectionNotice,
+        onDismissBatteryHint = viewModel::dismissBatteryHint,
     )
     if (showPicker) {
         ServerPickerSheet(
@@ -159,7 +151,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun errorText(error: VpnError): String =
+internal fun errorText(error: VpnError): String =
     when (error) {
         VpnError.PermissionDenied -> stringResource(R.string.home_error_permission_denied)
         VpnError.PermissionRevoked -> stringResource(R.string.home_error_permission_revoked)

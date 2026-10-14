@@ -47,7 +47,7 @@ class AfterglowHomeTest {
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
-                errorMessage = null,
+                notices = emptyList(),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -73,7 +73,7 @@ class AfterglowHomeTest {
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
-                errorMessage = null,
+                notices = emptyList(),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -99,7 +99,7 @@ class AfterglowHomeTest {
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
-                errorMessage = "VPN permission denied",
+                notices = listOf(HomeNotice.Failure(VpnError.PermissionDenied)),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -141,7 +141,7 @@ class AfterglowHomeTest {
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
-                errorMessage = null,
+                notices = emptyList(),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -184,7 +184,7 @@ class AfterglowHomeTest {
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
-                errorMessage = null,
+                notices = emptyList(),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -235,7 +235,7 @@ class AfterglowHomeTest {
                     onOpenDiagnostics = {},
                     onOpenRouting = {},
                     onDismissGuard = {},
-                    errorMessage = null,
+                    notices = emptyList(),
                 )
             }
         }
@@ -263,7 +263,7 @@ class AfterglowHomeTest {
                 onConnect = {}, onDisconnect = {}, onPick = { picks++ },
                 onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {},
-                errorMessage = null,
+                notices = emptyList(),
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext

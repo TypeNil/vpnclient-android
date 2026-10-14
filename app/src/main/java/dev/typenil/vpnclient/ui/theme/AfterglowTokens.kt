@@ -21,6 +21,7 @@ object AfterglowTokens {
     val buttonHeight = 52.dp
     val fieldHeight = 56.dp
     val rowHeight = 56.dp
+    val noticePadding = 12.dp
     val actionBarHeight = 76.dp
     val actionBarHeightCompact = 64.dp
     val actionPadding = 12.dp

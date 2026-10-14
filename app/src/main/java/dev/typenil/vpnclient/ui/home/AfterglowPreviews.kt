@@ -39,7 +39,7 @@ private fun PreviewHome(connection: VpnConnectionState, auto: Boolean = false, e
         onOpenSubscriptions = {},
         onOpenSettings = {},
         onDismissGuard = {},
-        errorMessage = if (connection is VpnConnectionState.Error) "Example connection failure" else null,
+        notices = if (connection is VpnConnectionState.Error) listOf(HomeNotice.Failure(VpnError.Unexpected("Example connection failure"))) else emptyList(),
     )
 }
 

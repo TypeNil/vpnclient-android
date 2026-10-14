@@ -14,10 +14,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 
 /** Elevated, rounded, 1 dp bordered container; rows inside own their padding. */
@@ -126,4 +134,54 @@ fun AfterglowSectionHeader(text: String, modifier: Modifier = Modifier) {
         color = AfterglowTheme.colors.coral,
         modifier = modifier.semantics { heading() },
     )
+}
+
+enum class NoticeTone { Error, Warning, Info }
+
+/**
+ * The one inline notice: tone icon (shape, not colour, tells the tone) + optional bold title + text,
+ * at most one text action and an optional close. Targets are >= [AfterglowTokens.touchTarget].
+ */
+@Composable
+fun AfterglowNotice(
+    tone: NoticeTone,
+    text: String,
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    dismissLabel: String? = null,
+    onDismiss: (() -> Unit)? = null,
+) {
+    val c = AfterglowTheme.colors
+    val (icon, tint) = when (tone) {
+        NoticeTone.Error -> Icons.Default.Warning to c.error
+        NoticeTone.Warning -> Icons.Default.Notifications to c.amber
+        NoticeTone.Info -> Icons.Default.Info to c.ink
+    }
+    val bg = if (tone == NoticeTone.Error) c.errorSurface else c.paperSecondary
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(AfterglowTokens.tileShape)
+            .background(bg)
+            .padding(AfterglowTokens.noticePadding),
+        horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.noticePadding),
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(AfterglowTokens.iconSize))
+        Column(Modifier.weight(1f)) {
+            if (title != null) Text(title, style = AfterglowType.rowCaption, fontWeight = FontWeight.Bold, color = c.ink)
+            Text(text, style = AfterglowType.rowCaption, color = c.ink)
+            if (actionLabel != null && onAction != null) {
+                TextButton(onClick = onAction, modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget)) {
+                    Text(actionLabel, color = c.coral, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        if (onDismiss != null) {
+            IconButton(onClick = onDismiss, modifier = Modifier.sizeIn(minWidth = AfterglowTokens.touchTarget, minHeight = AfterglowTokens.touchTarget)) {
+                Icon(Icons.Default.Close, dismissLabel, tint = c.muted)
+            }
+        }
+    }
 }
