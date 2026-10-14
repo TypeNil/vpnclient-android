@@ -135,9 +135,6 @@ internal fun AfterglowHomeContent(
     // (+ modest gap) so large fonts can't bury the tail of the content.
     var actionHeightPx by remember { mutableIntStateOf(0) }
     val actionReserve = with(LocalDensity.current) { actionHeightPx.toDp() } + 12.dp
-    // Fonts wide enough to crowd two columns get one stacked layout instead.
-    val compact = LocalDensity.current.fontScale > 1.3f ||
-        LocalConfiguration.current.screenWidthDp < 340
     // View-only: collapsed by default, survives rotation, never written to settings.
     var statsExpanded by rememberSaveable { mutableStateOf(false) }
     Box(modifier.fillMaxSize().background(colors.paper)) {
@@ -188,24 +185,20 @@ internal fun AfterglowHomeContent(
             Spacer(Modifier.height(AfterglowTokens.sectionGap))
             AfterglowSectionHeader(stringResource(R.string.afterglow_quick_access),
                 Modifier.padding(start = AfterglowTokens.headerInset, bottom = AfterglowTokens.headerGap))
-            if (compact) {
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ShortcutCard(R.string.nav_servers,
-                        stringResource(R.string.afterglow_servers_available,
-                            (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.fillMaxWidth())
-                    ShortcutCard(R.string.nav_subscriptions,
-                        stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
-                        false, onOpenSubscriptions, Modifier.fillMaxWidth())
-                }
-            } else {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ShortcutCard(R.string.nav_servers,
-                        stringResource(R.string.afterglow_servers_available,
-                            (ui.serverOptions.size - 1).coerceAtLeast(0)), true, onOpenServers, Modifier.weight(1f))
-                    ShortcutCard(R.string.nav_subscriptions,
-                        stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
-                        false, onOpenSubscriptions, Modifier.weight(1f))
-                }
+            AfterglowCard {
+                AfterglowRow(
+                    title = stringResource(R.string.nav_servers),
+                    onClick = onOpenServers,
+                    caption = stringResource(R.string.afterglow_servers_available, (ui.serverOptions.size - 1).coerceAtLeast(0)),
+                    leading = { ServerListIcon() },
+                )
+                AfterglowInsetDivider()
+                AfterglowRow(
+                    title = stringResource(R.string.nav_subscriptions),
+                    onClick = onOpenSubscriptions,
+                    caption = stringResource(R.string.afterglow_subscriptions_enabled, ui.enabledSubscriptionCount),
+                    leading = { SubscriptionIcon() },
+                )
             }
         }
         // Transparent, non-interactive decoration: only the action row handles
@@ -225,28 +218,6 @@ internal fun AfterglowHomeContent(
 
 /** Wide screens center the editorial column instead of stretching it. */
 private val HomeContentMaxWidth = 560.dp
-
-
-@Composable
-private fun ShortcutCard(label: Int, caption: String, server: Boolean, onClick: () -> Unit,
-    modifier: Modifier = Modifier) {
-    val colors = AfterglowTheme.colors
-    Column(modifier.heightIn(min = 92.dp).border(1.dp, colors.border)
-        .background(colors.paperSecondary)
-        .semantics { role = Role.Button }
-        .clickable(onClick = onClick)
-        .padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            if (server) ServerListBadge() else SubscriptionBadge()
-            CircledChevron()
-        }
-        Column {
-            Text(stringResource(label), color = colors.ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            Text(caption, color = colors.muted, fontSize = 11.sp, maxLines = 2,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
-        }
-    }
-}
 
 @Composable
 private fun ConnectionHero(
@@ -471,43 +442,37 @@ private fun HeroLatency(delayMs: Int?, onHero: Color, modifier: Modifier = Modif
 }
 
 @Composable
-private fun SubscriptionBadge() {
+private fun SubscriptionIcon() {
     val colors = AfterglowTheme.colors
-    Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(20.dp)) {
-            val stroke = Stroke(1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-            val outline = Path().apply {
-                moveTo(size.width * .2f, size.height * .1f)
-                lineTo(size.width * .68f, size.height * .1f)
-                lineTo(size.width * .82f, size.height * .26f)
-                lineTo(size.width * .82f, size.height * .9f)
-                lineTo(size.width * .2f, size.height * .9f)
-                close()
-            }
-            drawPath(outline, colors.coral, style = stroke)
-            drawLine(colors.coral, Offset(size.width * .32f, size.height * .52f),
-                Offset(size.width * .68f, size.height * .52f), strokeWidth = stroke.width)
-            drawLine(colors.coral, Offset(size.width * .32f, size.height * .7f),
-                Offset(size.width * .6f, size.height * .7f), strokeWidth = stroke.width)
+    Canvas(Modifier.size(AfterglowTokens.iconSize)) {
+        val stroke = Stroke(1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val outline = Path().apply {
+            moveTo(size.width * .2f, size.height * .1f)
+            lineTo(size.width * .68f, size.height * .1f)
+            lineTo(size.width * .82f, size.height * .26f)
+            lineTo(size.width * .82f, size.height * .9f)
+            lineTo(size.width * .2f, size.height * .9f)
+            close()
         }
+        drawPath(outline, colors.coral, style = stroke)
+        drawLine(colors.coral, Offset(size.width * .32f, size.height * .52f),
+            Offset(size.width * .68f, size.height * .52f), strokeWidth = stroke.width)
+        drawLine(colors.coral, Offset(size.width * .32f, size.height * .7f),
+            Offset(size.width * .6f, size.height * .7f), strokeWidth = stroke.width)
     }
 }
 
 @Composable
-private fun ServerListBadge() {
+private fun ServerListIcon() {
     val colors = AfterglowTheme.colors
-    Box(Modifier.size(38.dp).border(1.dp, colors.border, RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(20.dp)) {
-            // Stacked server rows — the list affordance for the Servers screen.
-            val stroke = 1.9.dp.toPx()
-            listOf(.28f, .5f, .72f).forEach { y ->
-                drawLine(colors.coral, Offset(size.width * .2f, size.height * y),
-                    Offset(size.width * .8f, size.height * y), strokeWidth = stroke,
-                    cap = StrokeCap.Round)
-                drawCircle(colors.coral, stroke * .8f, Offset(size.width * .2f, size.height * y))
-            }
+    Canvas(Modifier.size(AfterglowTokens.iconSize)) {
+        // Stacked server rows — the list affordance for the Servers screen.
+        val stroke = 1.9.dp.toPx()
+        listOf(.28f, .5f, .72f).forEach { y ->
+            drawLine(colors.coral, Offset(size.width * .2f, size.height * y),
+                Offset(size.width * .8f, size.height * y), strokeWidth = stroke,
+                cap = StrokeCap.Round)
+            drawCircle(colors.coral, stroke * .8f, Offset(size.width * .2f, size.height * y))
         }
     }
 }
@@ -517,7 +482,7 @@ private fun ServerIcon() {
     val colors = AfterglowTheme.colors
     Canvas(Modifier.size(AfterglowTokens.iconSize)) {
         // Globe: outer circle + two meridians + equator. Distinct from the
-        // horizontal-stack "server list" glyph used on the shortcut card.
+        // horizontal-stack "server list" glyph used in Quick access.
         val stroke = Stroke(1.75.dp.toPx(), cap = StrokeCap.Round)
         val c = Offset(size.width / 2f, size.height / 2f)
         val r = size.minDimension / 2f - stroke.width
