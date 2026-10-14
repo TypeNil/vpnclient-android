@@ -1,20 +1,11 @@
 package dev.typenil.vpnclient.ui.theme
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.FilterChip
@@ -76,23 +67,6 @@ fun AfterglowButton(
     )
 }
 
-@Composable
-fun AfterglowCard(
-    modifier: Modifier = Modifier,
-    interactive: Boolean = false,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    val c = AfterglowTheme.colors
-    Card(
-        modifier = modifier,
-        shape = AfterglowTokens.cardShape,
-        border = BorderStroke(AfterglowTokens.border, if (interactive) c.ink else c.border),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        colors = CardDefaults.cardColors(containerColor = if (interactive) c.paper else c.paperSecondary),
-    ) {
-        Column(Modifier.padding(AfterglowTokens.cardPadding)) { content() }
-    }
-}
 
 @Composable
 fun AfterglowTextField(

@@ -19,12 +19,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.typenil.vpnclient.BuildConfig
 import dev.typenil.vpnclient.R
-import dev.typenil.vpnclient.ui.home.SectionHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowSectionHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 
 @Composable
 internal fun AboutSection() {
-    SectionHeader(
+    AfterglowSectionHeader(
         stringResource(R.string.about_title),
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
     )

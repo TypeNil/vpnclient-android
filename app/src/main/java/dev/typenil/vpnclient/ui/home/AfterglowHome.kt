@@ -67,6 +67,8 @@ import dev.typenil.vpnclient.ui.common.formatBytes
 import dev.typenil.vpnclient.ui.common.formatRate
 import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.uptimeText
+import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.AfterglowSectionHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.StateTone
@@ -179,8 +181,8 @@ internal fun AfterglowHomeContent(
                 SessionStats(state, onOpenConnections, onOpenDetails, statsExpanded) { statsExpanded = !statsExpanded }
             }
             Spacer(Modifier.height(18.dp))
-            SectionHeader(stringResource(R.string.afterglow_quick_access),
-                Modifier.padding(start = 2.dp, bottom = 8.dp))
+            AfterglowSectionHeader(stringResource(R.string.afterglow_quick_access),
+                Modifier.padding(start = AfterglowTokens.headerInset, bottom = AfterglowTokens.headerGap))
             if (compact) {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ShortcutCard(R.string.nav_servers,
@@ -219,11 +221,6 @@ internal fun AfterglowHomeContent(
 /** Wide screens center the editorial column instead of stretching it. */
 private val HomeContentMaxWidth = 560.dp
 
-@Composable
-internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
-    Text(text.uppercase(), color = AfterglowTheme.colors.coral, fontWeight = FontWeight.Bold,
-        fontSize = 11.sp, letterSpacing = 1.sp, modifier = modifier.semantics { heading() })
-}
 
 @Composable
 private fun ShortcutCard(label: Int, caption: String, server: Boolean, onClick: () -> Unit,
@@ -675,10 +672,10 @@ private fun SessionStats(
         LocalConfiguration.current.screenWidthDp < 340
     // Wraps instead of squeezing: at large fonts a day-scale uptime moves
     // under the heading rather than starving it.
-    FlowRow(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
+    FlowRow(Modifier.fillMaxWidth().padding(start = AfterglowTokens.headerInset, top = AfterglowTokens.sectionGap, bottom = AfterglowTokens.headerGap),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)) {
-        SectionHeader(stringResource(R.string.afterglow_statistics))
+        AfterglowSectionHeader(stringResource(R.string.afterglow_statistics))
         // Shared uptime formatter — explicit localized units, days included,
         // never a raw 52:30:50 clock.
         Text(stringResource(R.string.afterglow_session_elapsed, uptimeText(state.since, now)),
@@ -688,7 +685,7 @@ private fun SessionStats(
     val connectionsDesc = if (s == null) "" else
         stringResource(R.string.home_stat_connections_desc, s.connectionsIn, s.connectionsOut)
     val chartSamples = if (fresh) visibleSamples else emptyList()
-    Column(Modifier.fillMaxWidth().border(1.dp, colors.border).background(colors.paperSecondary)) {
+    AfterglowCard {
         if (s == null) {
             // One compact state instead of two empty metric columns plus a
             // trailing explanation — same information, less noise.

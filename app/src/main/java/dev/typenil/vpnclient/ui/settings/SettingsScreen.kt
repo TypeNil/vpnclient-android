@@ -63,7 +63,7 @@ import dev.typenil.vpnclient.core.common.AppLanguage
 import dev.typenil.vpnclient.core.common.ThemeMode
 import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.ui.common.openBatterySettings
-import dev.typenil.vpnclient.ui.home.SectionHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowSectionHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 
 @Composable
@@ -269,7 +269,7 @@ fun SettingsScreen(
 /** Afterglow section header (same style as Home), with uniform spacing. */
 @Composable
 private fun SettingsSection(@StringRes title: Int) {
-    SectionHeader(
+    AfterglowSectionHeader(
         stringResource(title),
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
     )

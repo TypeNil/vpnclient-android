@@ -22,3 +22,11 @@ val Typography = Typography(
 
 val AfterglowTechnical = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 16.sp)
 val AfterglowNavigation = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp)
+
+/** Row/section roles shared by the Afterglow components; colour comes from the component. */
+object AfterglowType {
+    val rowTitle = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 24.sp)
+    val rowCaption = TextStyle(fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp)
+    val overline = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 10.sp, lineHeight = 14.sp, letterSpacing = 1.1.sp)
+    val sectionHeader = TextStyle(fontWeight = FontWeight.ExtraBold, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 1.1.sp)
+}
