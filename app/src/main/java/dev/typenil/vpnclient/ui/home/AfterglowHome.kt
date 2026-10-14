@@ -18,7 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -53,6 +55,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -319,22 +322,11 @@ private fun ConnectionHero(
 private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: () -> Unit, onDisconnect: () -> Unit,
     modifier: Modifier = Modifier, hasNodes: Boolean = false) {
     val colors = AfterglowTheme.colors
-    val active = state == VisualState.Connected || state == VisualState.Reconnecting
-    // Preparing is the only pre-service phase that can be cancelled: the
-    // manager aborts the compile and never starts the tunnel.
-    val cancellable = state == VisualState.Preparing
-    val enabled = noServers || active || cancellable || state == VisualState.Offline || state == VisualState.Error
-    val label = when {
-        noServers -> stringResource(if (hasNodes) R.string.nav_servers else R.string.common_add_server_cta)
-        active -> stringResource(R.string.action_disconnect)
-        state == VisualState.Offline -> stringResource(R.string.afterglow_start)
-        state == VisualState.Error -> stringResource(R.string.afterglow_retry)
-        state == VisualState.Stopping -> stringResource(R.string.home_status_disconnecting)
-        state == VisualState.Permission -> stringResource(R.string.home_status_permission)
-        cancellable -> stringResource(R.string.common_cancel)
-        else -> stringResource(R.string.home_status_connecting)
-    }
-    val accent = colors.stateColors(state.tone()).accent
+    // Content and behaviour come from the pure spec; this composable only draws it.
+    val spec = connectionActionSpec(state, noServers, hasNodes)
+    val label = stringResource(spec.labelRes)
+    val caption = spec.captionRes?.let { stringResource(it) }
+    val accent = colors.stateColors(spec.tone).accent
     // Companion face per state: idle=sad, connecting/transition=thinking,
     // error=crossed-eyes, connected=happy. The peer mascot perches on the
     // button's top edge (negative offset keeps it overlapping, not inside).
@@ -345,15 +337,7 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
         state == VisualState.Offline || state == VisualState.Stopping -> R.drawable.companion_idle
         else -> R.drawable.companion_connecting
     }
-    // Subtitle only for stable states; transitional states already name the
-    // action in the title, so a static "VPN OFF/ON" subtitle would misreport.
-    val subtitle = when {
-        noServers -> null // hero + card already say it; the title is the action
-        state == VisualState.Connected -> stringResource(R.string.afterglow_online)
-        state == VisualState.Offline -> stringResource(R.string.afterglow_offline)
-        else -> null
-    }
-    val tint = colors.stateColors(state.tone()).hero
+    val tint = colors.stateColors(spec.tone).hero
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(if (pressed) .98f else 1f,
@@ -377,43 +361,58 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
     // landscape/short heights it leaves so the CTA keeps usable viewport.
     val shortWindow = isShortWindow(LocalConfiguration.current.screenHeightDp)
     val showMascot = !shortWindow
-    Box(modifier.fillMaxWidth().padding(top = if (showMascot) 64.dp else 0.dp)
+    Box(modifier.fillMaxWidth().padding(top = if (showMascot) AfterglowTokens.mascotReserve else 0.dp)
         .graphicsLayer { scaleX = pressScale; scaleY = pressScale }) {
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+        // Grows with wrapped text at large fonts (min height, never a fixed one).
+        Row(Modifier.fillMaxWidth().clip(AfterglowTokens.barShape)
             .background(Brush.horizontalGradient(listOf(colors.actionSurface, gradientEnd)))
-            .border(1.dp, colors.onActionSurface.copy(alpha = .18f), RoundedCornerShape(12.dp))
-            .semantics { role = Role.Button }
-            .clickable(enabled = enabled, interactionSource = interaction, indication = null,
-                onClick = if ((active || cancellable) && !noServers) onDisconnect else onConnect)
-            .heightIn(min = if (shortWindow) 64.dp else 84.dp).padding(12.dp),
+            .border(AfterglowTokens.border, colors.onActionSurface.copy(alpha = .18f), AfterglowTokens.barShape)
+            // The caption is the state; the spoken label stays the action, so it is not read twice.
+            .semantics { if (caption != null) stateDescription = caption }
+            .clickable(enabled = spec.enabled, role = Role.Button, interactionSource = interaction, indication = null,
+                onClick = if (spec.tap == ActionTap.Stop) onDisconnect else onConnect)
+            .heightIn(min = if (shortWindow) AfterglowTokens.actionBarHeightCompact else AfterglowTokens.actionBarHeight)
+            .padding(AfterglowTokens.actionPadding),
             verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(if (shortWindow) 44.dp else 52.dp).clip(RoundedCornerShape(8.dp)).background(animatedAccent),
+            Box(Modifier.size(if (shortWindow) AfterglowTokens.tileSize else AfterglowTokens.actionTileSize)
+                .clip(AfterglowTokens.actionTileShape).background(animatedAccent),
                 contentAlignment = Alignment.Center) {
-                if (noServers) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-                    tint = colors.actionSurface, modifier = Modifier.size(26.dp))
-                else Canvas(Modifier.size(24.dp)) {
-                    val stroke = 2.5.dp.toPx()
-                    drawArc(colors.actionSurface, -45f, 270f, false,
-                        style = Stroke(stroke, cap = StrokeCap.Round))
-                    drawLine(colors.actionSurface, Offset(size.width / 2, size.height * .06f),
-                        Offset(size.width / 2, size.height * .53f), stroke, cap = StrokeCap.Round)
+                val glyph = Modifier.size(AfterglowTokens.actionIconSize)
+                when (spec.icon) {
+                    ActionIcon.Next -> Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                        tint = colors.actionSurface, modifier = glyph)
+                    ActionIcon.Refresh -> Icon(Icons.Default.Refresh, contentDescription = null,
+                        tint = colors.actionSurface, modifier = glyph)
+                    ActionIcon.Spinner -> CircularProgressIndicator(glyph, color = colors.actionSurface,
+                        strokeWidth = AfterglowTokens.actionStroke, trackColor = Color.Transparent)
+                    ActionIcon.Power -> Canvas(glyph) {
+                        val stroke = AfterglowTokens.actionStroke.toPx()
+                        drawArc(colors.actionSurface, -45f, 270f, false,
+                            style = Stroke(stroke, cap = StrokeCap.Round))
+                        drawLine(colors.actionSurface, Offset(size.width / 2, size.height * .06f),
+                            Offset(size.width / 2, size.height * .53f), stroke, cap = StrokeCap.Round)
+                    }
                 }
             }
-            Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.Center) {
+            Column(Modifier.weight(1f).padding(start = AfterglowTokens.actionPadding), verticalArrangement = Arrangement.Center) {
                 // Localized labels grow with font scale — three lines keeps a
                 // long CTA honest without hiding it behind the mascot strip.
-                Text(label, color = colors.onActionSurface, fontWeight = FontWeight.Black, fontSize = 19.sp,
+                Text(label, color = colors.onActionSurface, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp,
                     maxLines = 3, overflow = TextOverflow.Ellipsis)
-                Text(subtitle ?: "\u00A0", color = colors.onActionSurface.copy(alpha = .72f), fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                if (caption != null) {
+                    Text(caption, color = colors.onActionSurface.copy(alpha = .72f), fontSize = 12.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {})
+                }
             }
         }
         // Transparent sprite padding lets the paws rest just inside the edge;
         // the label column still owns the row — no in-row mascot spacer.
         if (showMascot) {
             Image(painterResource(shownFace), contentDescription = null,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = 7.dp).offset(y = (-52).dp)
-                    .height(72.dp).graphicsLayer {
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = AfterglowTokens.mascotInset)
+                    .offset(y = -AfterglowTokens.mascotLift)
+                    .height(AfterglowTokens.mascotHeight).graphicsLayer {
                         alpha = faceAlpha.value
                         scaleX = .97f + .03f * faceAlpha.value
                         scaleY = scaleX

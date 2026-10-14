@@ -21,10 +21,22 @@ object AfterglowTokens {
     val buttonHeight = 52.dp
     val fieldHeight = 56.dp
     val rowHeight = 56.dp
+    val actionBarHeight = 76.dp
+    val actionBarHeightCompact = 64.dp
+    val actionPadding = 12.dp
+    val actionTileSize = 52.dp
+    val actionIconSize = 24.dp
+    val actionStroke = 2.5.dp
+    val mascotReserve = 64.dp
+    val mascotHeight = 72.dp
+    val mascotLift = 52.dp
+    val mascotInset = 7.dp
     val chipShape = RoundedCornerShape(8.dp)
     val tileShape = RoundedCornerShape(12.dp)
     val inputShape = RoundedCornerShape(12.dp)
     val cardShape = RoundedCornerShape(16.dp)
+    val barShape = RoundedCornerShape(20.dp)
+    val actionTileShape = RoundedCornerShape(14.dp)
     val dialogShape = RoundedCornerShape(20.dp)
     val sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     const val motionFast = 150

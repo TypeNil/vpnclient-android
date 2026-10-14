@@ -191,7 +191,7 @@
     <string name="per_app_mode_all">All apps</string>
 
     <!-- Afterglow Home -->
-    <string name="afterglow_offline">VPN OFF</string>
+    <string name="afterglow_offline">VPN off</string>
     <string name="afterglow_online">VPN active</string>
     <string name="afterglow_permission">VPN PERMISSION</string>
     <string name="afterglow_auto">AUTO</string>
@@ -206,7 +206,8 @@
     <string name="afterglow_pending">CHANGES PENDING</string>
     <string name="afterglow_stats_unavailable">Session telemetry unavailable</string>
     <string name="afterglow_start">Start connection</string>
-    <string name="afterglow_retry">Retry connection</string>
+    <string name="afterglow_retry">Retry</string>
+    <string name="afterglow_error_caption">Couldn\'t connect</string>
     <string name="afterglow_no_servers_headline">No servers</string>
     <string name="afterglow_no_usable_servers">No usable servers. Check your subscriptions or server filters.</string>
     <string name="afterglow_permission_explanation">Android VPN permission is required to connect. Approve the system request to continue.</string>

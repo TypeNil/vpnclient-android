@@ -207,7 +207,8 @@
     <string name="afterglow_pending">ЕСТЬ ИЗМЕНЕНИЯ</string>
     <string name="afterglow_stats_unavailable">Статистика сеанса недоступна</string>
     <string name="afterglow_start">Подключиться</string>
-    <string name="afterglow_retry">Повторить подключение</string>
+    <string name="afterglow_retry">Повторить</string>
+    <string name="afterglow_error_caption">Не удалось подключиться</string>
     <string name="afterglow_no_servers_headline">Нет серверов</string>
     <string name="afterglow_no_usable_servers">Нет доступных серверов. Проверьте подписки или фильтры серверов.</string>
     <string name="afterglow_permission_explanation">Для подключения требуется разрешение Android на использование VPN. Подтвердите системный запрос.</string>
