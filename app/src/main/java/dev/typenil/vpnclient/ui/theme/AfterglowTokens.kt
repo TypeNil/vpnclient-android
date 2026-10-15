@@ -22,6 +22,8 @@ object AfterglowTokens {
     val fieldHeight = 56.dp
     val rowHeight = 56.dp
     val noticePadding = 12.dp
+    val chartHeight = 32.dp
+    val chartGap = 4.dp
     val actionBarHeight = 76.dp
     val actionBarHeightCompact = 64.dp
     val actionPadding = 12.dp

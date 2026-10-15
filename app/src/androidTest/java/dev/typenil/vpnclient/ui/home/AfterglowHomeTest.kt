@@ -3,6 +3,7 @@ package dev.typenil.vpnclient.ui.home
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -42,7 +43,6 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = { imports++ },
-                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -68,7 +68,6 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
-                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -94,7 +93,6 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
-                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -108,8 +106,8 @@ class AfterglowHomeTest {
         compose.onNodeWithText("VPN permission denied").assertExists()
     }
 
-    @Test fun connectedHomeInvokesOpenConnections() {
-        var connectionsOpened = 0
+    @Test fun connectedHomeShowsTwoColumnsAndOpensDetails() {
+        var detailsOpened = 0
         val connectedState = VpnConnectionState.Connected(
             node = testNode,
             since = Instant.now(),
@@ -136,8 +134,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
-                onOpenConnections = { connectionsOpened++ },
-                onOpenDetails = {},
+                onOpenDetails = { detailsOpened++ },
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
                 onDismissGuard = {},
@@ -145,16 +142,58 @@ class AfterglowHomeTest {
             )
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        // Session stats now sit below the server/routing card — a legitimate
-        // scroll brings the row into view before tapping it.
-        // Stats are collapsed by default; the explicit toggle reveals the rows.
-        compose.onNodeWithText(context.getString(R.string.home_stats_show))
+        // Stats sit below the server/routing card — scroll them into view. No
+        // toggle: both columns are always visible, one announced node each.
+        compose.onNode(hasContentDescription(
+            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_download), "2.0 KB/s", "19.5 KB")))
+            .performScrollTo().assertExists()
+        compose.onNode(hasContentDescription(
+            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_upload), "1.0 KB/s", "9.8 KB")))
+            .assertExists()
+        compose.onNodeWithText(context.getString(R.string.home_details_title))
             .performScrollTo()
             .performClick()
-        compose.onNodeWithText(context.getString(R.string.home_stat_connections))
-            .performScrollTo()
-            .performClick()
-        compose.runOnIdle { assertEquals(1, connectionsOpened) }
+        compose.runOnIdle { assertEquals(1, detailsOpened) }
+    }
+
+    @Test fun staleOrMissingStatsShowNoDataColumnsNotZeroRates() {
+        compose.setContent {
+            AfterglowHomeContent(
+                ui = HomeUiState(
+                    connection = VpnConnectionState.Connected(
+                        node = testNode, since = Instant.now(), stats = null, statsReceivedAtNanos = System.nanoTime(),
+                    ),
+                    serverOptions = listOf(testOption),
+                    selectedNodeName = testOption.title,
+                ),
+                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {}, onOpenDetails = {},
+                onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {}, notices = emptyList(),
+            )
+        }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNode(hasContentDescription(
+            context.getString(R.string.home_stat_column_empty, context.getString(R.string.home_stat_download))))
+            .performScrollTo().assertExists()
+        compose.onNode(hasContentDescription(
+            context.getString(R.string.home_stat_column_empty, context.getString(R.string.home_stat_upload))))
+            .assertExists()
+    }
+
+    @Test fun sessionDetailsOffersConnectionsEntry() {
+        var opened = 0
+        compose.setContent {
+            SessionDetailsSheet(
+                state = VpnConnectionState.Connected(
+                    node = testNode, since = Instant.now(), stats = null, statsReceivedAtNanos = System.nanoTime(),
+                ),
+                details = null,
+                onDismiss = {},
+                onOpenConnections = { opened++ },
+            )
+        }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNodeWithText(context.getString(R.string.home_stat_connections)).performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
     }
 
     @Test fun connectedHomeShowsDayScaleUptime() {
@@ -179,7 +218,6 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
-                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -230,7 +268,6 @@ class AfterglowHomeTest {
                     onDisconnect = { disconnects++ },
                     onPick = {},
                     onAddServer = {},
-                    onOpenConnections = {},
                     onOpenDetails = {},
                     onOpenDiagnostics = {},
                     onOpenRouting = {},
@@ -242,7 +279,7 @@ class AfterglowHomeTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.onNodeWithText(context.getString(R.string.action_disconnect)).performClick()
         compose.runOnIdle { assertEquals(1, disconnects) }
-        compose.onNodeWithText(context.getString(R.string.home_stats_show))
+        compose.onNodeWithText(context.getString(R.string.home_details_title))
             .performScrollTo()
             .assertExists()
     }
@@ -261,7 +298,7 @@ class AfterglowHomeTest {
             AfterglowHomeContent(
                 ui = ui.value,
                 onConnect = {}, onDisconnect = {}, onPick = { picks++ },
-                onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
+                onAddServer = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {},
                 notices = emptyList(),
             )

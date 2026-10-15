@@ -42,8 +42,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,6 +71,7 @@ import dev.typenil.vpnclient.ui.common.perAppSummary
 import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.underlayLabel
 import dev.typenil.vpnclient.ui.common.uptimeText
+import dev.typenil.vpnclient.ui.theme.AfterglowChevron
 import dev.typenil.vpnclient.ui.theme.AfterglowSheet
 import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
@@ -124,7 +127,6 @@ fun HomeScreen(
         onDisconnect = viewModel::disconnect,
         onPick = { showPicker = true },
         onAddServer = onAddServer,
-        onOpenConnections = onOpenConnections,
         onOpenDetails = { showDetails = true },
         onOpenDiagnostics = onOpenDiagnostics,
         onOpenRouting = onOpenRouting,
@@ -146,7 +148,8 @@ fun HomeScreen(
         )
     }
     if (showDetails && connection is VpnConnectionState.Connected) {
-        SessionDetailsSheet(connection, ui.sessionDetails, onDismiss = { showDetails = false })
+        SessionDetailsSheet(connection, ui.sessionDetails, onDismiss = { showDetails = false },
+            onOpenConnections = { showDetails = false; onOpenConnections() })
     }
 }
 
@@ -358,6 +361,7 @@ internal fun SessionDetailsSheet(
     state: VpnConnectionState.Connected,
     details: SessionDetails?,
     onDismiss: () -> Unit,
+    onOpenConnections: (() -> Unit)? = null,
 ) {
     // Uptime reads live: a 1 Hz ticker keeps the sheet's "now" current while
     // it's open, gated by lifecycle like the home stats ticker.
@@ -434,6 +438,15 @@ internal fun SessionDetailsSheet(
             // live state, so it renders even when the session is healthy.
             val lastError = details?.lastErrorRes?.let { stringResource(it) } ?: details?.lastError
             lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
+            // The Connections screen's only entry now that Home's stats card is columns-only.
+            onOpenConnections?.let { open ->
+                Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = open)
+                    .heightIn(min = AfterglowTokens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.home_stat_connections), color = AfterglowTheme.colors.ink,
+                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    AfterglowChevron()
+                }
+            }
         }
     }
 }

@@ -95,15 +95,19 @@ fun AfterglowRow(
                 Text(caption, style = AfterglowType.rowCaption, color = captionColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (onClick != null) {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = c.muted,
-                modifier = Modifier.size(AfterglowTokens.iconSize),
-            )
-        }
+        if (onClick != null) AfterglowChevron()
     }
+}
+
+/** Decorative trailing chevron of a tappable row (the row itself carries the button role). */
+@Composable
+fun AfterglowChevron() {
+    Icon(
+        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = null,
+        tint = AfterglowTheme.colors.muted,
+        modifier = Modifier.size(AfterglowTokens.iconSize),
+    )
 }
 
 @Composable

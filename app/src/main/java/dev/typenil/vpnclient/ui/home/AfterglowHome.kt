@@ -25,7 +25,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +56,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,12 +66,13 @@ import androidx.lifecycle.repeatOnLifecycle
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.vpn.VpnConnectionState
 import dev.typenil.vpnclient.ui.common.BatteryHintCard
-import dev.typenil.vpnclient.ui.common.disclosureSemantics
-import dev.typenil.vpnclient.ui.common.formatBytes
-import dev.typenil.vpnclient.ui.common.formatRate
+import dev.typenil.vpnclient.core.common.formatBytes
+import dev.typenil.vpnclient.core.common.formatRate
+import dev.typenil.vpnclient.ui.common.localizedResources
 import dev.typenil.vpnclient.ui.common.routeModeSummary
 import dev.typenil.vpnclient.ui.common.uptimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.AfterglowChevron
 import dev.typenil.vpnclient.ui.theme.AfterglowInsetDivider
 import dev.typenil.vpnclient.ui.theme.AfterglowNotice
 import dev.typenil.vpnclient.ui.theme.AfterglowOverline
@@ -121,7 +122,6 @@ internal fun AfterglowHomeContent(
     onDisconnect: () -> Unit,
     onPick: () -> Unit,
     onAddServer: () -> Unit,
-    onOpenConnections: () -> Unit,
     onOpenDetails: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenRouting: () -> Unit,
@@ -140,8 +140,6 @@ internal fun AfterglowHomeContent(
     // (+ modest gap) so large fonts can't bury the tail of the content.
     var actionHeightPx by remember { mutableIntStateOf(0) }
     val actionReserve = with(LocalDensity.current) { actionHeightPx.toDp() } + AfterglowTokens.cardGap
-    // View-only: collapsed by default, survives rotation, never written to settings.
-    var statsExpanded by rememberSaveable { mutableStateOf(false) }
     Box(modifier.fillMaxSize().background(colors.paper)) {
         Column(Modifier.align(Alignment.TopCenter).fillMaxHeight()
             .widthIn(max = HomeContentMaxWidth).fillMaxWidth()
@@ -170,11 +168,10 @@ internal fun AfterglowHomeContent(
             // shortcuts trail them instead of pushing them below the fold.
             ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
-                SessionStats(state, onOpenConnections, onOpenDetails, statsExpanded) { statsExpanded = !statsExpanded }
+                SessionStats(state, onOpenDetails)
             }
-            Spacer(Modifier.height(AfterglowTokens.sectionGap))
-            AfterglowSectionHeader(stringResource(R.string.afterglow_quick_access),
-                Modifier.padding(start = AfterglowTokens.headerInset, bottom = AfterglowTokens.headerGap))
+            // Cards are siblings: one gap between them, no extra section header.
+            Spacer(Modifier.height(AfterglowTokens.cardGap))
             AfterglowCard {
                 AfterglowRow(
                     title = stringResource(R.string.nav_servers),
@@ -514,15 +511,6 @@ private fun RoutingIcon() {
     }
 }
 
-@Composable
-private fun CircledChevron() {
-    val colors = AfterglowTheme.colors
-    Box(Modifier.size(32.dp).border(1.dp, colors.border, CircleShape),
-        contentAlignment = Alignment.Center) {
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-            tint = colors.coral, modifier = Modifier.size(AfterglowTokens.iconSize))
-    }
-}
 
 @Composable
 private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> Unit, onRouting: () -> Unit) {
@@ -577,13 +565,7 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
 }
 
 @Composable
-private fun SessionStats(
-    state: VpnConnectionState.Connected,
-    onOpenConnections: () -> Unit,
-    onOpenDetails: () -> Unit,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-) {
+private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () -> Unit) {
     val colors = AfterglowTheme.colors
     val history = remember(state.since) { TrafficHistory() }
     var samples by remember(state.since) { mutableStateOf<List<TrafficHistory.Point>>(emptyList()) }
@@ -603,139 +585,86 @@ private fun SessionStats(
         }
     }
     // The 1 Hz ticker may predate a just-arrived snapshot. Read the monotonic
-    // clock for this frame so a negative age cannot flash "unavailable".
+    // clock for this frame so a negative age cannot flash a stale dash.
     val displayNanos = frameTimeNanos(nowNanos, System.nanoTime())
     val fresh = stats != null && history.isFresh(displayNanos, state.statsReceivedAtNanos)
     val visibleSamples = samples.filter { it.atNanos in (displayNanos - TrafficHistory.WINDOW_NANOS)..displayNanos }
     val compact = LocalDensity.current.fontScale > 1.3f ||
         LocalConfiguration.current.screenWidthDp < 340
-    // Wraps instead of squeezing: at large fonts a day-scale uptime moves
-    // under the heading rather than starving it.
-    FlowRow(Modifier.fillMaxWidth().padding(start = AfterglowTokens.headerInset, top = AfterglowTokens.sectionGap, bottom = AfterglowTokens.headerGap),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)) {
-        AfterglowSectionHeader(stringResource(R.string.afterglow_statistics))
-        // Shared uptime formatter — explicit localized units, days included,
-        // never a raw 52:30:50 clock.
-        Text(stringResource(R.string.afterglow_session_elapsed, uptimeText(state.since, now)),
-            color = colors.muted, fontSize = 12.sp)
-    }
-    val s = stats.takeIf { fresh }
-    val connectionsDesc = if (s == null) "" else
-        stringResource(R.string.home_stat_connections_desc, s.connectionsIn, s.connectionsOut)
+    val res = localizedResources()
+    val dash = stringResource(R.string.common_none)
+    val texts = StatTexts(
+        downloadLabel = stringResource(R.string.home_stat_download),
+        uploadLabel = stringResource(R.string.home_stat_upload),
+        rate = { res.formatRate(it) },
+        bytes = { res.formatBytes(it) },
+        totalLine = { res.getString(R.string.home_stat_total_suffix, it) },
+        describe = { label, rate, total -> res.getString(R.string.home_stat_column_desc, label, rate, total) },
+        describeEmpty = { res.getString(R.string.home_stat_column_empty, it) },
+        dash = dash,
+    )
+    val (download, upload) = statColumns(stats.takeIf { fresh }, texts)
     val chartSamples = if (fresh) visibleSamples else emptyList()
+    // Shared uptime formatter — explicit localized units, days included,
+    // never a raw 52:30:50 clock.
+    val uptime = stringResource(R.string.afterglow_session_elapsed, uptimeText(state.since, now))
+    val headerPadding = Modifier.fillMaxWidth()
+        .padding(start = AfterglowTokens.headerInset, top = AfterglowTokens.sectionGap, bottom = AfterglowTokens.headerGap)
+    if (compact) {
+        // Large fonts: uptime sits on its own line instead of breaking mid-phrase.
+        Column(headerPadding) {
+            AfterglowSectionHeader(stringResource(R.string.afterglow_statistics))
+            Text(uptime, style = AfterglowType.statLabel, color = colors.muted)
+        }
+    } else {
+        // One shared baseline for the 12sp heading and the 12sp uptime.
+        Row(headerPadding) {
+            AfterglowSectionHeader(stringResource(R.string.afterglow_statistics), Modifier.alignByBaseline())
+            Spacer(Modifier.weight(1f))
+            Text(uptime, style = AfterglowType.statLabel, color = colors.muted, textAlign = TextAlign.End,
+                modifier = Modifier.alignByBaseline())
+        }
+    }
     AfterglowCard {
-        if (s == null) {
-            // One compact state instead of two empty metric columns plus a
-            // trailing explanation — same information, less noise.
-            Text(stringResource(R.string.afterglow_stats_unavailable), color = colors.muted,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
-        } else if (!expanded) {
-            // Collapsed: the two live rates only (session time sits in the header);
-            // charts, totals and technical rows stay behind "Details".
-            FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.sectionGap),
-                verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
-                RateSummary(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec, true)
-                RateSummary(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec, false)
-            }
-        } else if (compact) {
-            // Side-by-side metrics can't survive large fonts/narrow
-            // widths — stack them at full width instead.
-            SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
-                s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.fillMaxWidth())
+        if (compact) {
+            // Side-by-side columns can't survive large fonts/narrow widths — stack them.
+            StatColumnView(download, chartSamples, displayNanos, Modifier.fillMaxWidth())
             Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
-            SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
-                s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.fillMaxWidth())
+            StatColumnView(upload, chartSamples, displayNanos, Modifier.fillMaxWidth())
         } else {
             Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-                SpeedMetric(stringResource(R.string.home_stat_download), s.downlinkBytesPerSec,
-                    s.downlinkTotalBytes, chartSamples, displayNanos, true, colors.jade, Modifier.weight(1f))
+                StatColumnView(download, chartSamples, displayNanos, Modifier.weight(1f))
                 Box(Modifier.width(AfterglowTokens.border).fillMaxHeight().background(colors.border))
-                SpeedMetric(stringResource(R.string.home_stat_upload), s.uplinkBytesPerSec,
-                    s.uplinkTotalBytes, chartSamples, displayNanos, false, colors.coral, Modifier.weight(1f))
-            }
-        }
-        if (expanded) {
-            Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
-            Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
-                .clickable(onClick = onOpenConnections).heightIn(min = AfterglowTokens.touchTarget)
-                .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.home_stat_connections), color = colors.ink,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                // Light jade fails text contrast on paper — the direction
-                // glyphs take ink/coral; jade stays on the chart accents.
-                if (s != null) Row(verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(end = 10.dp).clearAndSetSemantics {
-                        contentDescription = connectionsDesc
-                    }) {
-                    Text("↓", color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text(" ${s.connectionsIn}", color = colors.muted, fontSize = 13.sp)
-                    Text("  ↑", color = colors.coral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Text(" ${s.connectionsOut}", color = colors.muted, fontSize = 13.sp)
-                }
-                CircledChevron()
-            }
-            Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
-            Row(Modifier.fillMaxWidth().semantics { role = Role.Button }
-                .clickable(onClick = onOpenDetails).heightIn(min = AfterglowTokens.touchTarget)
-                .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.home_details_title), color = colors.ink,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                CircledChevron()
+                StatColumnView(upload, chartSamples, displayNanos, Modifier.weight(1f))
             }
         }
         Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
-        // Explicit toggle: the label names the action, the chevron shows direction.
-        Row(Modifier.fillMaxWidth().disclosureSemantics(expanded)
-            .clickable(onClick = onToggle).heightIn(min = AfterglowTokens.touchTarget)
-            .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Chevron hugs the label (not the far edge): the bar mascot perches there.
-            Text(stringResource(if (expanded) R.string.home_stats_hide else R.string.home_stats_show),
-                color = colors.coral, fontWeight = FontWeight.Bold)
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
-                tint = colors.coral, modifier = Modifier.size(24.dp).graphicsLayer { rotationZ = if (expanded) -90f else 90f })
+        Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenDetails)
+            .heightIn(min = AfterglowTokens.touchTarget).padding(horizontal = AfterglowTokens.rowPaddingH),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.home_details_title), style = AfterglowType.rowCaption,
+                fontWeight = FontWeight.SemiBold, color = colors.ink, modifier = Modifier.weight(1f))
+            AfterglowChevron()
         }
     }
 }
 
+/** One announced node per column (label, rate and total together); the chart and glyph are decorative. */
 @Composable
-private fun RateSummary(label: String, value: Long, download: Boolean) {
+private fun StatColumnView(col: StatColumn, samples: List<TrafficHistory.Point>, nowNanos: Long, modifier: Modifier) {
     val colors = AfterglowTheme.colors
-    Row(verticalAlignment = Alignment.Bottom) {
-        // Ink/coral glyphs — light jade text fails contrast on paper. The glyph is
-        // decorative: the label beside it names the direction.
-        Text(if (download) "↓" else "↑", color = if (download) colors.ink else colors.coral,
-            fontSize = 16.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.clearAndSetSemantics {}.padding(end = 6.dp, bottom = 2.dp))
-        Column {
-            Text(label, color = colors.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(formatRate(value), color = colors.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-@Composable
-private fun SpeedMetric(label: String, value: Long, totalBytes: Long, samples: List<TrafficHistory.Point>,
-    nowNanos: Long, download: Boolean, lineColor: Color, modifier: Modifier) {
-    val colors = AfterglowTheme.colors
-    Column(modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+    Column(modifier.clearAndSetSemantics { contentDescription = col.description }
+        .padding(horizontal = AfterglowTokens.noticePadding, vertical = AfterglowTokens.rowPaddingV)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Ink/coral glyphs — light jade text fails contrast on paper.
-            Text(if (download) "↓" else "↑", color = if (download) colors.ink else colors.coral,
-                fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clearAndSetSemantics {}.padding(end = 4.dp))
-            Text(label, color = colors.muted, fontSize = 12.sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis)
+            Text(if (col.download) "↓" else "↑", color = if (col.download) colors.ink else colors.coral,
+                style = AfterglowType.statLabel, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = AfterglowTokens.chartGap))
+            Text(col.label, style = AfterglowType.statLabel, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(formatRate(value),
-            color = colors.ink, fontSize = 21.sp, fontWeight = FontWeight.Bold,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
-        // Total moves under the rate — inline it squeezed the label column.
-        Text(stringResource(R.string.home_stat_total_suffix, formatBytes(totalBytes)),
-            color = colors.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        TrafficChart(samples, nowNanos, download, lineColor)
+        Text(col.value, style = AfterglowType.statValue, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        TrafficChart(samples, nowNanos, col.download, if (col.download) colors.jade else colors.coral)
+        Text(col.total, style = AfterglowType.statTotal, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -749,7 +678,7 @@ private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, do
             while (true) { chartNanos = System.nanoTime(); delay(100) }
         }
     }
-    Canvas(Modifier.fillMaxWidth().height(32.dp).padding(top = 4.dp)) {
+    Canvas(Modifier.fillMaxWidth().height(AfterglowTokens.chartHeight).padding(top = AfterglowTokens.chartGap)) {
             val baseline = size.height - 1.dp.toPx()
             drawLine(colors.border, Offset(0f, baseline), Offset(size.width, baseline), 1.dp.toPx())
             val maxRate = samples.maxOfOrNull { if (download) it.down else it.up } ?: 0L
