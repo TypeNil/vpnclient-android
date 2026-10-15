@@ -20,6 +20,8 @@ import dev.typenil.vpnclient.core.engine.DnsUpstream
 import dev.typenil.vpnclient.core.engine.RouteMode
 import dev.typenil.vpnclient.core.subscription.HwidConsent
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
+import dev.typenil.vpnclient.core.vpn.LastSession
+import dev.typenil.vpnclient.core.vpn.LastSessionSink
 import dev.typenil.vpnclient.core.vpn.PerAppMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -38,7 +40,7 @@ class SettingsRepository
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
-    ) : SubscriptionSettings {
+    ) : SubscriptionSettings, LastSessionSink {
         private object Keys {
             val SELECTED_NODE_ID = stringPreferencesKey("selected_node_id")
             val HWID = stringPreferencesKey("remnawave_hwid")
@@ -107,6 +109,13 @@ class SettingsRepository
 
             /** DnsUpstream.key — preset name or "custom:<spec>". */
             val DNS_UPSTREAM = stringPreferencesKey("dns_upstream")
+
+            /** Last finished session (one record, overwritten) — five keys written in one edit. */
+            val LAST_SESSION_ENDED_AT = longPreferencesKey("last_session_ended_at")
+            val LAST_SESSION_DURATION = longPreferencesKey("last_session_duration_ms")
+            val LAST_SESSION_DOWN = longPreferencesKey("last_session_down_bytes")
+            val LAST_SESSION_UP = longPreferencesKey("last_session_up_bytes")
+            val LAST_SESSION_NODE = stringPreferencesKey("last_session_node")
         }
 
         override val selectedNodeId: Flow<String?> =
@@ -323,6 +332,20 @@ class SettingsRepository
             context.settingsStore.edit { persistBatteryHintDismissal(it) }
         }
 
+        /** The last finished session, or null when none is stored (or the store is unreadable). */
+        val lastSession: Flow<LastSession?> =
+            context.settingsStore.data
+                .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+                .map { lastSessionOf(it) }
+
+        override suspend fun save(session: LastSession) {
+            context.settingsStore.edit { persistLastSession(it, session) }
+        }
+
+        suspend fun clearLastSession() {
+            context.settingsStore.edit { removeLastSession(it) }
+        }
+
         /** Read errors surface as [IOException]: the onboarding gate retries, then falls back. */
         val onboardingDone: Flow<Boolean> = context.settingsStore.data.map { onboardingDoneOf(it) }
 
@@ -506,6 +529,33 @@ class SettingsRepository
 
             internal fun persistOnboardingDone(prefs: MutablePreferences) {
                 prefs[Keys.ONBOARDING_DONE] = true
+            }
+
+            /** Null unless every field is present — a partial record is never shown. */
+            internal fun lastSessionOf(prefs: Preferences): LastSession? {
+                return LastSession(
+                    endedAtEpochMs = prefs[Keys.LAST_SESSION_ENDED_AT] ?: return null,
+                    durationMs = prefs[Keys.LAST_SESSION_DURATION] ?: return null,
+                    downBytes = prefs[Keys.LAST_SESSION_DOWN] ?: return null,
+                    upBytes = prefs[Keys.LAST_SESSION_UP] ?: return null,
+                    nodeName = prefs[Keys.LAST_SESSION_NODE] ?: return null,
+                )
+            }
+
+            internal fun persistLastSession(prefs: MutablePreferences, s: LastSession) {
+                prefs[Keys.LAST_SESSION_ENDED_AT] = s.endedAtEpochMs
+                prefs[Keys.LAST_SESSION_DURATION] = s.durationMs
+                prefs[Keys.LAST_SESSION_DOWN] = s.downBytes
+                prefs[Keys.LAST_SESSION_UP] = s.upBytes
+                prefs[Keys.LAST_SESSION_NODE] = s.nodeName
+            }
+
+            internal fun removeLastSession(prefs: MutablePreferences) {
+                prefs.remove(Keys.LAST_SESSION_ENDED_AT)
+                prefs.remove(Keys.LAST_SESSION_DURATION)
+                prefs.remove(Keys.LAST_SESSION_DOWN)
+                prefs.remove(Keys.LAST_SESSION_UP)
+                prefs.remove(Keys.LAST_SESSION_NODE)
             }
 
             /** Presence of traces only — raw `hwid_allowed` (not the migrated consent), never values. */
