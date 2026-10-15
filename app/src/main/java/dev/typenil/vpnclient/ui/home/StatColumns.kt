@@ -38,3 +38,20 @@ internal fun statColumns(stats: TrafficStats?, t: StatTexts): Pair<StatColumn, S
     return column(true, t.downloadLabel, stats?.downlinkBytesPerSec, stats?.downlinkTotalBytes) to
         column(false, t.uploadLabel, stats?.uplinkBytesPerSec, stats?.uplinkTotalBytes)
 }
+
+/** Home "Connections ↓in ↑out" row. [incoming]/[outgoing] are display text; [description] is the one TalkBack node. */
+internal data class ConnectionsRow(val incoming: String, val outgoing: String, val description: String)
+
+internal class ConnectionsTexts(
+    val describe: (incoming: Int, outgoing: Int) -> String,
+    val describeEmpty: String,
+    val dash: String,
+)
+
+/** `null` stats (none yet, or stale) show dashes — a counter of 0 is a real "no open connections". */
+internal fun connectionsRow(stats: TrafficStats?, t: ConnectionsTexts): ConnectionsRow =
+    if (stats == null) ConnectionsRow(t.dash, t.dash, t.describeEmpty)
+    else ConnectionsRow(
+        stats.connectionsIn.toString(), stats.connectionsOut.toString(),
+        t.describe(stats.connectionsIn, stats.connectionsOut),
+    )

@@ -3,6 +3,8 @@ package dev.typenil.vpnclient.ui.home
 import dev.typenil.vpnclient.core.common.formatBytes
 import dev.typenil.vpnclient.core.common.formatRate
 import dev.typenil.vpnclient.core.engine.TrafficStats
+import androidx.compose.ui.text.font.FontWeight
+import dev.typenil.vpnclient.ui.theme.AfterglowType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -56,5 +58,34 @@ class StatColumnsTest {
     @Test fun zeroIsRealZeroWhenStatsExist() {
         val (d, _) = statColumns(stats(0, 0, 0, 0), texts)
         assertEquals("0 B/s", d.value)
+    }
+
+    private val connTexts = ConnectionsTexts(
+        describe = { i, o -> "Connections, $i incoming, $o outgoing" },
+        describeEmpty = "Connections, no data yet",
+        dash = "—",
+    )
+
+    @Test fun connectionsRowKeepsIncomingAndOutgoingApart() {
+        val row = connectionsRow(TrafficStats(0, 0, 0, 0, connectionsIn = 3, connectionsOut = 17, goroutines = 0, memoryBytes = 0), connTexts)
+        assertEquals("3", row.incoming); assertEquals("17", row.outgoing)
+        assertEquals("Connections, 3 incoming, 17 outgoing", row.description)
+    }
+
+    @Test fun connectionsRowShowsDashNotZeroWithoutStats() {
+        val row = connectionsRow(null, connTexts)
+        assertEquals("—", row.incoming); assertEquals("—", row.outgoing)
+        assertEquals("Connections, no data yet", row.description)
+    }
+
+    @Test fun connectionsRowShowsRealZero() {
+        val row = connectionsRow(TrafficStats(0, 0, 0, 0, 0, 0, 0, 0), connTexts)
+        assertEquals("0", row.incoming); assertEquals("0", row.outgoing)
+    }
+
+    @Test fun statTypeUsesOnlyAllowedWeights() {
+        val allowed = setOf(FontWeight.Normal, FontWeight.SemiBold, FontWeight.ExtraBold)
+        for (style in listOf(AfterglowType.statValue, AfterglowType.statLabel, AfterglowType.statTotal))
+            assertTrue("${style.fontWeight}", style.fontWeight in allowed)
     }
 }
