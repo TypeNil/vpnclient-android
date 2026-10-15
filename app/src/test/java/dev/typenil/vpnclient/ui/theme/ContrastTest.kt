@@ -57,6 +57,11 @@ class ContrastTest {
         Check("borderStrong/paper (field border)", nonText, { it.borderStrong }, { it.paper }),
         Check("borderStrong/paperSecondary (field border)", nonText, { it.borderStrong }, { it.paperSecondary }),
         Check("borderStrong/surfaceElevated (field border)", nonText, { it.borderStrong }, { it.surfaceElevated }),
+        // Statistics direction tiles: arrow glyph over the tinted tile (home card = surfaceElevated).
+        Check("ink arrow/jade stat tile", text,
+            { it.ink }, { over(it.jade, AfterglowTokens.statTileTint, it.surfaceElevated) }),
+        Check("coral arrow/coral stat tile", text,
+            { it.coral }, { over(it.coral, AfterglowTokens.statTileTint, it.surfaceElevated) }),
     )
 
     @Test

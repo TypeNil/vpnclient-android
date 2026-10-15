@@ -50,6 +50,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = { imports++ },
+                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -75,6 +76,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
+                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -100,6 +102,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
+                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -115,6 +118,7 @@ class AfterglowHomeTest {
 
     @Test fun connectedHomeShowsTwoColumnsAndOpensDetails() {
         var detailsOpened = 0
+        var connectionsOpened = 0
         val connectedState = VpnConnectionState.Connected(
             node = testNode,
             since = Instant.now(),
@@ -141,6 +145,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
+                onOpenConnections = { connectionsOpened++ },
                 onOpenDetails = { detailsOpened++ },
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -157,6 +162,10 @@ class AfterglowHomeTest {
         compose.onNode(hasContentDescription(
             context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_upload), "1.0 KB/s", "9.8 KB")))
             .assertExists()
+        // The Connections row is one announced node and opens the Connections screen.
+        compose.onNode(hasContentDescription(context.getString(R.string.home_stat_connections_desc, 2, 5)))
+            .performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, connectionsOpened) }
         compose.onNodeWithText(context.getString(R.string.home_details_title))
             .performScrollTo()
             .performClick()
@@ -173,7 +182,7 @@ class AfterglowHomeTest {
                     serverOptions = listOf(testOption),
                     selectedNodeName = testOption.title,
                 ),
-                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {}, onOpenDetails = {},
+                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {}, notices = emptyList(),
             )
         }
@@ -183,6 +192,8 @@ class AfterglowHomeTest {
             .performScrollTo().assertExists()
         compose.onNode(hasContentDescription(
             context.getString(R.string.home_stat_column_empty, context.getString(R.string.home_stat_upload))))
+            .assertExists()
+        compose.onNode(hasContentDescription(context.getString(R.string.home_stat_connections_empty)))
             .assertExists()
     }
 
@@ -225,6 +236,7 @@ class AfterglowHomeTest {
                 onDisconnect = {},
                 onPick = {},
                 onAddServer = {},
+                onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
                 onOpenRouting = {},
@@ -275,6 +287,7 @@ class AfterglowHomeTest {
                     onDisconnect = { disconnects++ },
                     onPick = {},
                     onAddServer = {},
+                    onOpenConnections = {},
                     onOpenDetails = {},
                     onOpenDiagnostics = {},
                     onOpenRouting = {},
@@ -305,7 +318,7 @@ class AfterglowHomeTest {
             AfterglowHomeContent(
                 ui = ui.value,
                 onConnect = {}, onDisconnect = {}, onPick = { picks++ },
-                onAddServer = {}, onOpenDetails = {},
+                onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {},
                 notices = emptyList(),
             )

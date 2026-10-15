@@ -246,6 +246,8 @@
     <string name="home_stat_download">Download</string>
     <string name="home_stat_upload">Upload</string>
     <string name="home_stat_connections">Connections</string>
+    <string name="home_stat_connections_desc">Connections, %1$d incoming, %2$d outgoing</string>
+    <string name="home_stat_connections_empty">Connections, no data yet</string>
     <string name="home_stat_total_suffix">%1$s total</string>
     <string name="home_stat_column_desc">%1$s, %2$s, total %3$s</string>
     <string name="home_stat_column_empty">%1$s, no data yet</string>

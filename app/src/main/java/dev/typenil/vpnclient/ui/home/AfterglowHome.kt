@@ -122,6 +122,7 @@ internal fun AfterglowHomeContent(
     onDisconnect: () -> Unit,
     onPick: () -> Unit,
     onAddServer: () -> Unit,
+    onOpenConnections: () -> Unit,
     onOpenDetails: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenRouting: () -> Unit,
@@ -168,7 +169,7 @@ internal fun AfterglowHomeContent(
             // shortcuts trail them instead of pushing them below the fold.
             ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
-                SessionStats(state, onOpenDetails)
+                SessionStats(state, onOpenConnections, onOpenDetails)
             }
             // Cards are siblings: one gap between them, no extra section header.
             Spacer(Modifier.height(AfterglowTokens.cardGap))
@@ -565,7 +566,7 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
 }
 
 @Composable
-private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () -> Unit) {
+private fun SessionStats(state: VpnConnectionState.Connected, onOpenConnections: () -> Unit, onOpenDetails: () -> Unit) {
     val colors = AfterglowTheme.colors
     val history = remember(state.since) { TrafficHistory() }
     var samples by remember(state.since) { mutableStateOf<List<TrafficHistory.Point>>(emptyList()) }
@@ -604,6 +605,14 @@ private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () 
         dash = dash,
     )
     val (download, upload) = statColumns(stats.takeIf { fresh }, texts)
+    val connections = connectionsRow(
+        stats.takeIf { fresh },
+        ConnectionsTexts(
+            describe = { i, o -> res.getString(R.string.home_stat_connections_desc, i, o) },
+            describeEmpty = res.getString(R.string.home_stat_connections_empty),
+            dash = dash,
+        ),
+    )
     val chartSamples = if (fresh) visibleSamples else emptyList()
     // Shared uptime formatter — explicit localized units, days included,
     // never a raw 52:30:50 clock.
@@ -639,6 +648,8 @@ private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () 
             }
         }
         Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
+        ConnectionsRowView(connections, onOpenConnections)
+        Box(Modifier.fillMaxWidth().height(AfterglowTokens.border).background(colors.border))
         Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenDetails)
             .heightIn(min = AfterglowTokens.touchTarget).padding(horizontal = AfterglowTokens.rowPaddingH),
             verticalAlignment = Alignment.CenterVertically) {
@@ -649,23 +660,55 @@ private fun SessionStats(state: VpnConnectionState.Connected, onOpenDetails: () 
     }
 }
 
-/** One announced node per column (label, rate and total together); the chart and glyph are decorative. */
+/** One announced node per column (label, rate and total together); the tile, chart and arrow are decorative. */
 @Composable
 private fun StatColumnView(col: StatColumn, samples: List<TrafficHistory.Point>, nowNanos: Long, modifier: Modifier) {
     val colors = AfterglowTheme.colors
+    // Ink/coral arrows over a jade/coral tint — light jade alone fails contrast on paper.
+    val arrowColor = if (col.download) colors.ink else colors.coral
+    val accent = if (col.download) colors.jade else colors.coral
     Column(modifier.clearAndSetSemantics { contentDescription = col.description }
         .padding(horizontal = AfterglowTokens.noticePadding, vertical = AfterglowTokens.rowPaddingV)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Ink/coral glyphs — light jade text fails contrast on paper.
-            Text(if (col.download) "↓" else "↑", color = if (col.download) colors.ink else colors.coral,
-                style = AfterglowType.statLabel, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(end = AfterglowTokens.chartGap))
-            Text(col.label, style = AfterglowType.statLabel, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.size(AfterglowTokens.statTileSize).clip(AfterglowTokens.chipShape)
+                .background(accent.copy(alpha = AfterglowTokens.statTileTint)), contentAlignment = Alignment.Center) {
+                StatArrow(col.download, arrowColor, AfterglowTokens.statArrowSize)
+            }
+            Text(col.label, style = AfterglowType.statLabel, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = AfterglowTokens.headerGap))
         }
-        Text(col.value, style = AfterglowType.statValue, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        TrafficChart(samples, nowNanos, col.download, if (col.download) colors.jade else colors.coral)
+        Text(col.value, style = AfterglowType.statValue, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = AfterglowTokens.headerGap))
+        TrafficChart(samples, nowNanos, col.download, accent)
         Text(col.total, style = AfterglowType.statTotal, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
+}
+
+/** "Connections ↓in ↑out ›" — one TalkBack node, one button. */
+@Composable
+private fun ConnectionsRowView(row: ConnectionsRow, onClick: () -> Unit) {
+    val colors = AfterglowTheme.colors
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
+        .semantics(mergeDescendants = true) { contentDescription = row.description }
+        .heightIn(min = AfterglowTokens.touchTarget).padding(horizontal = AfterglowTokens.rowPaddingH),
+        verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).clearAndSetSemantics {}, verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.home_stat_connections), style = AfterglowType.rowCaption,
+                fontWeight = FontWeight.SemiBold, color = colors.ink, modifier = Modifier.weight(1f))
+            ConnectionsCount(true, row.incoming, colors.ink)
+            Spacer(Modifier.width(AfterglowTokens.noticePadding))
+            ConnectionsCount(false, row.outgoing, colors.coral)
+            Spacer(Modifier.width(AfterglowTokens.headerGap))
+        }
+        AfterglowChevron()
+    }
+}
+
+@Composable
+private fun ConnectionsCount(download: Boolean, text: String, arrowColor: Color) {
+    StatArrow(download, arrowColor, AfterglowTokens.connArrowSize)
+    Text(text, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = AfterglowTheme.colors.ink,
+        maxLines = 1, modifier = Modifier.padding(start = AfterglowTokens.headerInset))
 }
 
 @Composable
@@ -679,8 +722,8 @@ private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, do
         }
     }
     Canvas(Modifier.fillMaxWidth().height(AfterglowTokens.chartHeight).padding(top = AfterglowTokens.chartGap)) {
-            val baseline = size.height - 1.dp.toPx()
-            drawLine(colors.border, Offset(0f, baseline), Offset(size.width, baseline), 1.dp.toPx())
+            val baseline = size.height - AfterglowTokens.border.toPx()
+            drawLine(colors.border, Offset(0f, baseline), Offset(size.width, baseline), AfterglowTokens.border.toPx())
             val maxRate = samples.maxOfOrNull { if (download) it.down else it.up } ?: 0L
             val scale = maxOf(32.0, maxRate.toDouble() * 1.2)
             val start = maxOf(nowNanos, chartNanos) - TrafficHistory.WINDOW_NANOS
@@ -695,7 +738,7 @@ private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, do
                 if (segment.isEmpty()) return
                 val first = point(segment.first())
                 if (segment.size == 1) {
-                    drawCircle(lineColor, 1.5.dp.toPx(), first)
+                    drawCircle(lineColor, AfterglowTokens.chartLine.toPx(), first)
                 } else {
                     val line = Path().apply {
                         moveTo(first.x, first.y)
@@ -707,8 +750,8 @@ private fun TrafficChart(samples: List<TrafficHistory.Point>, nowNanos: Long, do
                         lineTo(first.x, baseline)
                         close()
                     }
-                    drawPath(fill, lineColor.copy(alpha = .12f))
-                    drawPath(line, lineColor, style = Stroke(1.75.dp.toPx()))
+                    drawPath(fill, lineColor.copy(alpha = AfterglowTokens.chartFillAlpha))
+                    drawPath(line, lineColor, style = Stroke(AfterglowTokens.chartLine.toPx()))
                 }
                 segment.clear()
             }

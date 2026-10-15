@@ -22,7 +22,14 @@ object AfterglowTokens {
     val fieldHeight = 56.dp
     val rowHeight = 56.dp
     val noticePadding = 12.dp
-    val chartHeight = 32.dp
+    val chartHeight = 40.dp
+    val chartLine = 2.dp
+    const val chartFillAlpha = .16f
+    val statTileSize = 28.dp
+    val statArrowSize = 18.dp
+    val connArrowSize = 16.dp
+    /** Tint of the Statistics direction tile; the arrow keeps AA/non-text contrast over it (ContrastTest). */
+    const val statTileTint = .12f
     val chartGap = 4.dp
     val actionBarHeight = 76.dp
     val actionBarHeightCompact = 64.dp

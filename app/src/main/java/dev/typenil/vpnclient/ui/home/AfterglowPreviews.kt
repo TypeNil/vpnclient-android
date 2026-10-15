@@ -31,6 +31,7 @@ private fun PreviewHome(connection: VpnConnectionState, auto: Boolean = false, e
         onDisconnect = {},
         onPick = {},
         onAddServer = {},
+        onOpenConnections = {},
         onOpenDetails = {},
         onOpenDiagnostics = {},
         onOpenRouting = {},

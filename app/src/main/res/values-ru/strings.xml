@@ -247,6 +247,8 @@
     <string name="home_stat_download">Загрузка</string>
     <string name="home_stat_upload">Отправка</string>
     <string name="home_stat_connections">Соединения</string>
+    <string name="home_stat_connections_desc">Соединения: входящих %1$d, исходящих %2$d</string>
+    <string name="home_stat_connections_empty">Соединения, данных пока нет</string>
     <string name="home_stat_total_suffix">всего %1$s</string>
     <string name="home_stat_column_desc">%1$s, %2$s, всего %3$s</string>
     <string name="home_stat_column_empty">%1$s, данных пока нет</string>

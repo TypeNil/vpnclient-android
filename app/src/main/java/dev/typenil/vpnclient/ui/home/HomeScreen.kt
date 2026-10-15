@@ -127,6 +127,7 @@ fun HomeScreen(
         onDisconnect = viewModel::disconnect,
         onPick = { showPicker = true },
         onAddServer = onAddServer,
+        onOpenConnections = onOpenConnections,
         onOpenDetails = { showDetails = true },
         onOpenDiagnostics = onOpenDiagnostics,
         onOpenRouting = onOpenRouting,
