@@ -3,9 +3,12 @@ package dev.typenil.vpnclient.ui.home
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
-import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -33,6 +36,10 @@ class AfterglowHomeTest {
 
     private val testOption = ServerOption(id = "node-1", title = "Test Server")
     private val testNode = NodeSummary("node-1", "Test Server", ProtocolType.VLESS, "1.1.1.1:443")
+
+    /** The hero headline is the Polite live region (67abd85 replaced the old stateDescription). */
+    private fun heroHeadline(text: String) = hasText(text) and
+        SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
 
     @Test fun emptyHomeShowsAddServerCta() {
         var imports = 0
@@ -305,7 +312,7 @@ class AfterglowHomeTest {
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.onNodeWithText(context.getString(R.string.home_auto_subtitle)).assertExists()
-        compose.onNode(hasStateDescription(context.getString(R.string.home_status_disconnected)))
+        compose.onNode(heroHeadline(context.getString(R.string.home_status_disconnected)))
             .assertExists()
         compose.runOnIdle {
             ui.value = ui.value.copy(bestLatencyNodeName = "Measured Candidate", selectedDelayMs = 42)
@@ -329,7 +336,7 @@ class AfterglowHomeTest {
         compose.onNodeWithText(context.getString(R.string.afterglow_auto)).assertExists()
         compose.onNodeWithText("Live Member").performScrollTo().performClick()
         compose.onNodeWithText(measured).assertDoesNotExist()
-        compose.onNode(hasStateDescription(context.getString(R.string.home_status_connected)))
+        compose.onNode(heroHeadline(context.getString(R.string.home_status_connected)))
             .assertExists()
         compose.runOnIdle { assertEquals(1, picks) }
         compose.runOnIdle {
