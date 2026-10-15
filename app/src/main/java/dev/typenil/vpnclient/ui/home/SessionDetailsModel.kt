@@ -11,7 +11,7 @@ internal data class DetailLine(val label: String, val value: String) {
 /** Resolved label strings, injected so the model stays a pure function. */
 internal class DetailsLabels(
     val server: String, val outbound: String, val network: String, val uptime: String,
-    val downloaded: String, val uploaded: String, val activeConnections: String,
+    val downloaded: String, val uploaded: String,
     val routingMode: String, val perApp: String, val dns: String,
     val vpnCore: String, val lastError: String,
 )

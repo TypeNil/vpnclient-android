@@ -9,7 +9,7 @@ import org.junit.Test
 class SessionDetailsModelTest {
     private val labels = DetailsLabels(
         server = "Server", outbound = "Outbound", network = "Network", uptime = "Uptime",
-        downloaded = "Downloaded", uploaded = "Uploaded", activeConnections = "Active connections",
+        downloaded = "Downloaded", uploaded = "Uploaded",
         routingMode = "Routing mode", perApp = "Per-app VPN", dns = "DNS upstream",
         vpnCore = "VPN core", lastError = "Last error",
     )

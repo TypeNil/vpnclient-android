@@ -705,7 +705,7 @@ private fun ConnectionsRowView(row: ConnectionsRow, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ConnectionsCount(download: Boolean, text: String, arrowColor: Color) {
+internal fun ConnectionsCount(download: Boolean, text: String, arrowColor: Color) {
     StatArrow(download, arrowColor, AfterglowTokens.connArrowSize)
     Text(text, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = AfterglowTheme.colors.ink,
         maxLines = 1, modifier = Modifier.padding(start = AfterglowTokens.headerInset))

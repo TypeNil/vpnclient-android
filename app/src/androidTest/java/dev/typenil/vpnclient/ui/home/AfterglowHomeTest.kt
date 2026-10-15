@@ -197,22 +197,6 @@ class AfterglowHomeTest {
             .assertExists()
     }
 
-    @Test fun sessionDetailsOffersConnectionsEntry() {
-        var opened = 0
-        compose.setContent {
-            SessionDetailsSheet(
-                state = VpnConnectionState.Connected(
-                    node = testNode, since = Instant.now(), stats = null, statsReceivedAtNanos = System.nanoTime(),
-                ),
-                details = null,
-                onDismiss = {},
-                onOpenConnections = { opened++ },
-            )
-        }
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNodeWithText(context.getString(R.string.home_stat_connections)).performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(1, opened) }
-    }
 
     @Test fun connectedHomeShowsDayScaleUptime() {
         // 2 d 4 h 30 min 50 s of session — the uptime must render as explicit
@@ -387,23 +371,4 @@ class AfterglowHomeTest {
             .assertDoesNotExist()
     }
 
-    @Test fun sessionDetailsShowsLocalizedUptime() {
-        // Day branch is stable for the whole test run — a "1 min 5 s" value
-        // would race the live 1 Hz ticker.
-        compose.setContent {
-            SessionDetailsSheet(
-                state = VpnConnectionState.Connected(
-                    node = testNode,
-                    since = Instant.now().minusSeconds(2 * 86_400 + 4 * 3_600 + 30 * 60),
-                    stats = null,
-                    statsReceivedAtNanos = System.nanoTime(),
-                ),
-                details = null,
-                onDismiss = {},
-            )
-        }
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNodeWithText(context.getString(R.string.home_details_uptime)).assertExists()
-        compose.onNodeWithText(context.getString(R.string.home_uptime_dhm, 2, 4, 30)).assertExists()
-    }
 }

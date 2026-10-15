@@ -150,7 +150,7 @@ fun HomeScreen(
     }
     if (showDetails && connection is VpnConnectionState.Connected) {
         SessionDetailsSheet(connection, ui.sessionDetails, onDismiss = { showDetails = false },
-            onOpenConnections = { showDetails = false; onOpenConnections() })
+            onOpenDiagnostics = { showDetails = false; onOpenDiagnostics() })
     }
 }
 
@@ -351,103 +351,3 @@ private fun PickerRow(
     }
 }
 
-/**
- * Real session details: engine-reported outbound, persisted routing/per-app
- * settings, the service's underlay transport, and stats from the live
- * Connected payload. Nothing is invented — absent values render as "—".
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun SessionDetailsSheet(
-    state: VpnConnectionState.Connected,
-    details: SessionDetails?,
-    onDismiss: () -> Unit,
-    onOpenConnections: (() -> Unit)? = null,
-) {
-    // Uptime reads live: a 1 Hz ticker keeps the sheet's "now" current while
-    // it's open, gated by lifecycle like the home stats ticker.
-    var now by remember { mutableStateOf(Instant.now()) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) { now = Instant.now(); delay(1_000) }
-        }
-    }
-    AfterglowSheet(onDismiss = onDismiss) {
-        AfterglowSheetHeader(
-            title = stringResource(R.string.home_details_title),
-            closeLabel = stringResource(R.string.common_dismiss),
-            onDismiss = onDismiss,
-        )
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val none = stringResource(R.string.common_none)
-            DetailRow(stringResource(R.string.home_details_node), state.node.name)
-            // The selector group's pick is what actually egresses — can
-            // diverge from the session node after a live outbound switch.
-            DetailRow(
-                stringResource(R.string.home_details_outbound),
-                details?.activeOutbound
-                    ?: details?.activeOutboundRes?.let { stringResource(it) }
-                    ?: none,
-            )
-            // Applied plan only — the settings value may not be live yet
-            // (a route-mode change needs a reconnect, per-app a rebuild).
-            DetailRow(
-                stringResource(R.string.common_routing_mode),
-                details?.applied?.let { routeModeSummary(it.routeMode) } ?: none,
-            )
-            DetailRow(
-                stringResource(R.string.common_per_app_vpn),
-                details?.applied?.let { perAppSummary(it.perAppMode, it.perAppPackages.size) } ?: none,
-            )
-            DetailRow(
-                stringResource(R.string.routing_dns_upstream),
-                appliedDnsSummary(details?.applied?.dnsProfileSummary),
-            )
-            // Named, not silently ignored: these are changed-but-unapplied.
-            details?.takeIf { it.pendingReconnect.isNotEmpty() }?.let {
-                val pendingLabels = it.pendingReconnect.map { res -> stringResource(res) }
-                DetailRow(
-                    stringResource(R.string.home_details_pending),
-                    pendingLabels.joinToString(", "),
-                )
-            }
-            DetailRow(
-                stringResource(R.string.home_details_underlay),
-                details?.underlay?.let { underlayLabel(it) } ?: none,
-            )
-            DetailRow(stringResource(R.string.home_details_uptime), uptimeText(state.since, now))
-            state.stats?.let { stats ->
-                DetailRow(
-                    stringResource(R.string.home_details_data_used),
-                    stringResource(
-                        R.string.home_details_data_used_value,
-                        formatBytes(stats.downlinkTotalBytes),
-                        formatBytes(stats.uplinkTotalBytes),
-                    ),
-                )
-            }
-            DetailRow(stringResource(R.string.common_vpn_core), CORE_VERSION)
-            // Most recent Error seen this process — historical context, not
-            // live state, so it renders even when the session is healthy.
-            val lastError = details?.lastErrorRes?.let { stringResource(it) } ?: details?.lastError
-            lastError?.let { DetailRow(stringResource(R.string.common_last_error), it) }
-            // The Connections screen's only entry now that Home's stats card is columns-only.
-            onOpenConnections?.let { open ->
-                Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = open)
-                    .heightIn(min = AfterglowTokens.touchTarget), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.home_stat_connections), color = AfterglowTheme.colors.ink,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    AfterglowChevron()
-                }
-            }
-        }
-    }
-}
