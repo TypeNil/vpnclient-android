@@ -170,6 +170,8 @@ internal fun AfterglowHomeContent(
             ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
                 SessionStats(state, onOpenConnections, onOpenDetails)
+            } else if (showLastSession(state, ui.lastSession)) {
+                LastSessionCard(ui.lastSession!!)
             }
             // Cards are siblings: one gap between them, no extra section header.
             Spacer(Modifier.height(AfterglowTokens.cardGap))

@@ -550,4 +550,11 @@
     <string name="onboarding_notifications_body">Пока VPN включён, приложение показывает уведомление о состоянии. Разрешение необязательно и его можно изменить позже в настройках; VPN работает и без уведомлений.</string>
     <string name="onboarding_notifications_allow">Разрешить</string>
     <string name="onboarding_notifications_not_now">Не сейчас</string>
+    <string name="home_last_session_title">Последний сеанс</string>
+    <string name="home_last_session_ended">Завершён %1$s</string>
+    <string name="home_last_session_ended_earlier">Завершён ранее</string>
+    <string name="home_last_session_downloaded">Загружено</string>
+    <string name="home_last_session_uploaded">Отправлено</string>
+    <string name="home_last_session_column_desc">%1$s, %2$s</string>
+    <string name="home_last_session_summary">%1$s · %2$s</string>
 </resources>

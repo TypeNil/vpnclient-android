@@ -77,6 +77,8 @@ data class HomeUiState(
     /** The persisted pick — used to mark the current option in the sheet. */
     val selectedOptionId: String? = null,
     val selectionError: VpnError? = null,
+    /** The last finished session, shown on Home only while idle (see [showLastSession]). */
+    val lastSession: dev.typenil.vpnclient.core.vpn.LastSession? = null,
 )
 
 /** A rejected desired pick must not relabel the still-running server card. */
@@ -226,6 +228,7 @@ class HomeViewModel
                     connectionManager.health,
                     nowMonotonicMs = { System.nanoTime() / 1_000_000 },
                 ),
+                settings.lastSession,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -317,6 +320,7 @@ class HomeViewModel
                     selectedDelayStaleMinutes = selectedDelayStaleMinutes,
                     // Expiry runs on the store's monotonic clock inside healthHintFlow (own 5 s tick).
                     healthHint = values[15] as HomeHealthHint,
+                    lastSession = values[16] as dev.typenil.vpnclient.core.vpn.LastSession?,
                     noNodesAtAll = nodes.isEmpty(),
                     enabledSubscriptionCount = profiles.count {
                         it.enabled && !SubscriptionRepository.isManualSubscription(it.url)

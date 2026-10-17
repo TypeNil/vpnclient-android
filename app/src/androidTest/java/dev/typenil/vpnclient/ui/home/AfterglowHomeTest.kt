@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.common.formatBytes
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
@@ -371,4 +372,46 @@ class AfterglowHomeTest {
             .assertDoesNotExist()
     }
 
+    private fun homeWith(connection: VpnConnectionState, session: dev.typenil.vpnclient.core.vpn.LastSession?) {
+        compose.setContent {
+            AfterglowHomeContent(
+                ui = HomeUiState(
+                    connection = connection,
+                    serverOptions = listOf(testOption),
+                    selectedNodeName = testOption.title,
+                    lastSession = session,
+                ),
+                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {},
+                onOpenConnections = {}, onOpenDetails = {}, onOpenDiagnostics = {}, onOpenRouting = {},
+                onDismissGuard = {}, notices = emptyList(),
+            )
+        }
+    }
+
+    private val lastSession = dev.typenil.vpnclient.core.vpn.LastSession(
+        endedAtEpochMs = System.currentTimeMillis(), durationMs = 125_000L,
+        downBytes = 2_048L, upBytes = 512L, nodeName = "Test Server",
+    )
+
+    @Test fun lastSessionCardShowsWhenIdleWithRecord() {
+        homeWith(VpnConnectionState.Idle, lastSession)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNodeWithText(context.getString(R.string.home_last_session_title).uppercase()).performScrollTo().assertExists()
+        compose.onNode(hasContentDescription("${context.getString(R.string.home_last_session_downloaded)}, ${context.resources.formatBytes(2_048L)}")).assertExists()
+        compose.onNode(hasContentDescription("${context.getString(R.string.home_last_session_uploaded)}, ${context.resources.formatBytes(512L)}")).assertExists()
+        compose.onNodeWithText(context.getString(R.string.home_last_session_ended, context.getString(R.string.relative_now))).assertExists()
+    }
+
+    @Test fun lastSessionCardHiddenWithoutRecordAndWhileConnected() {
+        homeWith(VpnConnectionState.Idle, null)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val title = context.getString(R.string.home_last_session_title).uppercase()
+        compose.onNodeWithText(title).assertDoesNotExist()
+    }
+
+    @Test fun lastSessionCardHiddenWhileConnected() {
+        homeWith(VpnConnectionState.Connected(testNode, Instant.now(), null), lastSession)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.onNodeWithText(context.getString(R.string.home_last_session_title).uppercase()).assertDoesNotExist()
+    }
 }

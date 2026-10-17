@@ -541,4 +541,11 @@
     <string name="onboarding_notifications_body">While the VPN is on, the app shows a status notification. Allowing them is optional and can be changed later in Settings; the VPN works without them.</string>
     <string name="onboarding_notifications_allow">Allow</string>
     <string name="onboarding_notifications_not_now">Not now</string>
+    <string name="home_last_session_title">Last session</string>
+    <string name="home_last_session_ended">Ended %1$s</string>
+    <string name="home_last_session_ended_earlier">Ended earlier</string>
+    <string name="home_last_session_downloaded">Downloaded</string>
+    <string name="home_last_session_uploaded">Uploaded</string>
+    <string name="home_last_session_column_desc">%1$s, %2$s</string>
+    <string name="home_last_session_summary">%1$s · %2$s</string>
 </resources>
