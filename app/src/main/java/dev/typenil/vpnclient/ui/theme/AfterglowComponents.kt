@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -179,7 +178,11 @@ fun AfterglowNotice(
             Text(text, style = AfterglowType.rowCaption, color = c.ink)
             if (detail != null) Text(detail, style = AfterglowType.rowCaption, color = c.ink)
             if (actionLabel != null && onAction != null) {
-                TextButton(onClick = onAction, modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget)) {
+                // Not a TextButton: its 12dp content padding and 58dp min width push the label off the text's left edge.
+                Box(
+                    Modifier.heightIn(min = AfterglowTokens.touchTarget).clickable(role = Role.Button, onClick = onAction),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
                     Text(actionLabel, color = c.coral, fontWeight = FontWeight.Bold)
                 }
             }

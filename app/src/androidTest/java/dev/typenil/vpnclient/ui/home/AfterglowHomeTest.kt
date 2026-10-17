@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.ui.theme.AfterglowNotice
+import dev.typenil.vpnclient.ui.theme.NoticeTone
 import dev.typenil.vpnclient.core.common.formatBytes
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
@@ -440,5 +442,14 @@ class AfterglowHomeTest {
         val large = arrowWidth()
         // sp-based: at 2.0 the arrow is clearly larger than at 1.0 (fixed dp would be equal).
         assert(large >= normal * 3 / 2) { "arrow $normal px -> $large px at font 2.0" }
+    }
+
+    @Test fun noticeActionAlignsToTextLeftEdge() {
+        compose.setContent {
+            AfterglowNotice(NoticeTone.Warning, "Body text", title = "Title text", actionLabel = "Do it", onAction = {})
+        }
+        fun left(text: String) = compose.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+        assertEquals(left("Body text"), left("Do it"), 1f)
+        assertEquals(left("Title text"), left("Do it"), 1f)
     }
 }
