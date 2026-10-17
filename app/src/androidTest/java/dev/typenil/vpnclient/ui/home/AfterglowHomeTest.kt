@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -413,5 +414,31 @@ class AfterglowHomeTest {
         homeWith(VpnConnectionState.Connected(testNode, Instant.now(), null), lastSession)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.onNodeWithText(context.getString(R.string.home_last_session_title).uppercase()).assertDoesNotExist()
+    }
+
+    @Test fun connectionsArrowsScaleWithFontScale() {
+        val width = mutableStateOf(1f)
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = width.value)) {
+                AfterglowHomeContent(
+                    ui = HomeUiState(
+                        connection = VpnConnectionState.Connected(testNode, Instant.now(), null),
+                        serverOptions = listOf(testOption), selectedNodeName = testOption.title,
+                    ),
+                    onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {},
+                    onOpenConnections = {}, onOpenDetails = {}, onOpenDiagnostics = {}, onOpenRouting = {},
+                    onDismissGuard = {}, notices = emptyList(),
+                )
+            }
+        }
+        fun arrowWidth() = compose.onNodeWithTag(CONN_ARROW_DOWN_TAG, useUnmergedTree = true).performScrollTo()
+            .fetchSemanticsNode().size.width
+        val normal = arrowWidth()
+        width.value = 2f
+        compose.waitForIdle()
+        val large = arrowWidth()
+        // sp-based: at 2.0 the arrow is clearly larger than at 1.0 (fixed dp would be equal).
+        assert(large >= normal * 3 / 2) { "arrow $normal px -> $large px at font 2.0" }
     }
 }

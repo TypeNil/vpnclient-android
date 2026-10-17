@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -709,9 +710,14 @@ private fun ConnectionsRowView(row: ConnectionsRow, onClick: () -> Unit) {
     }
 }
 
+internal const val CONN_ARROW_DOWN_TAG = "conn_arrow_down"
+internal const val CONN_ARROW_UP_TAG = "conn_arrow_up"
+
 @Composable
 internal fun ConnectionsCount(download: Boolean, text: String, arrowColor: Color) {
-    StatArrow(download, arrowColor, AfterglowTokens.connArrowSize)
+    // sp-based like the row text beside it: a fixed dp arrow shrinks relative to text at large fonts.
+    val arrowSize = with(LocalDensity.current) { AfterglowTokens.connArrowSize.value.sp.toDp() }
+    StatArrow(download, arrowColor, arrowSize, Modifier.testTag(if (download) CONN_ARROW_DOWN_TAG else CONN_ARROW_UP_TAG))
     Text(text, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = AfterglowTheme.colors.ink,
         maxLines = 1, modifier = Modifier.padding(start = AfterglowTokens.headerInset))
 }
