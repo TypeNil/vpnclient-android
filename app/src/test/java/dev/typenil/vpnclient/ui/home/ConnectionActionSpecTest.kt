@@ -47,10 +47,15 @@ class ConnectionActionSpecTest {
         assertTrue(s.enabled)
         assertEquals(ActionTap.Stop, s.tap)
         val others = listOf(VisualState.Connecting, VisualState.Permission, VisualState.Stopping)
-        others.forEach {
-            assertFalse("$it must be inert", spec(it).enabled)
-            assertEquals(ActionIcon.Spinner, spec(it).icon)
-        }
+        others.forEach { assertFalse("$it must be inert", spec(it).enabled) }
+        listOf(VisualState.Connecting, VisualState.Stopping).forEach { assertEquals(ActionIcon.Spinner, spec(it).icon) }
+    }
+
+    @Test fun `permission shows a still lock, never a spinner`() {
+        val s = spec(VisualState.Permission)
+        assertEquals(ActionIcon.Lock, s.icon)
+        assertFalse(s.enabled)
+        assertNull(s.captionRes)
     }
 
     @Test fun `transitional states name their action and invent no stage caption`() {

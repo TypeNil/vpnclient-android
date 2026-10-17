@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -369,6 +370,8 @@ private fun ConnectionAction(state: VisualState, noServers: Boolean, onConnect: 
                     ActionIcon.Next -> Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
                         tint = colors.actionSurface, modifier = glyph)
                     ActionIcon.Refresh -> Icon(Icons.Default.Refresh, contentDescription = null,
+                        tint = colors.actionSurface, modifier = glyph)
+                    ActionIcon.Lock -> Icon(Icons.Default.Lock, contentDescription = null,
                         tint = colors.actionSurface, modifier = glyph)
                     ActionIcon.Spinner -> CircularProgressIndicator(glyph, color = colors.actionSurface,
                         strokeWidth = AfterglowTokens.actionStroke, trackColor = Color.Transparent)
