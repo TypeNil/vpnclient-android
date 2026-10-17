@@ -50,6 +50,7 @@ class ContrastTest {
         Check("error/paper", text, { it.error }, { it.paper }),
         Check("error/paperSecondary", text, { it.error }, { it.paperSecondary }),
         Check("error/errorSurface", text, { it.error }, { it.errorSurface }),
+        Check("error/surfaceElevated (last error value)", text, { it.error }, { it.surfaceElevated }),
         Check("onInk/error (destructive button)", text, { it.onInk }, { it.error }),
         Check("onActionSurface/actionSurface", text, { it.onActionSurface }, { it.actionSurface }),
         Check("onActionSurface 72%/actionSurface (CTA subtitle)", text,

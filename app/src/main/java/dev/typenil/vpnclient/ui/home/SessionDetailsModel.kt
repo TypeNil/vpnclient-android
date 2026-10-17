@@ -3,7 +3,7 @@ package dev.typenil.vpnclient.ui.home
 import dev.typenil.vpnclient.core.engine.TrafficStats
 
 /** One "label — value" line; [value] is display text, "—" when unknown. */
-internal data class DetailLine(val label: String, val value: String) {
+internal data class DetailLine(val label: String, val value: String, val isError: Boolean = false) {
     /** TalkBack reads a line as one node. */
     val description: String get() = "$label, $value"
 }
@@ -72,7 +72,7 @@ internal fun sessionDetailsModel(i: SessionDetailsInput): SessionDetailsModel {
         activeConnections = connectionsRow(i.stats, i.connectionsTexts),
         routing = listOf(line(l.routingMode, i.routeMode), line(l.perApp, i.perApp), line(l.dns, i.dns)),
         pending = i.pendingLabels,
-        technical = listOfNotNull(line(l.vpnCore, i.vpnCore), lastError?.let { line(l.lastError, it) }),
+        technical = listOfNotNull(line(l.vpnCore, i.vpnCore), lastError?.let { line(l.lastError, it).copy(isError = true) }),
         showDiagnostics = lastError != null,
     )
 }

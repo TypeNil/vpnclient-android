@@ -83,6 +83,8 @@ class SessionDetailsModelTest {
         assertFalse(blank.showDiagnostics)
         val bad = sessionDetailsModel(input(lastError = "tunnel failed"))
         assertEquals(listOf("VPN core", "Last error"), bad.technical.map { it.label }); assertTrue(bad.showDiagnostics)
+        // Only the last error is flagged for the error tone.
+        assertEquals(listOf(false, true), bad.technical.map { it.isError })
     }
 
     @Test fun lineIsOneTalkBackNodeAndLongValuesStack() {

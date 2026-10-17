@@ -206,16 +206,20 @@ private fun DetailLineView(line: DetailLine, largeFont: Boolean) {
     if (line.stacked(largeFont)) {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
             Text(line.label, style = AfterglowType.rowCaption, color = colors.muted)
-            Text(line.value, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = colors.ink)
+            Text(line.value, style = AfterglowType.rowTitle, color = line.valueColor())
         }
     } else {
         Row(modifier, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap)) {
             Text(line.label, style = AfterglowType.rowCaption, color = colors.muted, modifier = Modifier.weight(1f))
-            Text(line.value, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = colors.ink,
+            Text(line.value, style = AfterglowType.rowTitle, color = line.valueColor(),
                 textAlign = TextAlign.End, modifier = Modifier.weight(1f))
         }
     }
 }
+
+/** Values read in ink; the last error alone turns to the error tone (AA on the card in both themes). */
+@Composable
+private fun DetailLine.valueColor() = if (isError) AfterglowTheme.colors.error else AfterglowTheme.colors.ink
 
 @Composable
 private fun TotalCell(line: DetailLine, modifier: Modifier) {
