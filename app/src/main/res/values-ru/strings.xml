@@ -240,6 +240,7 @@
     <string name="home_error_tunnel">Сбой туннеля: %1$s</string>
     <string name="home_no_server_selected">Сервер не выбран</string>
     <string name="home_picker_title">Сервер</string>
+    <string name="picker_latency_unknown">Задержка не измерялась</string>
     <string name="home_picker_search">Поиск серверов</string>
     <string name="home_picker_all_servers">Все серверы, фильтры и задержка</string>
     <string name="home_picker_no_match">Нет серверов по запросу \"%1$s\"</string>

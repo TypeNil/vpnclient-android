@@ -22,6 +22,12 @@ object AfterglowTokens {
     val fieldHeight = 56.dp
     val rowHeight = 56.dp
     val noticePadding = 12.dp
+    val rowInset = 4.dp
+    val serverRowPaddingV = 8.dp
+    val chipPaddingH = 8.dp
+    val chipPaddingV = 4.dp
+    /** Jade/amber latency chip wash over the row surface; its ink text keeps AA (ContrastTest). */
+    const val latencyTint = .28f
     val chartHeight = 40.dp
     val chartLine = 2.dp
     const val chartFillAlpha = .16f

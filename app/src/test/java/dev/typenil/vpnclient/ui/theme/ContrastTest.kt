@@ -1,6 +1,7 @@
 package dev.typenil.vpnclient.ui.theme
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import dev.typenil.vpnclient.ui.home.VisualState
 import dev.typenil.vpnclient.ui.home.tone
 import kotlin.math.pow
@@ -71,6 +72,20 @@ class ContrastTest {
             pairs.mapNotNull { pair ->
                 val r = contrastRatio(pair.fg(p), pair.bg(p))
                 if (r < pair.min) "$theme ${pair.name}: %.2f < ${pair.min}".format(r) else null
+            }
+        }
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test
+    fun `latency chips are readable on every row surface in both themes`() {
+        val failures = mutableListOf<String>()
+        for ((theme, p) in themes) for (tone in LatencyTone.entries) {
+            val chip = p.latencyChipColors(tone)
+            // Rows sit on the page, on a card, or on the selected neutral surface.
+            for (surface in listOf(p.paper, p.surfaceElevated, p.paperSecondary)) {
+                val r = contrastRatio(chip.text, chip.background.compositeOver(surface))
+                if (r < text) failures += "$theme $tone chip on $surface: %.2f < $text".format(r)
             }
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())

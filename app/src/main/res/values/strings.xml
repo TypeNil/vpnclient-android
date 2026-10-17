@@ -239,6 +239,7 @@
     <string name="home_error_tunnel">Tunnel failed: %1$s</string>
     <string name="home_no_server_selected">No server selected</string>
     <string name="home_picker_title">Server</string>
+    <string name="picker_latency_unknown">No latency measurement</string>
     <string name="home_picker_search">Search servers</string>
     <string name="home_picker_all_servers">All servers, filters &amp; latency</string>
     <string name="home_picker_no_match">No servers match \"%1$s\"</string>
