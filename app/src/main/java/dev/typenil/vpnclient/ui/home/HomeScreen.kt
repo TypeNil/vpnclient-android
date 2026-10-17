@@ -1,14 +1,9 @@
 package dev.typenil.vpnclient.ui.home
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,7 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -39,16 +33,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -79,6 +69,11 @@ import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 import kotlinx.coroutines.delay
 import java.time.Instant
+import androidx.compose.foundation.layout.PaddingValues
+import dev.typenil.vpnclient.ui.theme.ProviderGroupCard
+import dev.typenil.vpnclient.ui.theme.ServerRow
+import dev.typenil.vpnclient.ui.theme.ServerRowDivider
+import dev.typenil.vpnclient.ui.theme.showProviderHeader
 
 @Composable
 fun HomeScreen(
@@ -168,10 +163,10 @@ internal fun errorText(error: VpnError): String =
     }
 
 /**
- * Quick-pick bottom sheet: Auto pinned first, then every enabled node behind a
- * search box. Bounded and lazy — a subscription with hundreds of nodes must not
- * turn the picker into a full-screen list, and the Servers tab stays the place
- * for filters, sorting and latency tests.
+ * Quick-pick bottom sheet: Auto first, then one card per provider, all behind a
+ * search box. The Servers tab stays the place for filters, sorting and latency
+ * tests. The list takes whatever height the sheet really has (so the IME shrinks
+ * it) instead of a fixed cap that cut the last row.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -202,17 +197,16 @@ internal fun ServerPickerSheet(
         trimmed.isEmpty() ||
             autoTitle?.contains(trimmed, ignoreCase = true) == true ||
             auto?.searchText?.contains(trimmed, ignoreCase = true) == true
+    // Headers depend on how many providers exist, not on how many survive the search.
+    val showHeaders = showProviderHeader(groupPickerOptions(nodes).size)
+    val groups = groupPickerOptions(matches)
 
     val colors = AfterglowTheme.colors
     AfterglowSheet(onDismiss = onDismiss) {
-        // Bound to the sheet's real space (readable only inside the sheet
-        // content) so the list shrinks with the IME — not a fixed height
-        // behind the keyboard.
         val sheetMax = LocalSheetMaxHeight.current
-        val listCap = sheetMax?.let { minOf(420.dp, it * 0.6f) } ?: 420.dp
-        Column(Modifier.padding(bottom = 12.dp)) {
+        Column(Modifier.then(if (sheetMax != null) Modifier.heightIn(max = sheetMax) else Modifier)) {
             AfterglowSheetHeader(
-                title = stringResource(R.string.home_picker_title),
+                title = stringResource(R.string.picker_title),
                 closeLabel = stringResource(R.string.common_dismiss),
                 onDismiss = onDismiss,
             )
@@ -222,7 +216,7 @@ internal fun ServerPickerSheet(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
+                        .padding(horizontal = AfterglowTokens.sectionGap)
                         .heightIn(min = AfterglowTokens.fieldHeight),
                 shape = AfterglowTokens.inputShape,
                 colors = OutlinedTextFieldDefaults.colors(
@@ -246,35 +240,46 @@ internal fun ServerPickerSheet(
                 },
                 singleLine = true,
             )
-            Spacer(Modifier.height(4.dp))
             // Outside the list: the escape hatch must stay reachable with the
             // soft keyboard open, which covers the bottom of the sheet.
             TextButton(
                 onClick = onOpenServers,
-                modifier = Modifier.padding(horizontal = 12.dp).heightIn(min = 48.dp),
+                modifier = Modifier.padding(horizontal = AfterglowTokens.cardGap).heightIn(min = AfterglowTokens.touchTarget),
             ) {
                 Text(stringResource(R.string.home_picker_all_servers), color = colors.coral)
             }
-            LazyColumn(Modifier.heightIn(max = listCap)) {
+            // ponytail: a provider card composes all its rows at once; segment the rows if a single provider reaches hundreds.
+            LazyColumn(
+                Modifier.weight(1f, fill = false),
+                contentPadding = PaddingValues(start = AfterglowTokens.screenPadding, end = AfterglowTokens.screenPadding, bottom = AfterglowTokens.cardGap),
+                verticalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap),
+            ) {
                 // Auto is the picker's first-class choice — shown on an
                 // empty query or when its own label/tag matches the search.
-                if (autoMatches) {
-                    auto?.let { option ->
-                        item(key = option.id) {
-                            PickerRow(
-                                option = option,
-                                selected = option.id == selectedId,
-                                onClick = { onPick(option.id) },
+                if (autoMatches && auto != null) {
+                    item(key = auto.id) {
+                        ProviderGroupCard(header = null) {
+                            ServerRow(
+                                title = autoTitle.orEmpty(),
+                                selected = auto.id == selectedId,
+                                onClick = { onPick(auto.id) },
+                                showLatency = false,
+                                caption = auto.subtitleRes?.let { stringResource(it) },
                             )
                         }
                     }
                 }
-                items(matches, key = { it.id }) { option ->
-                    PickerRow(
-                        option = option,
-                        selected = option.id == selectedId,
-                        onClick = { onPick(option.id) },
-                    )
+                items(groups, key = { "group-${it.id}" }) { group ->
+                    val name = group.name?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.common_subscription_numbered, group.id ?: 0L)
+                    ProviderGroupCard(
+                        header = if (showHeaders) stringResource(R.string.picker_group_header, name, group.options.size) else null,
+                    ) {
+                        group.options.forEachIndexed { index, option ->
+                            if (index > 0) ServerRowDivider()
+                            PickerRow(option, selected = option.id == selectedId, onClick = { onPick(option.id) })
+                        }
+                    }
                 }
                 // A query that hits only the Auto row is still a match —
                 // don't pair the result with a "no match" caption.
@@ -284,7 +289,7 @@ internal fun ServerPickerSheet(
                             text = stringResource(R.string.home_picker_no_match, trimmed),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                            modifier = Modifier.padding(vertical = AfterglowTokens.cardGap),
                         )
                     }
                 }
@@ -299,55 +304,17 @@ private fun PickerRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val colors = AfterglowTheme.colors
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp)
-                .border(AfterglowTokens.border, if (selected) colors.coral else colors.border, AfterglowTokens.chipShape)
-                .background(if (selected) colors.errorSurface else colors.paperSecondary, AfterglowTokens.chipShape)
-                .semantics { this.selected = selected }
-                .clickable(onClick = onClick)
-                .heightIn(min = AfterglowTokens.rowHeight)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                text =
-                    option.title
-                        ?: option.titleRes
-                            ?.let { stringResource(it) }
-                            .orEmpty(),
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (!option.encrypted) {
-                Text(stringResource(R.string.servers_unencrypted),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                Text(stringResource(if (option.tunnelAllowed) R.string.servers_local_sidecar else R.string.servers_connection_blocked),
-                    style = MaterialTheme.typography.labelSmall)
-            }
-            val optionSubtitle = option.subtitle ?: option.subtitleRes?.let { stringResource(it) }
-            optionSubtitle?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (selected) {
-            Icon(
-                Icons.Default.Check,
-                contentDescription = stringResource(R.string.common_selected),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
+    ServerRow(
+        title = option.title.orEmpty(),
+        selected = selected,
+        onClick = onClick,
+        protocol = option.protocol,
+        latency = option.latency,
+        unencryptedLabel =
+            if (option.encrypted) {
+                null
+            } else {
+                stringResource(if (option.tunnelAllowed) R.string.home_picker_unencrypted_short else R.string.servers_connection_blocked)
+            },
+    )
 }
-

@@ -370,7 +370,7 @@ class AfterglowHomeTest {
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.onNode(hasSetTextAction()).performTextInput("auto")
-        compose.onNodeWithText(context.getString(R.string.common_auto_fastest)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.common_auto_fastest), useUnmergedTree = true).assertExists()
         compose.onNodeWithText(context.getString(R.string.home_picker_no_match, "auto"))
             .assertDoesNotExist()
     }

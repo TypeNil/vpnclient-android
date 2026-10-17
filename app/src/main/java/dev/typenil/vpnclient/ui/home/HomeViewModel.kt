@@ -24,6 +24,8 @@ import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
+import dev.typenil.vpnclient.data.NodeLatency
+import dev.typenil.vpnclient.ui.theme.LatencyReading
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.delay
@@ -104,7 +106,13 @@ data class ServerOption(
     val title: String? = null,
     /** Label resource — non-null only for entries without a real node name. */
     @param:StringRes val titleRes: Int? = null,
-    val subtitle: String? = null,
+    /** Wire protocol label ("VLESS"); null for Auto. */
+    val protocol: String? = null,
+    /** Subscription the node came from and its display name (null = profile row gone); null id for Auto. */
+    val groupId: Long? = null,
+    val groupName: String? = null,
+    /** Fresh stored verdict, or null = no data. Read-only; nothing here measures. */
+    val latency: LatencyReading? = null,
     /** Subtitle resource — non-null only for the localized Auto subtitle. */
     @param:StringRes val subtitleRes: Int? = null,
     /** Host + name text the search matches; falls back to the Auto tag. */
@@ -229,6 +237,7 @@ class HomeViewModel
                     nowMonotonicMs = { System.nanoTime() / 1_000_000 },
                 ),
                 settings.lastSession,
+                latencyRepository.latencies,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -264,6 +273,9 @@ class HomeViewModel
                         .toSet()
                 val dnsProfile = values[12] as DnsProfile
                 val nowMs = values[13] as Long
+
+                @Suppress("UNCHECKED_CAST")
+                val storedLatency = values[17] as Map<String, NodeLatency>
 
                 // Picker source: usable + not hidden — the engine can't
                 // select a disabled node, and a hidden one has already left
@@ -338,12 +350,11 @@ class HomeViewModel
                                         searchText = NodeSelection.AUTO_ID,
                                     ),
                                 )
-                                // Favorites first, right after Auto — the
-                                // quick pick is where they pay off. Original
-                                // order (subscriptionId, position) is kept
-                                // inside each partition.
+                                // One card per subscription (the picker groups by
+                                // groupId): favorites first inside each, original
+                                // (subscriptionId, position) order otherwise.
                                 val ordered =
-                                    usableNodes.sortedByDescending { it.id in favoriteIds }
+                                    favoritesFirstPerGroup(usableNodes, { it.subscriptionId }) { it.id in favoriteIds }
                                 ordered.forEach { node ->
                                     add(
                                         ServerOption(
@@ -356,11 +367,10 @@ class HomeViewModel
                                                     ?.customName
                                                     ?.takeIf { it.isNotBlank() }
                                                     ?: node.name,
-                                            subtitle =
-                                                listOfNotNull(
-                                                    node.protocol,
-                                                    subscriptionNames[node.subscriptionId],
-                                                ).joinToString(" · "),
+                                            protocol = node.protocol,
+                                            groupId = node.subscriptionId,
+                                            groupName = subscriptionNames[node.subscriptionId],
+                                            latency = storedLatency[node.id]?.pickerReading(nowMs),
                                             // Match the host too — a user hunting
                                             // for a specific server usually
                                             // knows its address, not its name.
