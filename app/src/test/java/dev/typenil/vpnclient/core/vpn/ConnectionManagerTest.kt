@@ -1271,6 +1271,61 @@ class ConnectionManagerTest {
             assertEquals(222L, (state as VpnConnectionState.Connected).stats?.uplinkBytesPerSec)
         }
 
+    private fun managerWithSink(sink: LastSessionSink, clock: () -> Long) {
+        manager = ConnectionManager(
+            serviceControl,
+            configProvider,
+            PostStartHealthProbe({ DnsCheckResult.NotRun }) { IpCheckResult(null, null, "unexpected response") },
+            sink,
+            LastSessionTracker(clock) { 1_700_000_000_000L },
+        )
+    }
+
+    private suspend fun TestScope.disconnectToIdle(generation: Long) {
+        manager.disconnect()
+        runCurrent()
+        manager.onServiceStopped(generation)
+        advanceUntilIdle()
+        assertTrue(manager.state.value is VpnConnectionState.Idle)
+    }
+
+    @Test
+    fun `finished session is handed to the sink with the last statistics totals`() = testScope.runTest {
+        val saved = mutableListOf<LastSession>()
+        var now = 0L
+        managerWithSink({ saved += it }, { now })
+        val generation = connectToRunning()
+        engine.statsFlow.emit(stats())
+        advanceUntilIdle()
+        now += 8_000
+        disconnectToIdle(generation)
+        assertEquals(listOf(LastSession(1_700_000_000_000L, 8_000L, 20_000L, 10_000L, node.name)), saved)
+    }
+
+    @Test
+    fun `a failing sink never breaks the state machine`() = testScope.runTest {
+        var now = 0L
+        managerWithSink({ error("disk full") }, { now })
+        val generation = connectToRunning()
+        engine.statsFlow.emit(stats())
+        advanceUntilIdle()
+        now += 8_000
+        disconnectToIdle(generation)
+    }
+
+    @Test
+    fun `a short session leaves nothing behind`() = testScope.runTest {
+        val saved = mutableListOf<LastSession>()
+        var now = 0L
+        managerWithSink({ saved += it }, { now })
+        val generation = connectToRunning()
+        engine.statsFlow.emit(stats())
+        advanceUntilIdle()
+        now += 4_999
+        disconnectToIdle(generation)
+        assertTrue(saved.isEmpty())
+    }
+
     @Test
     fun `identical status arrivals refresh receipt time`() =
         testScope.runTest {

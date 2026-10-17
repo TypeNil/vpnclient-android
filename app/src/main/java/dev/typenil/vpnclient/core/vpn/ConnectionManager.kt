@@ -151,6 +151,9 @@ class ConnectionManager
         private val serviceControl: ServiceControl,
         private val configProvider: NodeConfigProvider,
         private val postStartProbe: PostStartHealthProbe,
+        private val lastSessionSink: LastSessionSink? = null,
+        private val lastSessionTracker: LastSessionTracker =
+            LastSessionTracker({ System.nanoTime() / 1_000_000L }, System::currentTimeMillis),
     ) {
         /** Engine config + session generation handed to the service (too big for extras). */
         class PendingSession(
@@ -1584,7 +1587,23 @@ class ConnectionManager
                 keepSelectionNotice = false
                 _selectionError.value = null
             }
+            val finished = lastSessionTracker.onTransition(_state.value, next, _engineEpoch.value)
             _state.value = next
+            if (finished != null) saveLastSession(finished)
+        }
+
+        /** Best effort: a failed write loses the card, never the connection. */
+        private fun saveLastSession(session: LastSession) {
+            val sink = lastSessionSink ?: return
+            scope.launch {
+                try {
+                    sink.save(session)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    SecureLog.w(TAG, "last session write failed: ${e.javaClass.simpleName}", redact = true)
+                }
+            }
         }
 
         companion object {
