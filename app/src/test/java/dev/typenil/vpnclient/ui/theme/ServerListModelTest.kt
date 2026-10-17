@@ -38,14 +38,19 @@ class ServerListModelTest {
     }
 
     @Test
-    fun `selected row is a neutral surface with a coral frame, never the error surface`() {
+    fun `selected row is a neutral surface without its own frame, never the error surface`() {
         for (p in listOf(LightAfterglow, DarkAfterglow)) {
-            val selected = p.serverRowColors(selected = true)
-            assertEquals(p.paperSecondary, selected.container)
-            assertEquals(p.coral, selected.frame)
-            assertNotEquals(p.errorSurface, selected.container)
-            assertEquals(Color.Transparent, p.serverRowColors(selected = false).container)
-            assertEquals(Color.Transparent, p.serverRowColors(selected = false).frame)
+            assertEquals(p.paperSecondary, p.serverRowContainer(selected = true))
+            assertNotEquals(p.errorSurface, p.serverRowContainer(selected = true))
+            assertEquals(Color.Transparent, p.serverRowContainer(selected = false))
+        }
+    }
+
+    @Test
+    fun `only a standalone selected card is outlined in coral`() {
+        for (p in listOf(LightAfterglow, DarkAfterglow)) {
+            assertEquals(p.coral, p.cardOutline(selected = true))
+            assertEquals(null, p.cardOutline(selected = false))
         }
     }
 

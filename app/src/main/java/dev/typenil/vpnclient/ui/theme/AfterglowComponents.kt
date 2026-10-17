@@ -35,16 +35,16 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 
-/** Elevated, rounded, 1 dp bordered container; rows inside own their padding. */
+/** Elevated, rounded, 1 dp bordered container; rows inside own their padding. [outline] replaces the border colour (a selected standalone card). */
 @Composable
-fun AfterglowCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun AfterglowCard(modifier: Modifier = Modifier, outline: Color? = null, content: @Composable ColumnScope.() -> Unit) {
     val c = AfterglowTheme.colors
     Column(
         modifier
             .fillMaxWidth()
             .clip(AfterglowTokens.cardShape)
             .background(c.surfaceElevated)
-            .border(AfterglowTokens.border, c.border, AfterglowTokens.cardShape),
+            .border(AfterglowTokens.border, outline ?: c.border, AfterglowTokens.cardShape),
         content = content,
     )
 }

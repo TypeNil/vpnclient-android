@@ -85,6 +85,7 @@ import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.NoticeTone
 import dev.typenil.vpnclient.ui.theme.StateTone
+import dev.typenil.vpnclient.ui.theme.scaledDp
 import dev.typenil.vpnclient.ui.theme.stateColors
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -716,7 +717,7 @@ internal const val CONN_ARROW_UP_TAG = "conn_arrow_up"
 @Composable
 internal fun ConnectionsCount(download: Boolean, text: String, arrowColor: Color) {
     // sp-based like the row text beside it: a fixed dp arrow shrinks relative to text at large fonts.
-    val arrowSize = with(LocalDensity.current) { AfterglowTokens.connArrowSize.value.sp.toDp() }
+    val arrowSize = scaledDp(AfterglowTokens.connArrowSize)
     StatArrow(download, arrowColor, arrowSize, Modifier.testTag(if (download) CONN_ARROW_DOWN_TAG else CONN_ARROW_UP_TAG))
     Text(text, style = AfterglowType.rowCaption, fontWeight = FontWeight.SemiBold, color = AfterglowTheme.colors.ink,
         maxLines = 1, modifier = Modifier.padding(start = AfterglowTokens.headerInset))

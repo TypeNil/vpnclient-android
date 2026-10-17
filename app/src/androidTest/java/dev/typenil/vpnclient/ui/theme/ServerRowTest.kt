@@ -1,6 +1,13 @@
 package dev.typenil.vpnclient.ui.theme
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
@@ -58,7 +65,7 @@ class ServerRowTest {
     @Test fun unencryptedMarkerIsTextAndSpoken() {
         val label = context.getString(R.string.servers_unencrypted)
         compose.setContent {
-            ServerRow(title = "Local", selected = false, onClick = {}, protocol = "SOCKS", latency = tcp, unencryptedLabel = label)
+            ServerRow(title = "Local", selected = false, onClick = {}, protocol = "SOCKS", latency = tcp, warning = label)
         }
         compose.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithContentDescription("Local, SOCKS, $ms5, $label").assertExists()
@@ -78,7 +85,7 @@ class ServerRowTest {
         compose.setContent {
             val d = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 2f)) {
-                ServerRow(title = "Demo Frankfurt", selected = true, onClick = { clicks++ }, protocol = "SOCKS", latency = tcp, actionSlots = true)
+                ServerRow(title = "Demo Frankfurt", selected = true, onClick = { clicks++ }, protocol = "SOCKS", latency = tcp, actions = actionBox)
             }
         }
         compose.onNodeWithText(ms5, useUnmergedTree = true).assertIsDisplayed()
@@ -87,12 +94,14 @@ class ServerRowTest {
         compose.runOnIdle { assertEquals(1, clicks) }
     }
 
+    private val actionBox: @Composable () -> Unit = { Spacer(Modifier.size(96.dp, 48.dp)) }
+
     private val longTitle = "Long server name ".repeat(12)
 
     private fun titleWidthAfterSelecting(slots: Boolean) {
         val selected = mutableStateOf(false)
         compose.setContent {
-            ServerRow(title = longTitle, selected = selected.value, onClick = {}, protocol = "SOCKS", latency = tcp, actionSlots = slots)
+            ServerRow(title = longTitle, selected = selected.value, onClick = {}, protocol = "SOCKS", latency = tcp, actions = if (slots) actionBox else null)
         }
         val title = compose.onNodeWithText(longTitle, useUnmergedTree = true)
         val before = title.getUnclippedBoundsInRoot()
@@ -101,19 +110,30 @@ class ServerRowTest {
         assertEquals("slots=$slots", before, title.getUnclippedBoundsInRoot())
     }
 
-    @Test fun selectingNeverMovesTheTextWithoutActionSlots() = titleWidthAfterSelecting(slots = false)
+    @Test fun selectingNeverMovesTheTextWithoutActions() = titleWidthAfterSelecting(slots = false)
 
-    @Test fun selectingNeverMovesTheTextWithActionSlots() = titleWidthAfterSelecting(slots = true)
+    @Test fun selectingNeverMovesTheTextWithActions() = titleWidthAfterSelecting(slots = true)
 
-    @Test fun actionSlotsReserveRoomForStarAndMenu() {
+    @Test fun actionsReserveRoomForStarAndMenu() {
         compose.setContent {
             Column {
-                ServerRow(title = "A $longTitle", selected = false, onClick = {}, actionSlots = false)
-                ServerRow(title = "B $longTitle", selected = false, onClick = {}, actionSlots = true)
+                ServerRow(title = "A $longTitle", selected = false, onClick = {})
+                ServerRow(title = "B $longTitle", selected = false, onClick = {}, actions = actionBox)
             }
         }
         val plain = compose.onNodeWithText("A $longTitle", useUnmergedTree = true).getUnclippedBoundsInRoot().width
         val reserved = compose.onNodeWithText("B $longTitle", useUnmergedTree = true).getUnclippedBoundsInRoot().width
         assertTrue("reserved=$reserved plain=$plain", reserved < plain)
+    }
+
+    @Test fun selectedRowDrawsNoFrameOfItsOwn() {
+        compose.setContent { ServerRow(title = "Demo Frankfurt", selected = true, onClick = {}, protocol = "SOCKS", latency = tcp) }
+        val image = compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)).captureToImage()
+        val coral = LightAfterglow.coral.toArgb()
+        val edge = listOf(image.width / 2 to 0, image.width / 2 to image.height - 1, 0 to image.height / 2)
+        for ((x, y) in edge) {
+            val pixel = image.toPixelMap()[x, y].toArgb()
+            assertTrue("coral frame pixel at $x,$y", pixel != coral)
+        }
     }
 }

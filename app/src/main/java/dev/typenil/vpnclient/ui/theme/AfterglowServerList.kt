@@ -2,7 +2,7 @@ package dev.typenil.vpnclient.ui.theme
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -23,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -30,6 +32,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
 import dev.typenil.vpnclient.R
 
 /** Latency up to this is [LatencyTone.Good]; up to [LATENCY_FAIR_MAX_MS] [LatencyTone.Fair]; above (or a timeout) [LatencyTone.Poor]. */
@@ -63,11 +67,11 @@ fun AfterglowPalette.latencyChipColors(tone: LatencyTone): ChipColors =
         LatencyTone.None -> ChipColors(muted, Color.Transparent)
     }
 
-/** Selected is a neutral surface with a coral frame; error red stays reserved for failures. Unselected keeps a clear frame so nothing shifts. */
-data class RowColors(val container: Color, val frame: Color)
+/** Selected is a neutral surface, no frame of its own: inside a provider card a second outline would double the card's. Error red stays reserved for failures. */
+fun AfterglowPalette.serverRowContainer(selected: Boolean): Color = if (selected) paperSecondary else Color.Transparent
 
-fun AfterglowPalette.serverRowColors(selected: Boolean): RowColors =
-    if (selected) RowColors(paperSecondary, coral) else RowColors(Color.Transparent, Color.Transparent)
+/** A card that is itself the selection (Auto) carries the coral outline; group cards keep the plain border. */
+fun AfterglowPalette.cardOutline(selected: Boolean): Color? = if (selected) coral else null
 
 /** One provider's header is noise; it appears once there is more than one group to tell apart. */
 fun showProviderHeader(groupCount: Int): Boolean = groupCount > 1
@@ -106,9 +110,15 @@ fun LatencyChip(reading: LatencyReading?, modifier: Modifier = Modifier) {
     )
 }
 
+/** A dp size that follows the font scale (dp → sp → dp), so glyphs grow with the text they sit beside — the 12C-5 arrow mechanism. */
+@Composable
+fun scaledDp(size: Dp): Dp = with(LocalDensity.current) { size.value.sp.toDp() }
+
 /**
- * Compact selectable server row. The check slot (and, with [actionSlots], two 48 dp slots for
- * star and menu) is always reserved, so selecting never moves the text or the chip.
+ * Compact selectable server row. The check slot and [actions] (star, menu: each its own 48 dp
+ * target) are always composed, so selecting never moves the text or the chip. [caption] and
+ * [warning] are lines under the title; [spoken] is extra text for the row's accessibility
+ * description only (latency method and age).
  */
 @Composable
 fun ServerRow(
@@ -120,56 +130,53 @@ fun ServerRow(
     latency: LatencyReading? = null,
     showLatency: Boolean = true,
     caption: String? = null,
-    unencryptedLabel: String? = null,
-    actionSlots: Boolean = false,
+    warning: String? = null,
+    spoken: String? = null,
+    actions: (@Composable () -> Unit)? = null,
 ) {
     val c = AfterglowTheme.colors
-    val row = c.serverRowColors(selected)
     val selectedLabel = stringResource(R.string.common_selected)
     val description = serverRowDescription(
         title, protocol, if (showLatency && latency != null) latencyText(latency) else null, caption,
-        unencryptedLabel, if (selected) selectedLabel else null,
+        warning, spoken, if (selected) selectedLabel else null,
     )
     Row(
         modifier
             .fillMaxWidth()
             .padding(AfterglowTokens.rowInset)
             .clip(AfterglowTokens.chipShape)
-            .background(row.container)
-            .border(AfterglowTokens.border, row.frame, AfterglowTokens.chipShape)
+            .background(c.serverRowContainer(selected))
             .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
             .clearAndSetSemantics { contentDescription = description }
             .heightIn(min = AfterglowTokens.touchTarget)
-            .padding(horizontal = AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset, vertical = AfterglowTokens.serverRowPaddingV),
+            .padding(start = AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset, top = AfterglowTokens.serverRowPaddingV, bottom = AfterglowTokens.serverRowPaddingV),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
-                if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)
-                if (protocol != null && (showLatency || caption != null)) Text("·", style = AfterglowType.rowCaption, color = c.muted)
-                if (showLatency) LatencyChip(latency)
-                if (caption != null) {
-                    Text(caption, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (protocol != null || showLatency) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
+                    if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)
+                    if (protocol != null && showLatency) Text("·", style = AfterglowType.rowCaption, color = c.muted)
+                    if (showLatency) LatencyChip(latency)
                 }
             }
-            if (unencryptedLabel != null) {
-                Text(unencryptedLabel, style = AfterglowType.statLabel, color = c.error, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            if (caption != null) Text(caption, style = AfterglowType.rowCaption, color = c.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (warning != null) Text(warning, style = AfterglowType.statLabel, color = c.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Box(Modifier.size(AfterglowTokens.iconSize), contentAlignment = Alignment.Center) {
-            if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = c.coral)
+        Box(Modifier.size(scaledDp(AfterglowTokens.iconSize)), contentAlignment = Alignment.Center) {
+            if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = c.coral, modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)))
         }
-        // ponytail: empty reserved slots; the unified Servers sheet puts the star and the menu in them.
-        if (actionSlots) Box(Modifier.size(width = AfterglowTokens.touchTarget * 2, height = AfterglowTokens.touchTarget))
+        // Without actions the row keeps the trailing inset its padding used to give.
+        if (actions != null) actions() else Spacer(Modifier.width(AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset))
     }
 }
 
-/** One card per provider: optional [header] ("Provider · N"), then [content] rows split by thin dividers. Not sticky. */
+/** One card per provider: optional [header] ("Provider · N"), then [content] rows split by thin dividers. Not sticky. [selectedOutline] = the card itself is the selection (Auto). */
 @Composable
-fun ProviderGroupCard(header: String?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    AfterglowCard(modifier) {
+fun ProviderGroupCard(header: String?, modifier: Modifier = Modifier, selectedOutline: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+    AfterglowCard(modifier, outline = AfterglowTheme.colors.cardOutline(selectedOutline)) {
         if (header != null) {
             Text(
                 header,

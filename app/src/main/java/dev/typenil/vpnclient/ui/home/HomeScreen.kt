@@ -310,7 +310,7 @@ private fun PickerRow(
         onClick = onClick,
         protocol = option.protocol,
         latency = option.latency,
-        unencryptedLabel =
+        warning =
             if (option.encrypted) {
                 null
             } else {
