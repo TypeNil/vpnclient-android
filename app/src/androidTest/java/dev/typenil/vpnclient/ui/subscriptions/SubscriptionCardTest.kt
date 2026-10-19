@@ -1,6 +1,9 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -181,4 +184,20 @@ class SubscriptionCardTest {
     @Test fun missingUserInfoHidesTrafficLine() = shape(null, serversText, forbidText = usedWord)
 
     @Test fun threeHundredNodesRender() = shape(null, "300", nodes = 300)
+
+    @Test fun noticeAnimatesInAndOutWithTheError() {
+        var error by mutableStateOf<String?>(null)
+        compose.setContent {
+            SubscriptionCard(
+                profile = profile(lastError = error), nodeCount = 6, refreshing = false, manual = false,
+                onOpenDetails = {}, onRefresh = {}, onRename = {}, onEditUrl = {}, onDelete = {},
+            )
+        }
+        val failed = str(R.string.subs_refresh_failed_notice, "").trim().substringBefore(" —")
+        compose.onNodeWithText(failed, substring = true).assertDoesNotExist()
+        compose.runOnIdle { error = "http 500" }
+        compose.onNodeWithText(failed, substring = true).assertIsDisplayed()
+        compose.runOnIdle { error = null }
+        compose.onNodeWithText(failed, substring = true).assertDoesNotExist()
+    }
 }

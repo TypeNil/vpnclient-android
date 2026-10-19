@@ -1,5 +1,12 @@
 package dev.typenil.vpnclient.ui.subscriptions
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,7 +91,9 @@ internal fun SubscriptionCard(
     val bodyEnd = AfterglowTokens.rowPaddingH - AfterglowTokens.headerInset
     AfterglowCard(Modifier.clickable(role = Role.Button, onClick = onOpenDetails)) {
         Column(
-            Modifier.padding(start = AfterglowTokens.rowPaddingH, top = AfterglowTokens.cardGap, end = AfterglowTokens.headerInset, bottom = AfterglowTokens.cardGap),
+            Modifier
+                .animateContentSize(tween(AfterglowTokens.motionStandard))
+                .padding(start = AfterglowTokens.rowPaddingH, top = AfterglowTokens.cardGap, end = AfterglowTokens.headerInset, bottom = AfterglowTokens.cardGap),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -124,15 +133,25 @@ internal fun SubscriptionCard(
                         modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget).semantics { contentDescription = supportCd },
                     ) { Text(stringResource(R.string.subs_support), color = c.coral) }
                 }
-                profile.lastError?.let { error ->
-                    val reason = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error
-                    val updated = profile.lastUpdatedAt
-                    AfterglowNotice(
-                        tone = NoticeTone.Error,
-                        text = if (updated != null) stringResource(R.string.subs_refresh_failed_notice, formatRelativeTime(updated)) else reason,
-                        detail = if (updated != null) reason else null,
-                        modifier = Modifier.padding(top = AfterglowTokens.headerGap),
-                    )
+                // The notice fades/expands in when a refresh fails and out when one succeeds; it keeps the last
+                // error text while leaving so it doesn't blank out mid-animation.
+                val lastShown = remember { arrayOfNulls<String>(1) }
+                profile.lastError?.let { lastShown[0] = it }
+                AnimatedVisibility(
+                    visible = profile.lastError != null,
+                    enter = fadeIn(tween(AfterglowTokens.motionStandard)) + expandVertically(tween(AfterglowTokens.motionStandard)),
+                    exit = fadeOut(tween(AfterglowTokens.motionFast)) + shrinkVertically(tween(AfterglowTokens.motionFast)),
+                ) {
+                    lastShown[0]?.let { error ->
+                        val reason = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error
+                        val updated = profile.lastUpdatedAt
+                        AfterglowNotice(
+                            tone = NoticeTone.Error,
+                            text = if (updated != null) stringResource(R.string.subs_refresh_failed_notice, formatRelativeTime(updated)) else reason,
+                            detail = if (updated != null) reason else null,
+                            modifier = Modifier.padding(top = AfterglowTokens.headerGap),
+                        )
+                    }
                 }
             }
         }
