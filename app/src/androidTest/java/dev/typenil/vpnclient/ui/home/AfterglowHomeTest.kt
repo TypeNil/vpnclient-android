@@ -22,6 +22,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.ui.theme.AfterglowNotice
 import dev.typenil.vpnclient.ui.theme.NoticeTone
 import dev.typenil.vpnclient.core.common.formatBytes
+import dev.typenil.vpnclient.core.common.formatRate
 import dev.typenil.vpnclient.core.engine.TrafficStats
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.core.subscription.model.NodeSummary
@@ -113,7 +114,7 @@ class AfterglowHomeTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         compose.onNodeWithText(context.getString(R.string.afterglow_retry)).assertExists().performClick()
         compose.runOnIdle { assertEquals(1, retries) }
-        compose.onNodeWithText("VPN permission denied").assertExists()
+        compose.onNodeWithText(context.getString(R.string.home_error_permission_denied)).assertExists()
     }
 
     @Test fun connectedHomeShowsTwoColumnsAndOpensDetails() {
@@ -156,10 +157,12 @@ class AfterglowHomeTest {
         // Stats sit below the server/routing card — scroll them into view. No
         // toggle: both columns are always visible, one announced node each.
         compose.onNode(hasContentDescription(
-            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_download), "2.0 KB/s", "19.5 KB")))
+            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_download),
+                context.resources.formatRate(2048), context.resources.formatBytes(20000))))
             .performScrollTo().assertExists()
         compose.onNode(hasContentDescription(
-            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_upload), "1.0 KB/s", "9.8 KB")))
+            context.getString(R.string.home_stat_column_desc, context.getString(R.string.home_stat_upload),
+                context.resources.formatRate(1024), context.resources.formatBytes(10000))))
             .assertExists()
         // The Connections row is one announced node and opens the Connections screen.
         compose.onNode(hasContentDescription(context.getString(R.string.home_stat_connections_desc, 2, 5)))

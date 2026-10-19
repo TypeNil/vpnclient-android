@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.home
 
+import dev.typenil.vpnclient.core.common.formatBytes
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
@@ -63,7 +64,7 @@ class SessionDetailsSheetTest {
         val stats = TrafficStats(0, 0, uplinkTotalBytes = 2048, downlinkTotalBytes = 4096, connectionsIn = 3, connectionsOut = 8, goroutines = 0, memoryBytes = 0)
         compose.setContent { SessionDetailsSheet(connected(stats), details(), onDismiss = {}, onOpenDiagnostics = {}) }
         compose.onNode(hasContentDescription(context.getString(R.string.home_stat_connections_desc, 3, 8))).performScrollTo().assertExists()
-        compose.onNode(hasContentDescription("${context.getString(R.string.home_details_downloaded)}, 4.0 KB")).assertExists()
+        compose.onNode(hasContentDescription("${context.getString(R.string.home_details_downloaded)}, ${context.resources.formatBytes(4096)}")).assertExists()
     }
 
     @Test fun missingStatsShowDashesInConnectionsRow() {
