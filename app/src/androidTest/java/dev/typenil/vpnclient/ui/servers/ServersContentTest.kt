@@ -22,6 +22,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.data.db.NodeEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -178,6 +179,13 @@ class ServersContentTest {
     @Test fun noMatchShowsTheMessage() {
         show(ServersUiState(noSubscriptions = false, groups = emptyList()))
         compose.onNodeWithText(str(R.string.servers_no_match)).assertIsDisplayed()
+    }
+
+    @Test fun noMatchMessageDoesNotTouchTheAutoCard() {
+        show(ServersUiState(noSubscriptions = false, groups = emptyList()))
+        val message = compose.onNodeWithText(str(R.string.servers_no_match)).getUnclippedBoundsInRoot()
+        val auto = compose.onNodeWithContentDescription(str(R.string.common_auto_fastest), substring = true).getUnclippedBoundsInRoot()
+        assertTrue("message bottom=${message.bottom} auto top=${auto.top}", auto.top - message.bottom >= 8.dp)
     }
 
     @Test fun autoRowCarriesItsOwnSelection() {

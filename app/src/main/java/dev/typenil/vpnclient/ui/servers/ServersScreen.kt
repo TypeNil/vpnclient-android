@@ -218,7 +218,7 @@ internal fun ServersContent(
         if (ui.groups.isEmpty()) {
             item(key = "empty") {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp, bottom = AfterglowTokens.cardGap),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (ui.noSubscriptions) {
