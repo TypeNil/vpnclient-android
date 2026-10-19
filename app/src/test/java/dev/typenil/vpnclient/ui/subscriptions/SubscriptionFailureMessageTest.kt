@@ -2,6 +2,7 @@ package dev.typenil.vpnclient.ui.subscriptions
 
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.identificationErrorToken
+import dev.typenil.vpnclient.core.subscription.transportErrorToken
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionError
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -34,9 +35,18 @@ class SubscriptionFailureMessageTest {
         assertNull(subscriptionFailureMessage("HTTP untrusted", false))
     }
 
+    @Test fun `transport and duplicate errors always map to a localized message`() {
+        for (e in listOf(SubscriptionError.Network, SubscriptionError.Offline, SubscriptionError.Timeout, SubscriptionError.Duplicate)) {
+            assertNotNull(e.toString(), subscriptionFailureMessage(e.transportErrorToken()!!, true))
+        }
+        assertNull(SubscriptionError.BadUrl.transportErrorToken())
+    }
+
     @Test fun `stored repository tokens render localized instead of raw english`() {
         assertEquals(R.string.subs_add_err_network, subscriptionFailureMessage("network unavailable", true)!!.resId)
         assertEquals(R.string.subs_add_err_timeout, subscriptionFailureMessage("request timed out", true)!!.resId)
+        assertEquals(R.string.subs_add_err_duplicate, subscriptionFailureMessage("duplicate link", true)!!.resId)
+        assertEquals(R.string.subs_add_err_offline, subscriptionFailureMessage("device offline", true)!!.resId)
         assertEquals(R.string.subs_add_err_invalid, subscriptionFailureMessage("no usable nodes", true)!!.resId)
         assertEquals(R.string.subs_add_err_insecure, subscriptionFailureMessage("https required", true)!!.resId)
         assertEquals(R.string.subs_add_err_bad_address, subscriptionFailureMessage("bad url", true)!!.resId)

@@ -63,6 +63,10 @@ sealed class SubscriptionError : Exception() {
     data object Network : SubscriptionError() {
         override val message = "network unavailable"
     }
+    /** The transport failed and the device has no usable network at all — not the provider's fault. */
+    data object Offline : SubscriptionError() {
+        override val message = "device offline"
+    }
     data object Timeout : SubscriptionError() {
         override val message = "request timed out"
     }
@@ -96,6 +100,10 @@ sealed class SubscriptionError : Exception() {
         val announce: String? = null,
     ) : SubscriptionError() {
         override fun toString() = "DeviceIdentificationRejected(reason=$reason, sendingDisabled=$sendingDisabled)"
+    }
+    /** Another subscription already uses this link (see normalizedSubscriptionUrl). */
+    data object Duplicate : SubscriptionError() {
+        override val message = "duplicate link"
     }
     /** The URL itself is not a usable http(s) address. */
     data object BadUrl : SubscriptionError() {

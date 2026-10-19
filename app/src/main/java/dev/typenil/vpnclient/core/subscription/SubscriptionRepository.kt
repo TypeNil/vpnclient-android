@@ -163,6 +163,10 @@ class SubscriptionRepository
                 )
             val id =
                 addGate.withLock {
+                    // Inside the gate: two concurrent adds of one link can't both pass. Pending rows count too.
+                    if (subscriptionDao.getAll().any { sameSubscriptionUrl(it.url, trimmed) }) {
+                        return Result.failure(SubscriptionError.Duplicate)
+                    }
                     subscriptionDao.insert(entity).also { id -> pendingAdds.update { it + id } }
                 }
             try {
@@ -1103,6 +1107,9 @@ class SubscriptionRepository
                         if (!candidate.isHttps && !sub.allowInsecureHttp) {
                             throw SubscriptionError.InsecureTransport
                         }
+                        if (subscriptionDao.getAll().any { it.id != id && sameSubscriptionUrl(it.url, trimmed) }) {
+                            return@withLock Result.failure(SubscriptionError.Duplicate)
+                        }
                         if (trimmed == sub.url) {
                             // Same-URL edit is a manual refresh — never gated.
                             return@withLock refreshLocked(id, RefreshTrigger.Manual)
@@ -1327,6 +1334,7 @@ class SubscriptionRepository
             when (this) {
                 is SubscriptionError.Http -> identificationErrorToken()!!
                 is SubscriptionError.Network -> "network unavailable"
+                is SubscriptionError.Offline -> "device offline"
                 is SubscriptionError.Timeout -> "request timed out"
                 is SubscriptionError.TooLarge -> "response too large"
                 is SubscriptionError.UnsupportedFormat -> "unsupported format"
@@ -1334,6 +1342,7 @@ class SubscriptionRepository
                 is SubscriptionError.EmptyResult -> "no usable nodes"
                 is SubscriptionError.Inactive -> "no usable nodes"
                 is SubscriptionError.BadUrl -> "bad url"
+                is SubscriptionError.Duplicate -> "duplicate link"
                 is SubscriptionError.ConfigRejected -> "rejected by engine"
                 is SubscriptionError.InsecureTransport -> "https required"
                 is SubscriptionError.ForbiddenAddress -> "redirect to local address blocked"

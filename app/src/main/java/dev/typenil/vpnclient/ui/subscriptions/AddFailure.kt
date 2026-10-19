@@ -16,10 +16,12 @@ enum class AddFailureKind(@StringRes val textRes: Int) {
     Http(R.string.subs_add_err_http),
     ServerError(R.string.subs_add_err_server),
     Network(R.string.subs_add_err_network),
+    Offline(R.string.subs_add_err_offline),
     Timeout(R.string.subs_add_err_timeout),
     InvalidResponse(R.string.subs_add_err_invalid),
     Insecure(R.string.subs_add_err_insecure),
     BadAddress(R.string.subs_add_err_bad_address),
+    Duplicate(R.string.subs_add_err_duplicate),
     Other(R.string.subs_add_err_other),
 }
 
@@ -49,6 +51,7 @@ fun addFailureOf(e: Throwable): AddFailure = when (e) {
         if (e.reason == InactiveReason.Expired) AddFailureKind.Expired else AddFailureKind.UsedUp,
     )
     is SubscriptionError.Network -> AddFailure(AddFailureKind.Network)
+    is SubscriptionError.Offline -> AddFailure(AddFailureKind.Offline)
     is SubscriptionError.Timeout -> AddFailure(AddFailureKind.Timeout)
     is SubscriptionError.TooLarge, is SubscriptionError.UnsupportedFormat,
     is SubscriptionError.ParseFailed, is SubscriptionError.EmptyResult,
@@ -57,5 +60,6 @@ fun addFailureOf(e: Throwable): AddFailure = when (e) {
     is SubscriptionError.InsecureTransport, is SubscriptionError.ForbiddenAddress ->
         AddFailure(AddFailureKind.Insecure)
     is SubscriptionError.BadUrl -> AddFailure(AddFailureKind.BadAddress)
+    is SubscriptionError.Duplicate -> AddFailure(AddFailureKind.Duplicate)
     else -> AddFailure(AddFailureKind.Other)
 }

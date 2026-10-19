@@ -424,7 +424,8 @@ class SubscriptionRepositoryTest {
                 val callsBefore = settings.hwidCalls
                 server.enqueue(MockResponse().setBody(uri("192.0.2.1", "Synthetic")))
                 val result = when (entry) {
-                    "add" -> repository.add(server.url("/add").toString(), "Synthetic", true)
+                    // A distinct link per consent state: the same link twice is now a Duplicate.
+                    "add" -> repository.add(server.url("/add/$consent").toString(), "Synthetic", true)
                     "periodic" -> repository.refreshPeriodic(1)
                     "launch" -> repository.refreshOnLaunch(1)
                     "edit" -> repository.editUrl(1, server.url("/edit").toString())
@@ -597,6 +598,31 @@ class SubscriptionRepositoryTest {
 
         assertTrue(result.isSuccess)
         assertEquals(1, subscriptionDao.subs.size)
+    }
+
+    @Test
+    fun `add rejects a link that is already a subscription without a trace`() = runTest {
+        seedSubscription(1L, "https://sub.example.test/path/token")
+
+        for (same in listOf("https://sub.example.test/path/token/", "HTTPS://SUB.EXAMPLE.TEST/path/token#n", "  https://sub.example.test:443/path/token ")) {
+            val result = repository.add(same, null)
+            assertTrue(same, result.exceptionOrNull() is SubscriptionError.Duplicate)
+        }
+        assertEquals(1, subscriptionDao.subs.size)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `editUrl rejects another subscriptions link before any fetch`() = runTest {
+        seedSubscription(1L, "https://one.example.test/a")
+        seedSubscription(2L, "https://two.example.test/b")
+
+        val result = repository.editUrl(1, "https://two.example.test/b/")
+
+        assertTrue(result.exceptionOrNull() is SubscriptionError.Duplicate)
+        assertEquals("https://one.example.test/a", subscriptionDao.subs[1]!!.url)
+        assertNull(subscriptionDao.lastAttemptError)
+        assertEquals(0, server.requestCount)
     }
 
     @Test

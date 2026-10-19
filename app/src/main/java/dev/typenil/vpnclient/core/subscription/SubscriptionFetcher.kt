@@ -21,6 +21,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/** Whether the device currently has a usable network; asked only after a transport failure. */
+fun interface OnlineCheck {
+    fun isOnline(): Boolean
+}
+
 data class FetchedSubscription(
     val body: ByteArray,
     val contentType: String?,
@@ -56,6 +61,7 @@ data class FetchedSubscription(
 @Singleton
 class SubscriptionFetcher @Inject constructor(
     private val client: OkHttpClient,
+    private val onlineCheck: OnlineCheck = OnlineCheck { true },
 ) {
 
     companion object {
@@ -139,7 +145,9 @@ class SubscriptionFetcher @Inject constructor(
                     // (callTimeout) — both surface as InterruptedIOException.
                     throw SubscriptionError.Timeout
                 } catch (e: IOException) {
-                    throw SubscriptionError.Network
+                    // Only a transport failure with no usable network is "offline"; a provider that
+                    // refuses or drops the connection while the device is online stays Network.
+                    throw if (onlineCheck.isOnline()) SubscriptionError.Network else SubscriptionError.Offline
                 }
 
                 hwidRefusal(response.headers)?.let { reason ->

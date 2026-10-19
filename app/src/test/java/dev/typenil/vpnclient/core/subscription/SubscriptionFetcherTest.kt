@@ -208,6 +208,22 @@ class SubscriptionFetcherTest {
     }
 
     @Test
+    fun `transport failure is Offline only when the device has no network`() = runTest {
+        suspend fun failureWith(online: Boolean): SubscriptionError {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            val f = SubscriptionFetcher(OkHttpClient.Builder().retryOnConnectionFailure(false).build(), OnlineCheck { online })
+            return try {
+                f.fetch(server.url("/sub").toString(), hwid, allowInsecure = true)
+                throw AssertionError("expected SubscriptionError")
+            } catch (e: SubscriptionError) {
+                e
+            }
+        }
+        assertTrue(failureWith(online = false) is SubscriptionError.Offline)
+        assertTrue(failureWith(online = true) is SubscriptionError.Network)
+    }
+
+    @Test
     fun `whole-call deadline maps to Timeout`() = runTest {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         val deadlineFetcher = SubscriptionFetcher(

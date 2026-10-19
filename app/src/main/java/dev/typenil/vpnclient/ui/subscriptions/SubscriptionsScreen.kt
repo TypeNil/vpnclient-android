@@ -122,6 +122,8 @@ fun SubscriptionsScreen(
     // in place instead of showing a stale snapshot.
     var detailId by rememberSaveable { mutableStateOf<Long?>(null) }
     val detail = ui.profiles.firstOrNull { it.id == detailId }
+    // A failure explains the text that produced it: editing (or reopening) drops it.
+    val clearAddFailure = { if (addStatus is AddStatus.Failed) viewModel.clearAddStatus() }
 
     // Deep-link/share funnel: open the add dialog prefilled — the user still
     // confirms; nothing is imported silently.
@@ -129,6 +131,7 @@ fun SubscriptionsScreen(
         if (import != null) {
             dialogUrl = import.url
             dialogName = import.name.orEmpty()
+            clearAddFailure()
             showAddDialog = true
             onImportConsumed()
         }
@@ -137,6 +140,7 @@ fun SubscriptionsScreen(
     // Cross-tab open signal (Servers empty state): same dialog, unprefilled.
     LaunchedEffect(openAddDialog) {
         if (openAddDialog) {
+            clearAddFailure()
             showAddDialog = true
             onAddDialogSignalConsumed()
         }
@@ -165,7 +169,7 @@ fun SubscriptionsScreen(
                     AfterglowTokens.cardShape,
                 )
                 .background(AfterglowTheme.colors.paperSecondary, AfterglowTokens.cardShape)
-                .clickable { showAddDialog = true }
+                .clickable { clearAddFailure(); showAddDialog = true }
                 .heightIn(min = AfterglowTokens.rowHeight)
                 .padding(horizontal = AfterglowTokens.rowGap, vertical = AfterglowTokens.rowPaddingV),
             verticalAlignment = Alignment.CenterVertically,
@@ -230,11 +234,11 @@ fun SubscriptionsScreen(
     if (showAddDialog) {
         AddSubscriptionDialog(
             url = dialogUrl,
-            onUrlChange = { dialogUrl = it },
+            onUrlChange = { dialogUrl = it; clearAddFailure() },
             name = dialogName,
-            onNameChange = { dialogName = it },
+            onNameChange = { dialogName = it; clearAddFailure() },
             allowInsecure = dialogAllowInsecure,
-            onAllowInsecureChange = { dialogAllowInsecure = it },
+            onAllowInsecureChange = { dialogAllowInsecure = it; clearAddFailure() },
             onScanQr = onScanQr,
             status = addStatus,
             onDismiss = {
@@ -353,14 +357,13 @@ private fun AddSubscriptionDialog(
         text = {
             // Scrollable: landscape/large fonts must still reach the actions.
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                (status as? AddStatus.Failed)?.failure?.let { AddFailureBlock(it) }
                 // Where the request goes, large: the field below shows the whole
                 // URL (token included) and is not masked, so the host is easy to miss.
                 subscriptionHost(url)?.let { host ->
                     Text(
                         stringResource(R.string.subs_add_host, host),
                         style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(bottom = 8.dp),
+                        modifier = Modifier.padding(bottom = AfterglowTokens.headerGap),
                     )
                 }
                 // Full-width field — sharing the row with Paste wrapped long
@@ -380,6 +383,8 @@ private fun AddSubscriptionDialog(
                     },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // Right under the field it explains, so it stays in view above the keyboard.
+                (status as? AddStatus.Failed)?.failure?.let { AddFailureBlock(it) }
                 TextButton(
                     onClick = {
                         val text = clipboard.getText()?.text?.trim()
@@ -397,7 +402,7 @@ private fun AddSubscriptionDialog(
                 ) {
                     Text(stringResource(R.string.subs_paste))
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(AfterglowTokens.headerGap))
                 OutlinedTextField(
                     value = name,
                     onValueChange = onNameChange,
@@ -406,7 +411,7 @@ private fun AddSubscriptionDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (isHttp && !allowInsecure) {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(AfterglowTokens.headerGap))
                     Text(
                         text = stringResource(R.string.subs_http_warning),
                         style = MaterialTheme.typography.bodySmall,
@@ -453,7 +458,7 @@ private fun AddSubscriptionDialog(
 private fun AddFailureBlock(failure: AddFailure) {
     Column(
         Modifier
-            .padding(bottom = 12.dp)
+            .padding(top = AfterglowTokens.headerGap)
             .semantics { liveRegion = LiveRegionMode.Polite },
     ) {
         Text(

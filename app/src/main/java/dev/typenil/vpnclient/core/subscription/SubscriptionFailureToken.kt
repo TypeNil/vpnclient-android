@@ -14,3 +14,12 @@ fun SubscriptionError.identificationErrorToken(): String? = when (this) {
     }
     else -> null
 }
+
+/** Fixed tokens of the user-facing transport/input failures that have a localized message. */
+fun SubscriptionError.transportErrorToken(): String? = when (this) {
+    is SubscriptionError.Network -> "network unavailable"
+    is SubscriptionError.Offline -> "device offline"
+    is SubscriptionError.Timeout -> "request timed out"
+    is SubscriptionError.Duplicate -> "duplicate link"
+    else -> null
+}

@@ -523,10 +523,12 @@
     <string name="subs_add_err_http">The server refused the request. Check the link, or contact the provider.</string>
     <string name="subs_add_err_server">The provider\'s server has a problem right now. Try again later or contact the provider.</string>
     <string name="subs_add_err_network">Can\'t reach the server. Check your internet connection and try again.</string>
+    <string name="subs_add_err_offline">You\'re offline. Connect to the internet and try again.</string>
     <string name="subs_add_err_timeout">The server took too long to answer. Try again in a moment.</string>
     <string name="subs_add_err_invalid">The server answered, but no usable servers were found. Check that the link is correct and its format is supported.</string>
     <string name="subs_add_err_insecure">This link isn\'t allowed: it uses an unprotected or local address. Use an https link.</string>
     <string name="subs_add_err_bad_address">This doesn\'t look like a valid web address. Check the link.</string>
+    <string name="subs_add_err_duplicate">This link is already in your subscriptions.</string>
     <string name="subs_add_err_other">Couldn\'t add the subscription. Try again.</string>
     <string name="subs_add_err_code">Server response: HTTP %1$d</string>
     <string name="subs_add_err_provider">Message from provider</string>

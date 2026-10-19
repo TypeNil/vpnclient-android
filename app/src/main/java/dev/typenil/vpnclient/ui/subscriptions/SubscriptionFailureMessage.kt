@@ -17,10 +17,12 @@ fun subscriptionFailureMessage(token: String, hasServers: Boolean): UserMessage.
             R.string.subs_hwid_ambiguous to "Provider rejected device identification. A device limit is not confirmed; contact support."
         // Fixed tokens stored by SubscriptionRepository.safeMessage(); reuse the add-dialog wording.
         "network unavailable" -> R.string.subs_add_err_network to "Can't reach the server."
+        "device offline" -> R.string.subs_add_err_offline to "You're offline. Connect to the internet and try again."
         "request timed out" -> R.string.subs_add_err_timeout to "The server took too long to answer."
         "response too large", "unsupported format", "parse failed", "no usable nodes", "rejected by engine" ->
             R.string.subs_add_err_invalid to "The server answered, but no usable servers were found."
         "https required", "redirect to local address blocked" -> R.string.subs_add_err_insecure to "This link isn't allowed."
+        "duplicate link" -> R.string.subs_add_err_duplicate to "This link is already in your subscriptions."
         "bad url" -> R.string.subs_add_err_bad_address to "This doesn't look like a valid web address."
         else -> {
             val code = Regex("^(?:sub:http:|HTTP )([1-5][0-9]{2})$").matchEntire(token)

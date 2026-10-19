@@ -77,6 +77,7 @@ class SubscriptionRefreshWorker(
             return Result.success()
         }
         val transient = error is SubscriptionError.Network ||
+            error is SubscriptionError.Offline ||
             error is SubscriptionError.Timeout
         return if (transient && runAttemptCount < MAX_ATTEMPTS - 1) {
             Result.retry()

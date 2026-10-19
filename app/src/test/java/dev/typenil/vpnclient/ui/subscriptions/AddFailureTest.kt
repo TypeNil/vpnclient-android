@@ -38,6 +38,7 @@ class AddFailureTest {
         assertEquals(AddFailureKind.Expired, kind(SubscriptionError.Inactive(InactiveReason.Expired)))
         assertEquals(AddFailureKind.UsedUp, kind(SubscriptionError.Inactive(InactiveReason.TrafficUsedUp)))
         assertEquals(AddFailureKind.Network, kind(SubscriptionError.Network))
+        assertEquals(AddFailureKind.Offline, kind(SubscriptionError.Offline))
         assertEquals(AddFailureKind.Timeout, kind(SubscriptionError.Timeout))
         for (e in listOf(
             SubscriptionError.TooLarge(1), SubscriptionError.UnsupportedFormat("x"),
@@ -46,6 +47,7 @@ class AddFailureTest {
         assertEquals(AddFailureKind.Insecure, kind(SubscriptionError.InsecureTransport))
         assertEquals(AddFailureKind.Insecure, kind(SubscriptionError.ForbiddenAddress))
         assertEquals(AddFailureKind.BadAddress, kind(SubscriptionError.BadUrl))
+        assertEquals(AddFailureKind.Duplicate, kind(SubscriptionError.Duplicate))
         assertEquals(AddFailureKind.Other, kind(IllegalStateException()))
         assertNull(addFailureOf(SubscriptionError.Network).providerMessage)
     }

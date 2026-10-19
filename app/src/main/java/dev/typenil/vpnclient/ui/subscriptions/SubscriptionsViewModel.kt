@@ -10,6 +10,7 @@ import dev.typenil.vpnclient.core.subscription.ImportUrlExtractor
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.SubscriptionSettings
 import dev.typenil.vpnclient.core.subscription.identificationErrorToken
+import dev.typenil.vpnclient.core.subscription.transportErrorToken
 import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
 import dev.typenil.vpnclient.core.subscription.model.SkippedNode
 import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
@@ -142,7 +143,7 @@ class SubscriptionsViewModel
         }
 
         private fun postSubscriptionFailure(error: Throwable, @StringRes fallbackRes: Int, fallback: String, hasServers: Boolean = false) {
-            val localized = (error as? SubscriptionError)?.identificationErrorToken()
+            val localized = (error as? SubscriptionError)?.let { it.identificationErrorToken() ?: it.transportErrorToken() }
                 ?.let { subscriptionFailureMessage(it, hasServers) }
             if (localized != null) {
                 pendingMessage.value = PendingMessage(++nextMessageId, localized)

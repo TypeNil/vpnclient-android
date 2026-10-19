@@ -20,6 +20,7 @@ import dev.typenil.vpnclient.core.vpn.NodeConfigProvider
 import dev.typenil.vpnclient.core.vpn.ServiceControl
 import dev.typenil.vpnclient.core.vpn.TunProvider
 import dev.typenil.vpnclient.core.vpn.VpnTunProvider
+import dev.typenil.vpnclient.data.AndroidOnlineCheck
 import dev.typenil.vpnclient.data.CandidateValidatorImpl
 import dev.typenil.vpnclient.data.ExpiryAlertNotifier
 import dev.typenil.vpnclient.data.NodeConfigProviderImpl
@@ -85,6 +86,11 @@ object AppModule {
             // trickle (or redirect chain) run forever.
             .callTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
             .build()
+
+    @Provides
+    @Singleton
+    fun provideOnlineCheck(@ApplicationContext context: Context): dev.typenil.vpnclient.core.subscription.OnlineCheck =
+        AndroidOnlineCheck(context)
 
     @Provides
     @Singleton
