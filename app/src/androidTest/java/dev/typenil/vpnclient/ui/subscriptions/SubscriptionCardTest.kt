@@ -146,4 +146,39 @@ class SubscriptionCardTest {
         show(profile(supportUrl = "https://support.invalid/help"))
         compose.onNodeWithContentDescription(str(R.string.subs_support_cd, "support.invalid")).assertHeightIsAtLeast(48.dp)
     }
+
+    // Synthetic provider shapes (C2), rendered at the worst-case font scale: each must keep name and both buttons visible.
+    private fun shape(info: SubscriptionUserInfo?, expectText: String?, forbidText: String? = null, nodes: Int = 6) {
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, 2f)) {
+                SubscriptionCard(
+                    profile = profile(userInfo = info), nodeCount = nodes, refreshing = false, manual = false,
+                    onOpenDetails = {}, onRefresh = {}, onRename = {}, onEditUrl = {}, onDelete = {},
+                )
+            }
+        }
+        compose.onNodeWithText(name).assertIsDisplayed()
+        compose.onNodeWithContentDescription(refreshCd).assertIsDisplayed()
+        compose.onNodeWithContentDescription(moreCd).assertIsDisplayed()
+        expectText?.let { compose.onNodeWithText(it, substring = true, useUnmergedTree = true).assertIsDisplayed() }
+        forbidText?.let { compose.onNodeWithText(it, substring = true, useUnmergedTree = true).assertDoesNotExist() }
+    }
+
+    private val usedWord get() = str(R.string.subs_usage, "").trim()
+    private val now get() = System.currentTimeMillis() / 1000
+
+    @Test fun unlimitedTotalShowsUsedWithoutOf() =
+        shape(SubscriptionUserInfo(1L shl 20, 1L shl 20, 0, null), usedWord, forbidText = " of ")
+
+    @Test fun expiredShowsExpired() =
+        shape(SubscriptionUserInfo(1, 1, 1L shl 30, now - 86_400), str(R.string.subs_expired, "").trim(' ', '·'))
+
+    @Test fun quotaExceededStillRenders() = shape(SubscriptionUserInfo(3L shl 30, 3L shl 30, 1L shl 30, now + 86_400), usedWord)
+
+    @Test fun terabyteValuesRender() = shape(SubscriptionUserInfo(3L shl 40, 1L shl 40, 10L shl 40, null), "TB")
+
+    @Test fun missingUserInfoHidesTrafficLine() = shape(null, serversText, forbidText = usedWord)
+
+    @Test fun threeHundredNodesRender() = shape(null, "300", nodes = 300)
 }
