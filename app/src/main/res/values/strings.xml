@@ -437,7 +437,6 @@
     <string name="subs_detail_provider">Provider</string>
     <string name="subs_detail_no_servers">This subscription has no servers. Refresh to fetch them again.</string>
     <string name="subs_update_interval">Provider-recommended refresh</string>
-    <string name="subs_interval_never">never — local only</string>
     <string name="subs_interval_launch">every launch</string>
     <string name="subs_interval_minutes">every %1$d min</string>
     <string name="subs_interval_manual">manual</string>

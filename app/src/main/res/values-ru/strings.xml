@@ -446,7 +446,6 @@
     <string name="subs_detail_provider">Провайдер</string>
     <string name="subs_detail_no_servers">В этой подписке нет серверов. Обновите, чтобы загрузить их снова.</string>
     <string name="subs_update_interval">Рекомендация провайдера</string>
-    <string name="subs_interval_never">никогда — только локально</string>
     <string name="subs_interval_launch">при каждом запуске</string>
     <string name="subs_interval_minutes">каждые %1$d мин</string>
     <string name="subs_interval_manual">вручную</string>
