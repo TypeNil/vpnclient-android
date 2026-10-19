@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -539,7 +540,7 @@ private fun ServerNodeRow(
             IconButton(onClick = onToggleFavorite, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
                 Icon(
                     imageVector = AfterglowStar.icon(node.favorite),
-                    contentDescription = stringResource(if (node.favorite) R.string.servers_favorite_remove else R.string.servers_favorite_add),
+                    contentDescription = stringResource(if (node.favorite) R.string.servers_favorite_remove else R.string.servers_favorite_add, node.name),
                     tint = if (node.favorite) c.coral else c.muted,
                     modifier = Modifier.size(iconSize),
                 )
@@ -549,7 +550,7 @@ private fun ServerNodeRow(
                 IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
                     Icon(
                         imageVector = Icons.Default.MoreVert,
-                        contentDescription = stringResource(R.string.servers_node_menu),
+                        contentDescription = stringResource(R.string.servers_node_menu, node.name),
                         tint = c.muted,
                         modifier = Modifier.size(iconSize),
                     )
@@ -645,6 +646,8 @@ private fun NodeTlsDialog(
         title = { Text(stringResource(R.string.servers_tls_details)) },
         text = {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                // The full name: the list row may cut a very long one.
+                TlsDetailRow(label = stringResource(R.string.servers_tls_name), value = node.name)
                 TlsDetailRow(
                     label = stringResource(R.string.servers_tls_origin),
                     value =
@@ -712,7 +715,8 @@ private fun TlsDetailRow(
     value: String,
     warning: Boolean = false,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = AfterglowTokens.headerInset)) {
+    // One TalkBack node per fact: label and value are read together.
+    Column(Modifier.fillMaxWidth().padding(vertical = AfterglowTokens.headerInset).semantics(mergeDescendants = true) {}) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,

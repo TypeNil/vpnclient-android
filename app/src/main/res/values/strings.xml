@@ -167,7 +167,7 @@
     <string name="routing_rule_action_proxy">Proxy</string>
     <string name="routing_rule_action_direct">Direct</string>
     <string name="routing_rule_action_block">Block</string>
-    <string name="servers_node_menu">Server options</string>
+    <string name="servers_node_menu">Options for %1$s</string>
     <string name="servers_rename">Rename</string>
     <string name="servers_rename_title">Server name</string>
     <string name="servers_rename_hint">Empty resets to the provider name</string>
@@ -304,11 +304,12 @@
     <string name="servers_no_servers_title">No servers yet</string>
     <string name="servers_no_servers_hint">Your subscriptions returned no servers. Refresh to try again.</string>
     <string name="servers_latency_timeout">unreachable</string>
-    <string name="servers_favorite_remove">Remove from favorites</string>
-    <string name="servers_favorite_add">Add to favorites</string>
+    <string name="servers_favorite_remove">Remove %1$s from favorites</string>
+    <string name="servers_favorite_add">Add %1$s to favorites</string>
     <string name="servers_latency_ms">%1$d ms</string>
     <string name="servers_tls_insecure_warning">TLS certificate check disabled</string>
     <string name="servers_tls_details">TLS details</string>
+    <string name="servers_tls_name">Name</string>
     <string name="servers_tls_origin">Source</string>
     <string name="servers_tls_origin_sharelink">Added from a share link</string>
     <string name="servers_tls_origin_subscription">Imported subscription config</string>

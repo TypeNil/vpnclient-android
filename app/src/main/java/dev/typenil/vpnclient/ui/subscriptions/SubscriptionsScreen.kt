@@ -171,7 +171,7 @@ fun SubscriptionsScreen(
                     AfterglowTokens.cardShape,
                 )
                 .background(AfterglowTheme.colors.paperSecondary, AfterglowTokens.cardShape)
-                .clickable { clearAddFailure(); showAddDialog = true }
+                .clickable(role = Role.Button) { clearAddFailure(); showAddDialog = true }
                 .heightIn(min = AfterglowTokens.rowHeight)
                 .padding(horizontal = AfterglowTokens.rowGap, vertical = AfterglowTokens.rowPaddingV),
             verticalAlignment = Alignment.CenterVertically,

@@ -168,7 +168,7 @@
     <string name="routing_rule_action_proxy">Прокси</string>
     <string name="routing_rule_action_direct">Напрямую</string>
     <string name="routing_rule_action_block">Блокировать</string>
-    <string name="servers_node_menu">Настройки сервера</string>
+    <string name="servers_node_menu">Настройки: %1$s</string>
     <string name="servers_rename">Переименовать</string>
     <string name="servers_rename_title">Имя сервера</string>
     <string name="servers_rename_hint">Пустое поле вернёт имя от провайдера</string>
@@ -309,11 +309,12 @@
     <string name="servers_no_servers_title">Серверов пока нет</string>
     <string name="servers_no_servers_hint">Подписки не вернули серверов. Обновите, чтобы повторить.</string>
     <string name="servers_latency_timeout">недоступен</string>
-    <string name="servers_favorite_remove">Убрать из избранного</string>
-    <string name="servers_favorite_add">В избранное</string>
+    <string name="servers_favorite_remove">Убрать %1$s из избранного</string>
+    <string name="servers_favorite_add">Добавить %1$s в избранное</string>
     <string name="servers_latency_ms">%1$d мс</string>
     <string name="servers_tls_insecure_warning">Проверка TLS-сертификата отключена</string>
     <string name="servers_tls_details">Детали TLS</string>
+    <string name="servers_tls_name">Название</string>
     <string name="servers_tls_origin">Источник</string>
     <string name="servers_tls_origin_sharelink">Добавлено по share-ссылке</string>
     <string name="servers_tls_origin_subscription">Импортировано из конфигурации подписки</string>

@@ -86,12 +86,12 @@ class ServersContentTest {
 
     @Test fun favoriteStarIsSolidAndNonFavoriteStarIsAnOutline() {
         show(state(ServerGroup(1L, "Alpha", listOf(node("a1"), node("a2", favorite = true)))))
-        fun centreAndCorner(desc: Int): Pair<Int, Int> {
-            val img = compose.onNodeWithContentDescription(str(desc)).captureToImage()
+        fun centreAndCorner(desc: String): Pair<Int, Int> {
+            val img = compose.onNodeWithContentDescription(desc).captureToImage()
             return img.toPixelMap()[img.width / 2, img.height / 2].toArgb() to img.toPixelMap()[2, 2].toArgb()
         }
-        val (offCentre, offCorner) = centreAndCorner(R.string.servers_favorite_add)
-        val (onCentre, onCorner) = centreAndCorner(R.string.servers_favorite_remove)
+        val (offCentre, offCorner) = centreAndCorner(str(R.string.servers_favorite_add, "a1"))
+        val (onCentre, onCorner) = centreAndCorner(str(R.string.servers_favorite_remove, "a2"))
         assertEquals("outlined star is hollow", offCorner, offCentre)
         assertNotEquals("filled star is solid", onCorner, onCentre)
     }
@@ -119,8 +119,8 @@ class ServersContentTest {
     @Test fun starAndMenuNeitherSelectNorCloseTheSheet() {
         val rec = Recorder()
         show(state(oneGroup), rec)
-        compose.onAllNodesWithContentDescription(str(R.string.servers_favorite_add))[0].performClick()
-        compose.onAllNodesWithContentDescription(str(R.string.servers_node_menu))[0].performClick()
+        compose.onNodeWithContentDescription(str(R.string.servers_favorite_add, "a1")).performClick()
+        compose.onNodeWithContentDescription(str(R.string.servers_node_menu, "a1")).performClick()
         compose.onNodeWithText(str(R.string.servers_rename)).assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(listOf("a1"), rec.favorites)
@@ -173,7 +173,7 @@ class ServersContentTest {
     @Test fun rowSpeaksNameProtocolLatencyAndMethod() {
         show(state(oneGroup, selected = "a1"))
         val desc = "a1, VLESS, ${str(R.string.servers_latency_ms, 42)}, ${str(R.string.servers_latency_method_tcp)}, ${str(R.string.common_selected)}"
-        compose.onNodeWithContentDescription("a1", substring = true).assertContentDescriptionEquals(desc)
+        compose.onNodeWithContentDescription("a1, VLESS", substring = true).assertContentDescriptionEquals(desc)
     }
 
     @Test fun oneProviderShowsNoHeader() {
@@ -240,10 +240,16 @@ class ServersContentTest {
         show(state(oneGroup), fontScale = 2f)
         compose.onNodeWithText(str(R.string.servers_test_latency)).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.servers_filters)).assertIsDisplayed()
-        compose.onAllNodesWithContentDescription(str(R.string.servers_favorite_add))[0]
+        compose.onNodeWithContentDescription(str(R.string.servers_favorite_add, "a1"))
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
-        compose.onAllNodesWithContentDescription(str(R.string.servers_node_menu))[0]
+        compose.onNodeWithContentDescription(str(R.string.servers_node_menu, "a1"))
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+    }
+
+    @Test fun starAndMenuNameTheirServerSoTalkBackCanTellRowsApart() {
+        show(state(oneGroup))
+        compose.onNodeWithContentDescription(str(R.string.servers_favorite_add, "a2")).assertIsDisplayed()
+        compose.onNodeWithContentDescription(str(R.string.servers_node_menu, "a2")).assertIsDisplayed()
     }
 
     @Test fun rowsAreLazyAndTheCardKeepsItsHeaderOnTheFirstRow() {
