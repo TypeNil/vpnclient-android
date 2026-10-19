@@ -134,7 +134,7 @@ internal fun SubscriptionDetailSheet(
             val expiry = expiryFact(profile.userInfo, System.currentTimeMillis())
             DetailCard {
                 Column(Modifier.padding(AfterglowTokens.rowPaddingH), verticalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap)) {
-                    Fact(stringResource(R.string.subs_detail_nodes), localizedResources().getQuantityString(R.plurals.subs_card_servers, nodeCount, nodeCount))
+                    Fact(stringResource(R.string.subs_detail_nodes), nodeCount.toString())
                     Fact(stringResource(R.string.subs_detail_updated), formatRelativeTime(profile.lastUpdatedAt))
                     profile.userInfo?.let { info ->
                         Fact(
