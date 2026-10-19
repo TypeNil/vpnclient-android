@@ -355,13 +355,15 @@ class ServersViewModel
                 // Hidden nodes leave every picker unless the user asked to
                 // manage them — the flag is presentation-only, the engine
                 // still sees the node as usable.
+                val scoped =
+                    surface.nodes.filter { node ->
+                        (ctl.showHidden || !node.hidden) &&
+                            (ctl.subscriptionFilter == null || node.subscriptionId == ctl.subscriptionFilter)
+                    }
                 val filtered =
-                    surface.nodes
+                    scoped
                         .asSequence()
-                        .filter { node -> ctl.showHidden || !node.hidden }
                         .filter { node ->
-                            ctl.subscriptionFilter == null || node.subscriptionId == ctl.subscriptionFilter
-                        }.filter { node ->
                             !ctl.favoritesOnly || node.favorite
                         }.filter { node ->
                             !searching ||
@@ -369,11 +371,12 @@ class ServersViewModel
                                 node.server.contains(trimmedQuery, ignoreCase = true)
                         }.toList()
 
-                // Protocol options come from the (sub-filtered) set so a stale
-                // selection can't silently hide everything — the chip for the
-                // active protocol always exists while it still has nodes.
+                // Protocol options come from the subscription/hidden scope only — never
+                // from the search or the favorites chip — so a search with no hits can't
+                // reset the selected protocol or the Filters counter. The chip for the
+                // active protocol exists while its scope still has nodes.
                 val protocolOptions =
-                    filtered
+                    scoped
                         .map { it.protocol }
                         .distinct()
                         .sortedBy { protocolLabel(it) }

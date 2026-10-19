@@ -354,11 +354,12 @@ class ServersViewModelTest {
     private fun nodeEntity(
         id: String,
         position: Int,
+        protocol: String = "VLESS",
     ) = NodeEntity(
         id = id,
         subscriptionId = 1L,
         name = "Node $id",
-        protocol = "VLESS",
+        protocol = protocol,
         server = "127.0.0.1",
         port = 1,
         outboundJson = "{}",
@@ -532,6 +533,26 @@ class ServersViewModelTest {
         }
         assertFalse("latency run did not finish", viewModel.testing.value)
     }
+
+    @Test
+    fun `active filters and their counter survive a search with no hits`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1, protocol = "TROJAN")))
+            collectUi()
+            viewModel.setProtocolFilter("TROJAN")
+            advanceUntilIdle()
+            val before = viewModel.uiState.value
+            assertEquals("TROJAN", before.protocolFilter)
+            val counter = activeFilterCount(before.subscriptionFilter, before.protocolFilter, before.showHidden)
+
+            viewModel.setQuery("zzz-no-such-node")
+            advanceUntilIdle()
+            val searched = viewModel.uiState.value
+            assertTrue(searched.groups.isEmpty())
+            assertEquals("TROJAN", searched.protocolFilter)
+            assertEquals(counter, activeFilterCount(searched.subscriptionFilter, searched.protocolFilter, searched.showHidden))
+            assertEquals(listOf("TROJAN", "VLESS"), searched.protocolOptions.sorted())
+        }
 
     // ---- the six mandatory scenarios ----
 

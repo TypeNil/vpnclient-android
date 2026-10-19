@@ -66,6 +66,7 @@ import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import dev.typenil.vpnclient.ui.theme.ProviderCardSlice
 import dev.typenil.vpnclient.ui.theme.AfterglowCard
@@ -139,7 +140,9 @@ internal fun ServersContent(
     val showHeaders = ui.showHeaders && showProviderHeader(ui.groups.size)
     val now = System.currentTimeMillis()
     // Rows are lazy items (a provider card is drawn slice by slice): one non-lazy card per provider took ~2.4 s to first frame on 300 nodes.
+    // Plain remember, not the saveable default: the sheet's SaveableStateProvider would restore the old scroll offset on reopen.
     LazyColumn(
+        state = remember { LazyListState() },
         modifier = modifier.fillMaxWidth().heightIn(max = sheetMax * .78f),
         contentPadding = PaddingValues(start = AfterglowTokens.screenPadding, top = AfterglowTokens.cardGap, end = AfterglowTokens.screenPadding, bottom = AfterglowTokens.screenPadding),
         // No spacedBy: rows of one provider card touch; the last slice and the other items carry the gap.
