@@ -90,14 +90,6 @@ import dev.typenil.vpnclient.ui.common.formatRelativeTime
 import dev.typenil.vpnclient.ui.common.localizedResources
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
-/**
- * Host-only display of a subscription URL — the URL itself may carry
- * credentials in userinfo/path and must never be rendered.
- */
-@Composable
-private fun redactedHost(url: String): String =
-    runCatching { url.toHttpUrl().host }.getOrNull()
-        ?: stringResource(R.string.subs_redacted_url)
 
 @Composable
 fun SubscriptionsScreen(
@@ -166,7 +158,7 @@ fun SubscriptionsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 4.dp)
+                .padding(horizontal = AfterglowTokens.sectionGap, vertical = AfterglowTokens.headerInset)
                 .border(
                     AfterglowTokens.border,
                     AfterglowTheme.colors.border,
@@ -175,7 +167,7 @@ fun SubscriptionsScreen(
                 .background(AfterglowTheme.colors.paperSecondary, AfterglowTokens.cardShape)
                 .clickable { showAddDialog = true }
                 .heightIn(min = AfterglowTokens.rowHeight)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = AfterglowTokens.rowGap, vertical = AfterglowTokens.rowPaddingV),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -183,7 +175,7 @@ fun SubscriptionsScreen(
                 contentDescription = null,
                 tint = AfterglowTheme.colors.coral,
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(AfterglowTokens.rowPaddingV))
             Text(
                 stringResource(R.string.common_add_server_cta),
                 style = MaterialTheme.typography.titleMedium,
@@ -192,7 +184,7 @@ fun SubscriptionsScreen(
             )
         }
         if (ui.profiles.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(160.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(AfterglowTokens.emptyListHeight), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.subs_empty),
                     style = MaterialTheme.typography.bodyLarge,
@@ -208,9 +200,9 @@ fun SubscriptionsScreen(
                 modifier = Modifier.fillMaxWidth()
                     .heightIn(max = sheetMax * .65f),
                 contentPadding = PaddingValues(
-                    start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp,
+                    start = AfterglowTokens.sectionGap, top = AfterglowTokens.headerGap, end = AfterglowTokens.sectionGap, bottom = AfterglowTokens.screenPadding,
                 ),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
             ) {
                 items(
                     items = ui.profiles,
@@ -224,8 +216,10 @@ fun SubscriptionsScreen(
                         // can never be refreshed, and deleting it is refused
                         // in the repository — hide both affordances.
                         manual = SubscriptionRepository.isManualSubscription(profile.url),
-                        onClick = { detailId = profile.id },
+                        onOpenDetails = { detailId = profile.id },
                         onRefresh = { viewModel.refresh(profile.id) },
+                        onRename = { name -> viewModel.rename(profile.id, name) },
+                        onEditUrl = { url -> viewModel.editUrl(profile.id, url) },
                         onDelete = { pendingDelete = profile },
                     )
                 }
@@ -331,169 +325,6 @@ fun SubscriptionsScreen(
     }
 }
 
-@Composable
-private fun SubscriptionCard(
-    profile: SubscriptionProfile,
-    nodeCount: Int,
-    refreshing: Boolean,
-    manual: Boolean,
-    onClick: () -> Unit,
-    onRefresh: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val uriHandler = LocalUriHandler.current
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        // Disabled is a real state, rendered honestly: dimmed container +
-        // a "disabled" label — never a fake enabled look.
-        colors = if (profile.enabled) {
-            CardDefaults.cardColors()
-        } else {
-            CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    .copy(alpha = 0.55f),
-            )
-        },
-    ) {
-        Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 4.dp, bottom = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) },
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        // The sentinel URL isn't a fetchable address — label
-                        // the row instead of running it through redactedHost
-                        // (which would render "hidden").
-                        text =
-                            if (manual) {
-                                stringResource(R.string.subs_manual_hint)
-                            } else {
-                                redactedHost(profile.url)
-                            },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (!manual) {
-                    if (refreshing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(12.dp)
-                                .size(24.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        IconButton(onClick = onRefresh) {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = stringResource(R.string.common_refresh),
-                            )
-                        }
-                    }
-                    IconButton(onClick = onDelete) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = stringResource(R.string.common_delete),
-                            tint = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = localizedResources().getQuantityString(
-                    R.plurals.subs_card_meta,
-                    nodeCount,
-                    nodeCount,
-                    formatRelativeTime(profile.lastUpdatedAt),
-                ) +
-                    // Suppressed when the row can't actually launch-refresh:
-                    // disabled subscription or Disabled refresh policy.
-                    (if (profile.updateAlways &&
-                        profile.enabled &&
-                        profile.refreshPolicy != RefreshPolicy.Disabled
-                    ) {
-                        stringResource(R.string.subs_card_updates_on_launch)
-                    } else {
-                        ""
-                    }) +
-                    (if (!profile.enabled) {
-                        stringResource(R.string.subs_card_disabled)
-                    } else {
-                        ""
-                    }),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (profile.enabled) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-            )
-
-            profile.userInfo?.let { info ->
-                Spacer(Modifier.height(2.dp))
-                val usage = if (info.totalBytes > 0) {
-                    stringResource(
-                        R.string.subs_usage_of,
-                        formatBytes(info.usedBytes),
-                        formatBytes(info.totalBytes),
-                    )
-                } else {
-                    stringResource(R.string.subs_usage, formatBytes(info.usedBytes))
-                }
-                // <= 0 guards rows stored before the parser dropped expire=0.
-                val expiry = info.expireEpochSeconds
-                    ?.takeIf { it > 0 }
-                    ?.let {
-                        val past = it * 1000 < System.currentTimeMillis()
-                        stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it))
-                    }
-                    .orEmpty()
-                Text(
-                    text = usage + expiry,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            profile.announce?.let { announce ->
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = announce,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = stringResource(R.string.subs_support),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { uriHandler.openUri(url) },
-                )
-            }
-
-            profile.lastError?.let { error ->
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun AddSubscriptionDialog(

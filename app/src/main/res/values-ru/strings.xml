@@ -451,6 +451,9 @@
     <string name="subs_name_label">Название</string>
     <string name="subs_save">Сохранить</string>
     <string name="subs_rename">Переименовать</string>
+    <string name="subs_refresh_named">Обновить %1$s</string>
+    <string name="subs_menu_more">Другие действия: %1$s</string>
+    <string name="subs_menu_details">Подробности</string>
     <string name="subs_new_url_label">Новый URL подписки</string>
     <string name="subs_url_edit_hint">URL будет загружен и проверен перед заменой текущего — при ошибке ничего не изменится.</string>
     <string name="subs_validate_save">Проверить и сохранить</string>

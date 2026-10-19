@@ -1,0 +1,245 @@
+package dev.typenil.vpnclient.ui.subscriptions
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
+import dev.typenil.vpnclient.R
+import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
+import dev.typenil.vpnclient.core.subscription.model.SubscriptionProfile
+import dev.typenil.vpnclient.ui.common.formatBytes
+import dev.typenil.vpnclient.ui.common.formatDate
+import dev.typenil.vpnclient.ui.common.formatRelativeTime
+import dev.typenil.vpnclient.ui.common.localizedResources
+import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.AfterglowDialog
+import dev.typenil.vpnclient.ui.theme.AfterglowTextField
+import dev.typenil.vpnclient.ui.theme.AfterglowTheme
+import dev.typenil.vpnclient.ui.theme.AfterglowTokens
+import dev.typenil.vpnclient.ui.theme.AfterglowType
+import okhttp3.HttpUrl.Companion.toHttpUrl
+
+/** Meta sits in two columns only while the text is small; at larger fonts one column keeps every line readable. */
+internal fun metaTwoColumns(fontScale: Float): Boolean = fontScale < 1.3f
+
+/** Host-only display of a subscription URL — the URL itself may carry credentials and must never be rendered. */
+@Composable
+internal fun redactedHost(url: String): String =
+    runCatching { url.toHttpUrl().host }.getOrNull() ?: stringResource(R.string.subs_redacted_url)
+
+/**
+ * One subscription: name + host, Refresh and a "⋮" menu on the right, then the meta
+ * (servers · updated | traffic · expiry), the provider announcement, Support and the last error.
+ * Delete lives only in the menu (last, error tone). Tapping the card opens the detail sheet.
+ */
+@Composable
+internal fun SubscriptionCard(
+    profile: SubscriptionProfile,
+    nodeCount: Int,
+    refreshing: Boolean,
+    manual: Boolean,
+    onOpenDetails: () -> Unit,
+    onRefresh: () -> Unit,
+    onRename: (String) -> Unit,
+    onEditUrl: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val c = AfterglowTheme.colors
+    val uriHandler = LocalUriHandler.current
+    val name = profile.name.ifBlank { stringResource(R.string.common_subscription_fallback) }
+    val bodyEnd = AfterglowTokens.rowPaddingH - AfterglowTokens.headerInset
+    AfterglowCard(Modifier.clickable(role = Role.Button, onClick = onOpenDetails)) {
+        Column(
+            Modifier.padding(start = AfterglowTokens.rowPaddingH, top = AfterglowTokens.cardGap, end = AfterglowTokens.headerInset, bottom = AfterglowTokens.cardGap),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(name, style = AfterglowType.rowTitle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        // The sentinel URL isn't a fetchable address — label the row instead of running it through redactedHost.
+                        text = if (manual) stringResource(R.string.subs_manual_hint) else redactedHost(profile.url),
+                        style = AfterglowType.rowCaption,
+                        color = c.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (!manual) RefreshButton(name, refreshing, onRefresh)
+                CardMenu(name, profile.name, manual, onOpenDetails, onRename, onEditUrl, onDelete)
+            }
+            CardMeta(profile, nodeCount, Modifier.padding(end = bodyEnd))
+            Column(Modifier.padding(end = bodyEnd)) {
+                profile.announce?.let { announce ->
+                    Text(announce, style = AfterglowType.rowCaption, color = c.muted)
+                }
+                profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
+                    TextButton(onClick = { uriHandler.openUri(url) }) { Text(stringResource(R.string.subs_support), color = c.coral) }
+                }
+                profile.lastError?.let { error ->
+                    Text(
+                        text = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error,
+                        style = AfterglowType.rowCaption,
+                        color = c.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RefreshButton(name: String, refreshing: Boolean, onRefresh: () -> Unit) {
+    if (refreshing) {
+        // The existing in-progress state, in a box as large as the button it replaces.
+        Box(Modifier.size(AfterglowTokens.touchTarget), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(modifier = Modifier.size(AfterglowTokens.actionIconSize), strokeWidth = AfterglowTokens.progressStroke)
+        }
+    } else {
+        IconButton(onClick = onRefresh, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
+            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.subs_refresh_named, name), tint = AfterglowTheme.colors.ink)
+        }
+    }
+}
+
+@Composable
+private fun CardMenu(
+    name: String,
+    currentName: String,
+    manual: Boolean,
+    onOpenDetails: () -> Unit,
+    onRename: (String) -> Unit,
+    onEditUrl: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val c = AfterglowTheme.colors
+    var open by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var editingUrl by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
+            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.subs_menu_more, name), tint = c.ink)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text(stringResource(R.string.subs_rename)) }, onClick = { open = false; renaming = true })
+            if (!manual) DropdownMenuItem(text = { Text(stringResource(R.string.subs_edit_url)) }, onClick = { open = false; editingUrl = true })
+            DropdownMenuItem(text = { Text(stringResource(R.string.subs_menu_details)) }, onClick = { open = false; onOpenDetails() })
+            if (!manual) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.common_delete), color = c.error) }, onClick = { open = false; onDelete() })
+            }
+        }
+    }
+    if (renaming) {
+        var field by remember { mutableStateOf(currentName) }
+        FieldDialog(
+            title = stringResource(R.string.subs_rename),
+            label = stringResource(R.string.subs_name_label),
+            value = field,
+            onValueChange = { field = it },
+            confirm = stringResource(R.string.subs_save),
+            onConfirm = { renaming = false; if (field.trim() != currentName) onRename(field) },
+            onDismiss = { renaming = false },
+        )
+    }
+    if (editingUrl) {
+        // Never prefilled: the stored URL may carry credentials; the repository validates the new one before it replaces anything.
+        var field by remember { mutableStateOf("") }
+        FieldDialog(
+            title = stringResource(R.string.subs_edit_url),
+            label = stringResource(R.string.subs_new_url_label),
+            hint = stringResource(R.string.subs_url_edit_hint),
+            value = field,
+            onValueChange = { field = it },
+            confirm = stringResource(R.string.subs_validate_save),
+            onConfirm = { editingUrl = false; onEditUrl(field) },
+            onDismiss = { editingUrl = false },
+        )
+    }
+}
+
+@Composable
+private fun FieldDialog(
+    title: String,
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    confirm: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    hint: String? = null,
+) {
+    AfterglowDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap)) {
+                AfterglowTextField(value = value, onValueChange = onValueChange, label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (hint != null) Text(hint, style = AfterglowType.rowCaption, color = AfterglowTheme.colors.muted)
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm, enabled = value.isNotBlank()) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
+    )
+}
+
+/** Left: servers · updated (+ launch/disabled flags). Right: traffic · expiry. One column at larger fonts or without userInfo. */
+@Composable
+private fun CardMeta(profile: SubscriptionProfile, nodeCount: Int, modifier: Modifier = Modifier) {
+    val c = AfterglowTheme.colors
+    val left =
+        localizedResources().getQuantityString(R.plurals.subs_card_meta, nodeCount, nodeCount, formatRelativeTime(profile.lastUpdatedAt)) +
+            // Suppressed when the row can't actually launch-refresh: disabled subscription or Disabled refresh policy.
+            (if (profile.updateAlways && profile.enabled && profile.refreshPolicy != RefreshPolicy.Disabled) stringResource(R.string.subs_card_updates_on_launch) else "") +
+            (if (!profile.enabled) stringResource(R.string.subs_card_disabled) else "")
+    val right = profile.userInfo?.let { info ->
+        val usage = if (info.totalBytes > 0) {
+            stringResource(R.string.subs_usage_of, formatBytes(info.usedBytes), formatBytes(info.totalBytes))
+        } else {
+            stringResource(R.string.subs_usage, formatBytes(info.usedBytes))
+        }
+        // <= 0 guards rows stored before the parser dropped expire=0.
+        val expiry = info.expireEpochSeconds?.takeIf { it > 0 }?.let {
+            val past = it * 1000 < System.currentTimeMillis()
+            stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it))
+        }.orEmpty()
+        usage + expiry
+    }
+    val leftColor = if (profile.enabled) c.muted else c.error
+    if (right != null && metaTwoColumns(LocalDensity.current.fontScale)) {
+        Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap)) {
+            Text(left, style = AfterglowType.rowCaption, color = leftColor, modifier = Modifier.weight(1f))
+            Text(right, style = AfterglowType.rowCaption, color = c.muted, modifier = Modifier.weight(1f))
+        }
+    } else {
+        Column(modifier.fillMaxWidth()) {
+            Text(left, style = AfterglowType.rowCaption, color = leftColor)
+            if (right != null) Text(right, style = AfterglowType.rowCaption, color = c.muted)
+        }
+    }
+}

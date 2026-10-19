@@ -442,6 +442,9 @@
     <string name="subs_name_label">Name</string>
     <string name="subs_save">Save</string>
     <string name="subs_rename">Rename</string>
+    <string name="subs_refresh_named">Refresh %1$s</string>
+    <string name="subs_menu_more">More actions for %1$s</string>
+    <string name="subs_menu_details">Details</string>
     <string name="subs_new_url_label">New subscription URL</string>
     <string name="subs_url_edit_hint">Fetched and validated before it replaces the current URL — nothing changes on failure.</string>
     <string name="subs_validate_save">Validate &amp; save</string>
