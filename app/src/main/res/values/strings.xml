@@ -429,7 +429,12 @@
     <string name="subs_allow_insecure">Allow insecure HTTP (not recommended)</string>
     <string name="subs_add">Add</string>
     <string name="subs_detail_nodes">Servers</string>
-    <string name="subs_detail_nodes_value">%1$d · updated %2$s</string>
+    <string name="subs_detail_updated">Last updated</string>
+    <string name="subs_detail_traffic">Traffic</string>
+    <string name="subs_detail_expires">Expires</string>
+    <string name="subs_detail_expired">Expired</string>
+    <string name="subs_detail_provider">Provider</string>
+    <string name="subs_detail_no_servers">This subscription has no servers. Refresh to fetch them again.</string>
     <string name="subs_update_interval">Provider-recommended refresh</string>
     <string name="subs_interval_never">never — local only</string>
     <string name="subs_interval_launch">every launch</string>
@@ -444,7 +449,6 @@
     <string name="subs_policy_provider_no_hint">This provider doesn’t publish an interval — refresh stays manual.</string>
     <string name="subs_policy_disabled_note">Off also skips the provider-requested refresh on app launch.</string>
     <string name="subs_policy_periodic_note">Background updates are approximate — Android may delay them. Minimum interval: 15 min.</string>
-    <string name="subs_announcement">Announcement</string>
     <string name="subs_enabled">Enabled</string>
     <string name="subs_enabled_sub_on">Servers shown in the list</string>
     <string name="subs_enabled_sub_off">Servers hidden from the list</string>

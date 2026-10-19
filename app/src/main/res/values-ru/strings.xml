@@ -438,7 +438,12 @@
     <string name="subs_allow_insecure">Разрешить незащищённый HTTP (не рекомендуется)</string>
     <string name="subs_add">Добавить</string>
     <string name="subs_detail_nodes">Серверы</string>
-    <string name="subs_detail_nodes_value">%1$d · обновлено %2$s</string>
+    <string name="subs_detail_updated">Последнее обновление</string>
+    <string name="subs_detail_traffic">Трафик</string>
+    <string name="subs_detail_expires">Действует до</string>
+    <string name="subs_detail_expired">Истекла</string>
+    <string name="subs_detail_provider">Провайдер</string>
+    <string name="subs_detail_no_servers">В этой подписке нет серверов. Обновите, чтобы загрузить их снова.</string>
     <string name="subs_update_interval">Рекомендация провайдера</string>
     <string name="subs_interval_never">никогда — только локально</string>
     <string name="subs_interval_launch">при каждом запуске</string>
@@ -453,7 +458,6 @@
     <string name="subs_policy_provider_no_hint">Провайдер не публикует интервал — обновление только вручную.</string>
     <string name="subs_policy_disabled_note">«Выкл.» также отключает обновление по запросу провайдера при запуске приложения.</string>
     <string name="subs_policy_periodic_note">Фоновые обновления неточны — Android может их задерживать. Минимальный интервал: 15 мин.</string>
-    <string name="subs_announcement">Объявление</string>
     <string name="subs_enabled">Включена</string>
     <string name="subs_enabled_sub_on">Серверы видны в списке</string>
     <string name="subs_enabled_sub_off">Серверы скрыты из списка</string>

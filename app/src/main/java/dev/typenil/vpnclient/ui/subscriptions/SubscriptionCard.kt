@@ -283,10 +283,8 @@ private fun CardMeta(profile: SubscriptionProfile, nodeCount: Int, modifier: Mod
                 (if (info.totalBytes > 0) stringResource(R.string.subs_usage_of, formatBytes(info.usedBytes), formatBytes(info.totalBytes))
                 else stringResource(R.string.subs_usage, formatBytes(info.usedBytes))) to c.muted,
             )
-            // <= 0 guards rows stored before the parser dropped expire=0.
-            info.expireEpochSeconds?.takeIf { it > 0 }?.let {
-                val past = it * 1000 < System.currentTimeMillis()
-                add(stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it, localizedResources().configuration.locales[0])) to c.muted)
+            expiryFact(info, System.currentTimeMillis())?.let {
+                add(stringResource(if (it.expired) R.string.subs_expired else R.string.subs_expires, formatDate(it.epochSeconds, localizedResources().configuration.locales[0])) to c.muted)
             }
         }
     }.orEmpty()
