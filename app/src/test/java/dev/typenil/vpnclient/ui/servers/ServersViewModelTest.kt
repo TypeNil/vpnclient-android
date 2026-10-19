@@ -37,6 +37,7 @@ import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.FakeNodePreferenceDao
 import dev.typenil.vpnclient.data.db.FakeNodeLatencyDao
 import dev.typenil.vpnclient.data.db.NodeDao
+import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.data.db.NodeEntity
 import dev.typenil.vpnclient.data.db.SubscriptionDao
 import java.net.InetAddress
@@ -224,7 +225,10 @@ class ServersViewModelTest {
 
         override fun observeUsable(): Flow<List<NodeEntity>> = observeEnabled()
 
-        override suspend fun getUsable() = getEnabled()
+        /** Ids the engine can't use (e.g. disabled) — getUsable leaves them out. */
+        val unusable = mutableSetOf<String>()
+
+        override suspend fun getUsable() = getEnabled().filter { it.id !in unusable }
 
         override suspend fun get(id: String) = nodes[id]
 
@@ -1324,5 +1328,40 @@ class ServersViewModelTest {
             val ui = viewModel.uiState.value
             assertEquals(listOf("n3", "n1", "n2"), ui.groups.flatMap { it.nodes }.map { it.id })
             assertEquals(10, ui.storedLatency["n2"]?.latencyMs)
+        }
+
+    @Test
+    fun `default order puts starred nodes first inside their subscription`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1), nodeEntity("n3", 2)))
+            nodePreferenceDao.setFavorite("n3", true)
+            // The fake preference flow is a one-shot snapshot: build the view model after seeding.
+            viewModel = buildViewModel(latencyProbe)
+            collectUi()
+            advanceUntilIdle()
+
+            assertEquals(listOf("n3", "n1", "n2"), viewModel.uiState.value.groups.flatMap { it.nodes }.map { it.id })
+        }
+
+    @Test
+    fun `selecting a usable node persists it, a node the engine cannot use is ignored`() =
+        testScope.runTest {
+            nodeDao.upsertAll(listOf(nodeEntity("n1", 0), nodeEntity("n2", 1)))
+            nodeDao.unusable += "n2"
+            viewModel.selectNode("n2")
+            advanceUntilIdle()
+            assertEquals(null, settings.selected.value)
+
+            viewModel.selectNode("n1")
+            advanceUntilIdle()
+            assertEquals("n1", settings.selected.value)
+        }
+
+    @Test
+    fun `Auto is persisted as the sentinel`() =
+        testScope.runTest {
+            viewModel.selectAuto()
+            advanceUntilIdle()
+            assertEquals(NodeSelection.AUTO_ID, settings.selected.value)
         }
 }

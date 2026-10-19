@@ -21,13 +21,6 @@ class ServerPickerModelTest {
     }
 
     @Test
-    fun `favourites go first inside their own subscription only`() {
-        val nodes = listOf("a1" to 1L, "a2" to 1L, "b1" to 2L, "b2" to 2L)
-        val ordered = favoritesFirstPerGroup(nodes, { it.second }) { it.first in setOf("a2", "b2") }
-        assertEquals(listOf("a2", "a1", "b2", "b1"), ordered.map { it.first })
-    }
-
-    @Test
     fun `a fresh verdict becomes a reading with its method, an outdated one becomes no data`() {
         val now = 10_000_000L
         val fresh = NodeLatency(42, now - 1_000, LatencyMethod.Tcp).pickerReading(now)

@@ -145,28 +145,35 @@ fun ServerRow(
             .fillMaxWidth()
             .padding(AfterglowTokens.rowInset)
             .clip(AfterglowTokens.chipShape)
-            .background(c.serverRowContainer(selected))
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .clearAndSetSemantics { contentDescription = description }
-            .heightIn(min = AfterglowTokens.touchTarget)
-            .padding(start = AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset, top = AfterglowTokens.serverRowPaddingV, bottom = AfterglowTokens.serverRowPaddingV),
+            .background(c.serverRowContainer(selected)),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (protocol != null || showLatency) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
-                    if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)
-                    if (protocol != null && showLatency) Text("·", style = AfterglowType.rowCaption, color = c.muted)
-                    if (showLatency) LatencyChip(latency)
+        // Only this part is the radio: the star and the menu beside it stay their own accessibility nodes.
+        Row(
+            Modifier
+                .weight(1f)
+                .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+                .clearAndSetSemantics { contentDescription = description }
+                .heightIn(min = AfterglowTokens.touchTarget)
+                .padding(start = AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset, top = AfterglowTokens.serverRowPaddingV, bottom = AfterglowTokens.serverRowPaddingV),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (protocol != null || showLatency) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
+                        if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)
+                        if (protocol != null && showLatency) Text("·", style = AfterglowType.rowCaption, color = c.muted)
+                        if (showLatency) LatencyChip(latency)
+                    }
                 }
+                if (caption != null) Text(caption, style = AfterglowType.rowCaption, color = c.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (warning != null) Text(warning, style = AfterglowType.statLabel, color = c.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (caption != null) Text(caption, style = AfterglowType.rowCaption, color = c.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (warning != null) Text(warning, style = AfterglowType.statLabel, color = c.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        Box(Modifier.size(scaledDp(AfterglowTokens.iconSize)), contentAlignment = Alignment.Center) {
-            if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = c.coral, modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)))
+            Box(Modifier.size(scaledDp(AfterglowTokens.iconSize)), contentAlignment = Alignment.Center) {
+                if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = c.coral, modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)))
+            }
         }
         // Without actions the row keeps the trailing inset its padding used to give.
         if (actions != null) actions() else Spacer(Modifier.width(AfterglowTokens.rowPaddingH - AfterglowTokens.rowInset))

@@ -1,10 +1,7 @@
 package dev.typenil.vpnclient.ui.servers
 
 import androidx.activity.compose.LocalActivity
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,10 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,13 +23,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Star
 import dev.typenil.vpnclient.ui.common.headingSemantics
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -47,13 +37,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowTextField as OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,7 +52,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,16 +61,51 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
-import dev.typenil.vpnclient.data.LatencyMethod
-import dev.typenil.vpnclient.data.NodeLatency
 import dev.typenil.vpnclient.ui.common.relativeTimeText
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import dev.typenil.vpnclient.ui.theme.ProviderGroupCard
+import dev.typenil.vpnclient.ui.theme.ServerRow
+import dev.typenil.vpnclient.ui.theme.ServerRowDivider
+import dev.typenil.vpnclient.ui.theme.scaledDp
+import dev.typenil.vpnclient.ui.theme.showProviderHeader
+import dev.typenil.vpnclient.ui.theme.AfterglowType
+
+/** What the Servers list asks of its owner — the view model in the app, a recorder in tests. */
+internal data class ServersActions(
+    val setQuery: (String) -> Unit = {},
+    val setSortMode: (ServerSortMode) -> Unit = {},
+    val setFavoritesOnly: (Boolean) -> Unit = {},
+    val setSubscriptionFilter: (Long?) -> Unit = {},
+    val setProtocolFilter: (String?) -> Unit = {},
+    val setShowHidden: (Boolean) -> Unit = {},
+    val testLatency: () -> Unit = {},
+    val cancelLatencyTest: () -> Unit = {},
+    val selectAuto: () -> Unit = {},
+    val selectNode: (String) -> Unit = {},
+    val toggleFavorite: (String) -> Unit = {},
+    val setNodeCustomName: (String, String?) -> Unit = { _, _ -> },
+    val setNodeEnabled: (String, Boolean) -> Unit = { _, _ -> },
+    val setNodeHidden: (String, Boolean) -> Unit = { _, _ -> },
+)
+
+private fun ServersViewModel.asActions() =
+    ServersActions(
+        ::setQuery, ::setSortMode, ::setFavoritesOnly, ::setSubscriptionFilter, ::setProtocolFilter, ::setShowHidden,
+        ::testLatency, ::cancelLatencyTest, ::selectAuto, ::selectNode, ::toggleFavorite,
+        ::setNodeCustomName, ::setNodeEnabled, ::setNodeHidden,
+    )
 
 @Composable
 fun ServersScreen(
     modifier: Modifier = Modifier,
     onAddServer: () -> Unit = {},
+    /** Called after a row or Auto is picked — the sheet closes; star, menu, filters, sort and the latency test never call it. */
+    onSelected: () -> Unit = {},
     viewModel: ServersViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
@@ -94,31 +117,45 @@ fun ServersScreen(
     DisposableEffect(viewModel) {
         onDispose { if (activity?.isChangingConfigurations != true) viewModel.onScreenLeft() }
     }
+    val actions = remember(viewModel) { viewModel.asActions() }
+    ServersContent(ui, testing, progress, actions, modifier, onAddServer, onSelected)
+}
 
-    // One column on phones, two on tablets — 160 dp min cards crushed the
-    // name/touch targets into slivers.
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ServersContent(
+    ui: ServersUiState,
+    testing: Boolean,
+    progress: LatencyProgress?,
+    actions: ServersActions,
+    modifier: Modifier = Modifier,
+    onAddServer: () -> Unit = {},
+    onSelected: () -> Unit = {},
+) {
+    val c = AfterglowTheme.colors
     val sheetMax = LocalSheetMaxHeight.current
         ?: LocalConfiguration.current.screenHeightDp.dp
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 280.dp),
+    val showHeaders = ui.showHeaders && showProviderHeader(ui.groups.size)
+    val now = System.currentTimeMillis()
+    // ponytail: one non-lazy card per provider; 300 nodes measured in the 12D-3 report. Go per-row lazy if a single provider reaches thousands.
+    LazyColumn(
         modifier = modifier.fillMaxWidth().heightIn(max = sheetMax * .78f),
-        contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(start = AfterglowTokens.screenPadding, top = AfterglowTokens.cardGap, end = AfterglowTokens.screenPadding, bottom = AfterglowTokens.screenPadding),
+        verticalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap),
     ) {
-        item(key = "controls", span = { GridItemSpan(maxLineSpan) }) {
+        item(key = "controls") {
             Column(Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = ui.query,
-                    onValueChange = viewModel::setQuery,
+                    onValueChange = actions.setQuery,
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text(stringResource(R.string.servers_search_hint)) },
                     leadingIcon = {
-                        Icon(Icons.Default.Search, contentDescription = null)
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)))
                     },
                     trailingIcon = {
                         if (ui.query.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.setQuery("") }) {
+                            IconButton(onClick = { actions.setQuery("") }) {
                                 Icon(
                                     Icons.Default.Close,
                                     contentDescription = stringResource(R.string.common_clear_search),
@@ -128,96 +165,58 @@ fun ServersScreen(
                     },
                     singleLine = true,
                 )
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Spacer(Modifier.height(AfterglowTokens.headerInset))
+                // One control row; it wraps instead of clipping at large font scales.
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
+                    verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset),
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SortSelector(
-                        sortMode = ui.sortMode,
-                        onSelect = viewModel::setSortMode,
-                    )
-                    // Star-only toggle — the word "Избранное" was what pushed
-                    // the Filters chip off the viewport; the glyph reads the
-                    // same in both locales. FilterChip carries the selected
-                    // semantics + visible state for free.
+                    SortSelector(sortMode = ui.sortMode, onSelect = actions.setSortMode)
+                    // The glyph reads the same in both locales; the word "Избранное" pushed Filters off the viewport.
                     val favLabel = stringResource(R.string.servers_favorites)
                     FilterChip(
                         selected = ui.favoritesOnly,
-                        onClick = { viewModel.setFavoritesOnly(!ui.favoritesOnly) },
+                        onClick = { actions.setFavoritesOnly(!ui.favoritesOnly) },
                         label = {
                             Icon(
                                 if (ui.favoritesOnly) Icons.Filled.Star else Icons.Outlined.Star,
                                 contentDescription = favLabel,
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)),
                             )
                         },
                     )
-                    // Subscription / protocol / hidden filters sit behind one
-                    // dialog entry — as chips they grew into a long strip that
-                    // pushed the actual list out of view.
-                    FiltersEntry(ui, viewModel)
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                    FiltersEntry(ui, actions)
                     if (testing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    if (testing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         progress?.let {
                             Text(
                                 text = stringResource(R.string.servers_latency_progress, it.done, it.total),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = AfterglowType.rowCaption,
+                                color = c.muted,
                             )
                         }
-                        TextButton(onClick = viewModel::cancelLatencyTest) {
-                            Text(stringResource(R.string.servers_latency_stop))
-                        }
+                        TextButton(onClick = actions.cancelLatencyTest) { Text(stringResource(R.string.servers_latency_stop)) }
                     } else {
-                        TextButton(onClick = viewModel::testLatency) {
-                            Text(stringResource(R.string.servers_test_latency))
-                        }
+                        TextButton(onClick = actions.testLatency) { Text(stringResource(R.string.servers_test_latency)) }
                     }
-                    Text(
-                        // Says what the button beside it will do — never what
-                        // the shown badges are (each badge carries its own
-                        // method and age): connected → urltest through the
-                        // proxy chain; disconnected → direct TCP.
-                        text =
-                            stringResource(
-                                if (ui.connected) {
-                                    R.string.servers_latency_next_proxy
-                                } else {
-                                    R.string.servers_latency_next_tcp
-                                },
-                            ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.width(8.dp))
                 }
+                // Says what the button above will do — never what the shown chips are
+                // (each chip's method is in the row description): connected → urltest
+                // through the proxy chain; disconnected → direct TCP.
+                Text(
+                    text = stringResource(if (ui.connected) R.string.servers_latency_next_proxy else R.string.servers_latency_next_tcp),
+                    style = AfterglowType.rowCaption,
+                    color = c.muted,
+                )
             }
         }
 
         if (ui.groups.isEmpty()) {
-            item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+            item(key = "empty") {
                 Box(
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 48.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (ui.noSubscriptions) {
@@ -253,56 +252,54 @@ fun ServersScreen(
             }
         }
 
-        // "Auto / Fastest" — persisted as the AUTO_ID sentinel; the engine
-        // compiles/selects the urltest group for it, so it never maps to a
-        // concrete node card. Hidden with no nodes at all: there would be
-        // nothing to measure, and picking it would persist a selection that
-        // cannot connect.
+        // "Auto / Fastest" — persisted as the AUTO_ID sentinel; the engine compiles/selects
+        // the urltest group for it, so it never maps to a concrete node row. Hidden with no
+        // nodes at all: there would be nothing to measure, and picking it would persist a
+        // selection that cannot connect.
         if (!ui.noSubscriptions) {
-            item(key = "auto", span = { GridItemSpan(maxLineSpan) }) {
-                AutoCard(
-                    selected = ui.autoSelected,
-                    delayMs = ui.delays[NodeSelection.AUTO_ID],
-                    onClick = viewModel::selectAuto,
-                )
-            }
-        }
-
-        ui.groups.forEach { group ->
-            if (ui.showHeaders) {
-                item(key = "header-${group.subscriptionId}", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        text =
-                            group.subscriptionName
-                                ?: stringResource(
-                                    R.string.common_subscription_numbered,
-                                    group.subscriptionId,
-                                ),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp),
+            item(key = "auto") {
+                val auto = nodeLatencyView(ui.delays[NodeSelection.AUTO_ID], tested = false, stored = null, connected = ui.connected, nowMs = now)
+                ProviderGroupCard(header = null, selectedOutline = ui.autoSelected) {
+                    ServerRow(
+                        title = stringResource(R.string.common_auto_fastest),
+                        selected = ui.autoSelected,
+                        onClick = {
+                            actions.selectAuto()
+                            onSelected()
+                        },
+                        latency = auto.reading,
+                        showLatency = auto.reading != null,
+                        caption = stringResource(R.string.home_auto_subtitle),
                     )
                 }
             }
-            items(
-                items = group.nodes,
-                key = { node -> node.id },
-            ) { node ->
-                ServerCard(
-                    node = node,
-                    selected = node.id == ui.selectedNodeId,
-                    delayMs = ui.delays[node.id],
-                    tested = node.id in ui.testedNodeIds,
-                    stored = ui.storedLatency[node.id],
-                    // A disabled node stays rendered (the user manages it) but
-                    // tapping it must not persist a selection the engine can't
-                    // honor — keep the card, drop the click.
-                    onClick = { if (node.enabled) viewModel.selectNode(node.id) },
-                    onToggleFavorite = { viewModel.toggleFavorite(node.id) },
-                    onRename = { newName -> viewModel.setNodeCustomName(node.id, newName) },
-                    onSetEnabled = { enabled -> viewModel.setNodeEnabled(node.id, enabled) },
-                    onSetHidden = { hidden -> viewModel.setNodeHidden(node.id, hidden) },
-                )
+        }
+
+        items(ui.groups, key = { "group-${it.subscriptionId}" }) { group ->
+            val name = group.subscriptionName?.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.common_subscription_numbered, group.subscriptionId)
+            ProviderGroupCard(header = if (showHeaders) stringResource(R.string.picker_group_header, name, group.nodes.size) else null) {
+                group.nodes.forEachIndexed { index, node ->
+                    if (index > 0) ServerRowDivider()
+                    ServerNodeRow(
+                        node = node,
+                        selected = node.id == ui.selectedNodeId,
+                        latency = nodeLatencyView(ui.delays[node.id], node.id in ui.testedNodeIds, ui.storedLatency[node.id], ui.connected, now),
+                        nowMs = now,
+                        // A disabled or hidden node stays rendered (the user manages it) but tapping it must
+                        // not persist a selection the engine can't honor / the lists don't show — keep the row, drop the click.
+                        onClick = {
+                            if (node.canSelect) {
+                                actions.selectNode(node.id)
+                                onSelected()
+                            }
+                        },
+                        onToggleFavorite = { actions.toggleFavorite(node.id) },
+                        onRename = { newName -> actions.setNodeCustomName(node.id, newName) },
+                        onSetEnabled = { enabled -> actions.setNodeEnabled(node.id, enabled) },
+                        onSetHidden = { hidden -> actions.setNodeHidden(node.id, hidden) },
+                    )
+                }
             }
         }
     }
@@ -358,12 +355,10 @@ private fun SortSelector(
 @Composable
 private fun FiltersEntry(
     ui: ServersUiState,
-    viewModel: ServersViewModel,
+    actions: ServersActions,
 ) {
     var open by remember { mutableStateOf(false) }
-    val active =
-        listOfNotNull(ui.subscriptionFilter, ui.protocolFilter).size +
-            (if (ui.showHidden) 1 else 0)
+    val active = activeFilterCount(ui.subscriptionFilter, ui.protocolFilter, ui.showHidden)
     FilterChip(
         selected = active > 0,
         onClick = { open = true },
@@ -392,14 +387,14 @@ private fun FiltersEntry(
                         FilterOptionRow(
                             stringResource(R.string.servers_filter_all),
                             ui.subscriptionFilter == null,
-                        ) { viewModel.setSubscriptionFilter(null) }
+                        ) { actions.setSubscriptionFilter(null) }
                         ui.subscriptionOptions.forEach { option ->
                             FilterOptionRow(
                                 option.name.ifBlank {
                                     stringResource(R.string.common_subscription_numbered, option.id)
                                 },
                                 ui.subscriptionFilter == option.id,
-                            ) { viewModel.setSubscriptionFilter(option.id) }
+                            ) { actions.setSubscriptionFilter(option.id) }
                         }
                     }
                     if (ui.protocolOptions.size > 1) {
@@ -407,17 +402,17 @@ private fun FiltersEntry(
                         FilterOptionRow(
                             stringResource(R.string.servers_filter_all),
                             ui.protocolFilter == null,
-                        ) { viewModel.setProtocolFilter(null) }
+                        ) { actions.setProtocolFilter(null) }
                         ui.protocolOptions.forEach { protocol ->
                             FilterOptionRow(
                                 protocolLabel(protocol),
                                 ui.protocolFilter == protocol,
-                            ) { viewModel.setProtocolFilter(protocol) }
+                            ) { actions.setProtocolFilter(protocol) }
                         }
                     }
                     Row(
                         Modifier.fillMaxWidth().clip(AfterglowTokens.chipShape)
-                            .clickable { viewModel.setShowHidden(!ui.showHidden) }
+                            .clickable { actions.setShowHidden(!ui.showHidden) }
                             .heightIn(min = AfterglowTokens.touchTarget),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -437,9 +432,9 @@ private fun FiltersEntry(
             dismissButton = {
                 if (active > 0) {
                     TextButton(onClick = {
-                        viewModel.setSubscriptionFilter(null)
-                        viewModel.setProtocolFilter(null)
-                        viewModel.setShowHidden(false)
+                        actions.setSubscriptionFilter(null)
+                        actions.setProtocolFilter(null)
+                        actions.setShowHidden(false)
                     }) {
                         Text(stringResource(R.string.servers_filter_reset))
                     }
@@ -489,51 +484,11 @@ private fun sortModeLabel(mode: ServerSortMode): String =
     }
 
 @Composable
-private fun AutoCard(
-    selected: Boolean,
-    delayMs: Int?,
-    onClick: () -> Unit,
-) {
-    val colors = AfterglowTheme.colors
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected },
-        shape = AfterglowTokens.cardShape,
-        border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
-        colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.common_auto_fastest),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f),
-            )
-            LatencyBadge(delayMs = delayMs, tested = delayMs != null)
-            if (selected) {
-                Spacer(Modifier.width(8.dp))
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = stringResource(R.string.common_selected),
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ServerCard(
+private fun ServerNodeRow(
     node: ServerNode,
     selected: Boolean,
-    delayMs: Int?,
-    tested: Boolean,
-    stored: NodeLatency?,
+    latency: NodeLatencyView,
+    nowMs: Long,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onRename: (String?) -> Unit,
@@ -543,182 +498,99 @@ private fun ServerCard(
     var menuOpen by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showTlsDetails by remember { mutableStateOf(false) }
-    val colors = AfterglowTheme.colors
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected },
-        shape = AfterglowTokens.cardShape,
-        border = BorderStroke(AfterglowTokens.border, if (selected) colors.coral else colors.border),
-        colors = CardDefaults.cardColors(containerColor = colors.paperSecondary),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = node.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    // minLines keeps every card the same height — a one-line
-                    // name must not shrink the card below its two-line peers.
-                    minLines = 2,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.size(AfterglowTokens.touchTarget),
-                ) {
-                    Icon(
-                        imageVector =
-                            if (node.favorite) Icons.Filled.Star else Icons.Outlined.Star,
-                        contentDescription =
-                            stringResource(
-                                if (node.favorite) {
-                                    R.string.servers_favorite_remove
-                                } else {
-                                    R.string.servers_favorite_add
-                                },
-                            ),
-                        tint =
-                            if (node.favorite) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                // Per-node management — enable/hide/rename live in prefs and
-                // survive refresh; they never rewrite the subscription row.
-                Box {
-                    IconButton(
-                        onClick = { menuOpen = true },
-                        modifier = Modifier.size(AfterglowTokens.touchTarget),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = stringResource(R.string.servers_node_menu),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.servers_tls_details)) },
-                            onClick = {
-                                menuOpen = false
-                                showTlsDetails = true
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.servers_rename)) },
-                            onClick = {
-                                menuOpen = false
-                                showRename = true
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    stringResource(
-                                        if (node.enabled) {
-                                            R.string.servers_disable
-                                        } else {
-                                            R.string.servers_enable
-                                        },
-                                    ),
-                                )
-                            },
-                            onClick = {
-                                menuOpen = false
-                                onSetEnabled(!node.enabled)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    stringResource(
-                                        if (node.hidden) {
-                                            R.string.servers_unhide
-                                        } else {
-                                            R.string.servers_hide
-                                        },
-                                    ),
-                                )
-                            },
-                            onClick = {
-                                menuOpen = false
-                                onSetHidden(!node.hidden)
-                            },
-                        )
-                    }
-                }
-                if (selected) {
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = stringResource(R.string.common_selected),
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-            // Disabled / hidden are honest state — the card stays rendered
-            // (the user manages it), but neither is engine-pickable.
-            // An insecure TLS config is a risk the user must see even before
-            // connecting — the details dialog carries the full picture.
-            if (node.tls.insecure) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        stringResource(R.string.servers_tls_insecure_warning),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            if (!node.encrypted) {
-                Text(stringResource(R.string.servers_unencrypted),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                Text(stringResource(if (node.tunnelAllowed) R.string.servers_local_sidecar else R.string.servers_connection_blocked),
-                    style = MaterialTheme.typography.labelSmall)
-            }
-            if (!node.enabled) {
-                Text(
-                    stringResource(R.string.servers_disabled_label),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (node.hidden) {
-                Text(
-                    stringResource(R.string.servers_hidden_label),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ProtocolBadge(node.protocol)
-                Spacer(Modifier.weight(1f))
-                if (delayMs != null || tested || stored == null) {
-                    LatencyBadge(delayMs = delayMs, tested = tested)
-                }
-            }
-            if (delayMs == null && !tested && stored != null) {
-                StoredLatency(stored, Modifier.fillMaxWidth())
-            }
+    val c = AfterglowTheme.colors
+    val iconSize = scaledDp(AfterglowTokens.iconSize)
+
+    // Method and age live in the row's spoken description; only an outdated verdict earns a visible line.
+    val history = latency.history
+    val historyAge = history?.let { relativeTimeText(maxOf(0L, nowMs - it.checkedAtMs)) }
+    val freshness = stringResource(if (latency.stale) R.string.servers_latency_stale else R.string.servers_latency_earlier)
+    val spoken =
+        listOfNotNull(
+            latency.reading?.let { stringResource(it.methodRes) },
+            history?.takeIf { !latency.stale }?.let { "$freshness, $historyAge" },
+        ).joinToString(" · ").ifEmpty { null }
+    val staleLine =
+        history?.takeIf { latency.stale }?.let {
+            val value = it.latencyMs?.let { ms -> stringResource(R.string.servers_latency_ms, ms) } ?: stringResource(R.string.servers_latency_timeout)
+            "$value · $freshness, $historyAge"
         }
-    }
+    // Disabled / hidden are honest state — the row stays rendered (the user manages it), but neither is engine-pickable.
+    val caption =
+        listOfNotNull(
+            if (!node.encrypted && node.tunnelAllowed) stringResource(R.string.servers_local_sidecar) else null,
+            if (!node.enabled) stringResource(R.string.servers_disabled_label) else null,
+            if (node.hidden) stringResource(R.string.servers_hidden_label) else null,
+            staleLine,
+        ).joinToString("\n").ifEmpty { null }
+    // An insecure TLS config is a risk the user must see even before connecting — the details dialog carries the full picture.
+    val warning =
+        listOfNotNull(
+            if (node.encrypted) null else stringResource(if (node.tunnelAllowed) R.string.servers_unencrypted else R.string.servers_connection_blocked),
+            if (node.tls.insecure) stringResource(R.string.servers_tls_insecure_warning) else null,
+        ).joinToString("\n").ifEmpty { null }
+
+    ServerRow(
+        title = node.name,
+        selected = selected,
+        onClick = onClick,
+        protocol = protocolLabel(node.protocol),
+        latency = latency.reading,
+        caption = caption,
+        warning = warning,
+        spoken = spoken,
+        actions = {
+            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
+                Icon(
+                    imageVector = if (node.favorite) Icons.Filled.Star else Icons.Outlined.Star,
+                    contentDescription = stringResource(if (node.favorite) R.string.servers_favorite_remove else R.string.servers_favorite_add),
+                    tint = if (node.favorite) c.coral else c.muted,
+                    modifier = Modifier.size(iconSize),
+                )
+            }
+            // Per-node management — enable/hide/rename live in prefs and survive refresh; they never rewrite the subscription row.
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.servers_node_menu),
+                        tint = c.muted,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.servers_tls_details)) },
+                        onClick = {
+                            menuOpen = false
+                            showTlsDetails = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.servers_rename)) },
+                        onClick = {
+                            menuOpen = false
+                            showRename = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(if (node.enabled) R.string.servers_disable else R.string.servers_enable)) },
+                        onClick = {
+                            menuOpen = false
+                            onSetEnabled(!node.enabled)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(if (node.hidden) R.string.servers_unhide else R.string.servers_hide)) },
+                        onClick = {
+                            menuOpen = false
+                            onSetHidden(!node.hidden)
+                        },
+                    )
+                }
+            }
+        },
+    )
     if (showRename) {
         var text by remember { mutableStateOf(node.customName ?: node.providerName) }
         AlertDialog(
@@ -859,92 +731,6 @@ private fun TlsDetailRow(
                 } else {
                     Color.Unspecified
                 },
-        )
-    }
-}
-
-/** A persisted verdict is history: muted value, then which measurement it was
- *  and how old it is — never styled like a live reading. */
-@Composable
-private fun StoredLatency(
-    stored: NodeLatency,
-    modifier: Modifier = Modifier,
-) {
-    val now = System.currentTimeMillis()
-    val method =
-        stringResource(
-            when (stored.method) {
-                LatencyMethod.Tcp -> R.string.servers_latency_method_tcp
-                LatencyMethod.Proxy -> R.string.servers_latency_method_proxy
-            },
-        )
-    val freshness =
-        stringResource(
-            if (stored.isFresh(now)) R.string.servers_latency_earlier else R.string.servers_latency_stale,
-        )
-    val age = relativeTimeText(maxOf(0L, now - stored.checkedAtMs))
-    Text(
-        text =
-            if (stored.latencyMs != null) {
-                stringResource(R.string.servers_latency_ms, stored.latencyMs)
-            } else {
-                stringResource(R.string.servers_latency_timeout)
-            } + " · $method · $freshness, $age",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.End,
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun LatencyBadge(
-    delayMs: Int?,
-    tested: Boolean,
-) {
-    when {
-        delayMs != null -> {
-            Text(
-                text = stringResource(R.string.servers_latency_ms, delayMs),
-                style = MaterialTheme.typography.labelSmall,
-                // Light jade (tertiary) on paper fails text contrast — ink
-                // keeps the value legible in both themes.
-                color =
-                    if (delayMs < 800) {
-                        AfterglowTheme.colors.ink
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-            )
-        }
-
-        tested -> {
-            Text(
-                text = stringResource(R.string.servers_latency_timeout),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-
-        else -> {
-            Text(
-                text = stringResource(R.string.common_none),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ProtocolBadge(protocol: String) {
-    val colors = AfterglowTheme.colors
-    Surface(color = colors.ink, shape = AfterglowTokens.chipShape) {
-        Text(
-            text = protocolLabel(protocol),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.paper,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
 }

@@ -12,10 +12,6 @@ internal data class PickerGroup(val id: Long?, val name: String?, val options: L
 internal fun groupPickerOptions(nodes: List<ServerOption>): List<PickerGroup> =
     nodes.groupBy { it.groupId }.map { (id, list) -> PickerGroup(id, list.first().groupName, list) }
 
-/** Favourites first inside each subscription; subscription order and the order within each part are kept. */
-internal fun <T> favoritesFirstPerGroup(nodes: List<T>, groupOf: (T) -> Long, isFavorite: (T) -> Boolean): List<T> =
-    nodes.groupBy(groupOf).values.flatMap { group -> group.sortedByDescending(isFavorite) }
-
 /** A stored verdict counts only while fresh; an outdated one is shown as "no data", never as current. */
 internal fun NodeLatency.pickerReading(nowMs: Long): LatencyReading? =
     if (!isFresh(nowMs)) {

@@ -319,10 +319,13 @@ fun VpnApp(
                             Routes.SERVERS -> {
                                 AfterglowSheetHeader(stringResource(R.string.nav_servers),
                                     stringResource(R.string.common_dismiss), { activeSheet = null })
-                                ServersScreen(onAddServer = {
-                                    openAddDialog = true
-                                    activeSheet = Routes.SUBSCRIPTIONS
-                                })
+                                ServersScreen(
+                                    onAddServer = {
+                                        openAddDialog = true
+                                        activeSheet = Routes.SUBSCRIPTIONS
+                                    },
+                                    onSelected = { activeSheet = null },
+                                )
                             }
                             Routes.SUBSCRIPTIONS -> {
                                 // A sheet-local host — messages bound to the

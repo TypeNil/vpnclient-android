@@ -1,5 +1,6 @@
 package dev.typenil.vpnclient.ui.home
 
+import dev.typenil.vpnclient.ui.servers.favoritesFirstPerGroup
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope

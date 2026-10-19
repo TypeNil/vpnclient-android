@@ -390,9 +390,9 @@ class ServersViewModel
 
                 val sorted =
                     when (ctl.sortMode) {
-                        // DB order: subscriptionId, position — already the "default".
+                        // DB order (subscriptionId, position), starred nodes first inside each subscription.
                         ServerSortMode.Default -> {
-                            afterProtocol
+                            favoritesFirstPerGroup(afterProtocol, { it.subscriptionId }) { it.favorite }
                         }
 
                         // Live value first; a node with a live verdict but no
