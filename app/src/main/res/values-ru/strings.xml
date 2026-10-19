@@ -419,7 +419,7 @@
     <string name="subs_support">Поддержка</string>
     <string name="subs_support_cd">Поддержка: %1$s</string>
     <string name="subs_announce_more">Показать полностью</string>
-    <string name="subs_refresh_failed_notice">Не удалось обновить — данные от %1$s</string>
+    <string name="subs_refresh_failed_notice">Не удалось обновить — показаны данные, полученные %1$s</string>
     <string name="subs_delete_confirm_in_use">Выбранный сервер входит в эту подписку. После удаления выбор будет сброшен.</string>
     <string name="subs_add_title">Добавить подписку</string>
     <string name="subs_add_host">Сервер: %1$s</string>

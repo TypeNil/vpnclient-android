@@ -34,6 +34,14 @@ class SubscriptionFailureMessageTest {
         assertNull(subscriptionFailureMessage("HTTP untrusted", false))
     }
 
+    @Test fun `stored repository tokens render localized instead of raw english`() {
+        assertEquals(R.string.subs_add_err_network, subscriptionFailureMessage("network unavailable", true)!!.resId)
+        assertEquals(R.string.subs_add_err_timeout, subscriptionFailureMessage("request timed out", true)!!.resId)
+        assertEquals(R.string.subs_add_err_invalid, subscriptionFailureMessage("no usable nodes", true)!!.resId)
+        assertEquals(R.string.subs_add_err_insecure, subscriptionFailureMessage("https required", true)!!.resId)
+        assertEquals(R.string.subs_add_err_bad_address, subscriptionFailureMessage("bad url", true)!!.resId)
+    }
+
     @Test fun `en ru resources cover every outcome and kept sentence is conditional`() {
         val res = File("src/main/res").takeIf { it.isDirectory } ?: File("app/src/main/res")
         val factory = DocumentBuilderFactory.newInstance().apply {

@@ -183,6 +183,12 @@ class SubscriptionCardTest {
         compose.onNodeWithText(str(R.string.subs_refresh_failed_notice, "").trim().substringBefore(" —"), substring = true).assertIsDisplayed()
     }
 
+    @Test fun storedNetworkTokenIsShownLocalizedNotAsRawEnglish() {
+        show(profile(lastError = "network unavailable"))
+        compose.onNodeWithText(str(R.string.subs_add_err_network)).assertIsDisplayed()
+        compose.onNodeWithText("network unavailable", substring = true).assertDoesNotExist()
+    }
+
     @Test fun failedRefreshWithoutPriorDataShowsOnlyTheReason() {
         show(profile(lastError = "http 500", updated = null))
         compose.onNodeWithText(str(R.string.subs_refresh_failed_notice, "").trim().substringBefore(" —"), substring = true).assertDoesNotExist()

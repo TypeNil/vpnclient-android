@@ -15,6 +15,13 @@ fun subscriptionFailureMessage(token: String, hasServers: Boolean): UserMessage.
         "sub:hwid:disabled" -> R.string.subs_hwid_disabled_refusal to "HWID sending is off. This provider refused the update without it. Review HWID settings or contact support."
         "sub:hwid:ambiguous", "device limit / HWID rejected", "device identification rejected" ->
             R.string.subs_hwid_ambiguous to "Provider rejected device identification. A device limit is not confirmed; contact support."
+        // Fixed tokens stored by SubscriptionRepository.safeMessage(); reuse the add-dialog wording.
+        "network unavailable" -> R.string.subs_add_err_network to "Can't reach the server."
+        "request timed out" -> R.string.subs_add_err_timeout to "The server took too long to answer."
+        "response too large", "unsupported format", "parse failed", "no usable nodes", "rejected by engine" ->
+            R.string.subs_add_err_invalid to "The server answered, but no usable servers were found."
+        "https required", "redirect to local address blocked" -> R.string.subs_add_err_insecure to "This link isn't allowed."
+        "bad url" -> R.string.subs_add_err_bad_address to "This doesn't look like a valid web address."
         else -> {
             val code = Regex("^(?:sub:http:|HTTP )([1-5][0-9]{2})$").matchEntire(token)
                 ?.groupValues?.get(1)?.toIntOrNull() ?: return null
