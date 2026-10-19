@@ -395,16 +395,18 @@
     <string name="subs_delete_confirm_text">\"%1$s\" and its servers will be removed.</string>
     <string name="subs_manual_hint">Manual — paste share links to add</string>
     <string name="subs_manual_sheet_hint">Manual — local share links</string>
-    <plurals name="subs_card_meta">
-        <item quantity="one">%1$d server · updated %2$s</item>
-        <item quantity="other">%1$d servers · updated %2$s</item>
+    <plurals name="subs_card_servers">
+        <item quantity="one">%1$d server</item>
+        <item quantity="other">%1$d servers</item>
     </plurals>
-    <string name="subs_card_updates_on_launch"> · updates on launch</string>
-    <string name="subs_card_disabled"> · disabled</string>
+    <string name="subs_card_updated">Updated %1$s</string>
+    <string name="subs_card_not_updated">Not updated yet</string>
+    <string name="subs_card_updates_on_launch">Updates on launch</string>
+    <string name="subs_card_disabled">Disabled</string>
     <string name="subs_usage_of">Used %1$s of %2$s</string>
     <string name="subs_usage">Used %1$s</string>
-    <string name="subs_expires">" · expires %1$s"</string>
-    <string name="subs_expired">" · expired %1$s"</string>
+    <string name="subs_expires">Expires %1$s</string>
+    <string name="subs_expired">Expired %1$s</string>
     <string name="subs_support">Support</string>
     <string name="subs_support_cd">Support: %1$s</string>
     <string name="subs_announce_more">Show more</string>

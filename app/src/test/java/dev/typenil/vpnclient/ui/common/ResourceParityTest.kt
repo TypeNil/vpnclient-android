@@ -90,7 +90,7 @@ class ResourceParityTest {
         assertEquals("5 дней назад", ruText("relative_days_ago", 5))
         assertEquals("Через VPN: 21 приложение", ruText("home_per_app_include", 21))
         assertEquals("Без VPN: 22 приложения", ruText("home_per_app_exclude", 22))
-        assertEquals("25 серверов · обновлено %2\$s", ruText("subs_card_meta", 25))
+        assertEquals("25 серверов", ruText("subs_card_servers", 25))
     }
 
     @Test

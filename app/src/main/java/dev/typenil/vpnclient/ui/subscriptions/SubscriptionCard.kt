@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -23,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -117,21 +119,17 @@ internal fun SubscriptionCard(
                     Text(
                         announce, style = AfterglowType.rowCaption, color = c.muted,
                         maxLines = ANNOUNCE_LINES, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = AfterglowTokens.headerInset),
                         onTextLayout = { overflow = it.hasVisualOverflow },
                     )
                     // The full text lives in the detail sheet; the card only hints that there is more.
                     if (overflow) {
-                        TextButton(onClick = onOpenDetails, modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget)) {
-                            Text(stringResource(R.string.subs_announce_more), color = c.coral)
-                        }
+                        CardLink(stringResource(R.string.subs_announce_more), null, onOpenDetails)
                     }
                 }
                 profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
                     val supportCd = stringResource(R.string.subs_support_cd, redactedHost(url))
-                    TextButton(
-                        onClick = { uriHandler.openUri(url) },
-                        modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget).semantics { contentDescription = supportCd },
-                    ) { Text(stringResource(R.string.subs_support), color = c.coral) }
+                    CardLink(stringResource(R.string.subs_support), supportCd) { uriHandler.openUri(url) }
                 }
                 // The notice fades/expands in when a refresh fails and out when one succeeds; it keeps the last
                 // error text while leaving so it doesn't blank out mid-animation.
@@ -156,6 +154,18 @@ internal fun SubscriptionCard(
             }
         }
     }
+}
+
+/** A text link whose text starts exactly where the card's text does; the touch target is still at least 48 dp each way. */
+@Composable
+private fun CardLink(text: String, description: String?, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .defaultMinSize(minWidth = AfterglowTokens.touchTarget, minHeight = AfterglowTokens.touchTarget)
+            .clickable(role = Role.Button, onClick = onClick)
+            .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier),
+        contentAlignment = Alignment.CenterStart,
+    ) { Text(text, style = MaterialTheme.typography.labelLarge, color = AfterglowTheme.colors.coral) }
 }
 
 @Composable
@@ -252,38 +262,48 @@ private fun FieldDialog(
     )
 }
 
-/** Left: servers · updated (+ launch/disabled flags). Right: traffic · expiry. One column at larger fonts or without userInfo. */
+/**
+ * Left column: servers / updated (+ launch and disabled flags). Right column: used / expires. Every fact is its own
+ * line. One column, same order, at larger fonts, without userInfo, or as soon as a line would wrap in its column.
+ */
 @Composable
 private fun CardMeta(profile: SubscriptionProfile, nodeCount: Int, modifier: Modifier = Modifier) {
     val c = AfterglowTheme.colors
-    val left =
-        localizedResources().getQuantityString(R.plurals.subs_card_meta, nodeCount, nodeCount, formatRelativeTime(profile.lastUpdatedAt)) +
-            // Suppressed when the row can't actually launch-refresh: disabled subscription or Disabled refresh policy.
-            (if (profile.updateAlways && profile.enabled && profile.refreshPolicy != RefreshPolicy.Disabled) stringResource(R.string.subs_card_updates_on_launch) else "") +
-            (if (!profile.enabled) stringResource(R.string.subs_card_disabled) else "")
-    val right = profile.userInfo?.let { info ->
-        val usage = if (info.totalBytes > 0) {
-            stringResource(R.string.subs_usage_of, formatBytes(info.usedBytes), formatBytes(info.totalBytes))
-        } else {
-            stringResource(R.string.subs_usage, formatBytes(info.usedBytes))
-        }
-        // <= 0 guards rows stored before the parser dropped expire=0.
-        val expiry = info.expireEpochSeconds?.takeIf { it > 0 }?.let {
-            val past = it * 1000 < System.currentTimeMillis()
-            stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it))
-        }.orEmpty()
-        usage + expiry
+    val updated = profile.lastUpdatedAt
+    val left = buildList {
+        add(localizedResources().getQuantityString(R.plurals.subs_card_servers, nodeCount, nodeCount) to c.muted)
+        add((if (updated != null) stringResource(R.string.subs_card_updated, formatRelativeTime(updated)) else stringResource(R.string.subs_card_not_updated)) to c.muted)
+        // Suppressed when the row can't actually launch-refresh: disabled subscription or Disabled refresh policy.
+        if (profile.updateAlways && profile.enabled && profile.refreshPolicy != RefreshPolicy.Disabled) add(stringResource(R.string.subs_card_updates_on_launch) to c.muted)
+        if (!profile.enabled) add(stringResource(R.string.subs_card_disabled) to c.error)
     }
-    val leftColor = if (profile.enabled) c.muted else c.error
-    if (right != null && metaTwoColumns(LocalDensity.current.fontScale)) {
+    val right = profile.userInfo?.let { info ->
+        buildList {
+            add(
+                (if (info.totalBytes > 0) stringResource(R.string.subs_usage_of, formatBytes(info.usedBytes), formatBytes(info.totalBytes))
+                else stringResource(R.string.subs_usage, formatBytes(info.usedBytes))) to c.muted,
+            )
+            // <= 0 guards rows stored before the parser dropped expire=0.
+            info.expireEpochSeconds?.takeIf { it > 0 }?.let {
+                val past = it * 1000 < System.currentTimeMillis()
+                add(stringResource(if (past) R.string.subs_expired else R.string.subs_expires, formatDate(it)) to c.muted)
+            }
+        }
+    }.orEmpty()
+    var wraps by remember(left, right) { mutableStateOf(false) }
+    val lines: @Composable (List<Pair<String, Color>>, Modifier) -> Unit = { items, m ->
+        Column(m) {
+            items.forEach { (text, color) ->
+                Text(text, style = AfterglowType.rowCaption, color = color, onTextLayout = { if (it.lineCount > 1) wraps = true })
+            }
+        }
+    }
+    if (right.isNotEmpty() && !wraps && metaTwoColumns(LocalDensity.current.fontScale)) {
         Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap)) {
-            Text(left, style = AfterglowType.rowCaption, color = leftColor, modifier = Modifier.weight(1f))
-            Text(right, style = AfterglowType.rowCaption, color = c.muted, modifier = Modifier.weight(1f))
+            lines(left, Modifier.weight(1f))
+            lines(right, Modifier.weight(1f))
         }
     } else {
-        Column(modifier.fillMaxWidth()) {
-            Text(left, style = AfterglowType.rowCaption, color = leftColor)
-            if (right != null) Text(right, style = AfterglowType.rowCaption, color = c.muted)
-        }
+        lines(left + right, modifier.fillMaxWidth())
     }
 }
