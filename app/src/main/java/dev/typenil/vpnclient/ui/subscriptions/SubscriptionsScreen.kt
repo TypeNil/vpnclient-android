@@ -302,7 +302,10 @@ fun SubscriptionsScreen(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.subs_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.subs_delete_confirm_text, profile.name)) },
+            text = {
+                val base = stringResource(R.string.subs_delete_confirm_text, profile.name)
+                Text(if (profile.id == ui.selectedSubscriptionId) base + "\n\n" + stringResource(R.string.subs_delete_confirm_in_use) else base)
+            },
             confirmButton = {
                 TextButton(
                     onClick = {

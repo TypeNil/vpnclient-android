@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.RefreshPolicy
@@ -39,6 +42,8 @@ import dev.typenil.vpnclient.ui.common.formatDate
 import dev.typenil.vpnclient.ui.common.formatRelativeTime
 import dev.typenil.vpnclient.ui.common.localizedResources
 import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.AfterglowNotice
+import dev.typenil.vpnclient.ui.theme.NoticeTone
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog
 import dev.typenil.vpnclient.ui.theme.AfterglowTextField
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
@@ -48,6 +53,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /** Meta sits in two columns only while the text is small; at larger fonts one column keeps every line readable. */
 internal fun metaTwoColumns(fontScale: Float): Boolean = fontScale < 1.3f
+
+private const val ANNOUNCE_LINES = 2
 
 /** Host-only display of a subscription URL — the URL itself may carry credentials and must never be rendered. */
 @Composable
@@ -97,16 +104,34 @@ internal fun SubscriptionCard(
             CardMeta(profile, nodeCount, Modifier.padding(end = bodyEnd))
             Column(Modifier.padding(end = bodyEnd)) {
                 profile.announce?.let { announce ->
-                    Text(announce, style = AfterglowType.rowCaption, color = c.muted)
+                    var overflow by remember(announce) { mutableStateOf(false) }
+                    Text(
+                        announce, style = AfterglowType.rowCaption, color = c.muted,
+                        maxLines = ANNOUNCE_LINES, overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { overflow = it.hasVisualOverflow },
+                    )
+                    // The full text lives in the detail sheet; the card only hints that there is more.
+                    if (overflow) {
+                        TextButton(onClick = onOpenDetails, modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget)) {
+                            Text(stringResource(R.string.subs_announce_more), color = c.coral)
+                        }
+                    }
                 }
                 profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
-                    TextButton(onClick = { uriHandler.openUri(url) }) { Text(stringResource(R.string.subs_support), color = c.coral) }
+                    val supportCd = stringResource(R.string.subs_support_cd, redactedHost(url))
+                    TextButton(
+                        onClick = { uriHandler.openUri(url) },
+                        modifier = Modifier.heightIn(min = AfterglowTokens.touchTarget).semantics { contentDescription = supportCd },
+                    ) { Text(stringResource(R.string.subs_support), color = c.coral) }
                 }
                 profile.lastError?.let { error ->
-                    Text(
-                        text = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error,
-                        style = AfterglowType.rowCaption,
-                        color = c.error,
+                    val reason = subscriptionFailureMessage(error, nodeCount > 0)?.render(LocalContext.current) ?: error
+                    val updated = profile.lastUpdatedAt
+                    AfterglowNotice(
+                        tone = NoticeTone.Error,
+                        text = if (updated != null) stringResource(R.string.subs_refresh_failed_notice, formatRelativeTime(updated)) else reason,
+                        detail = if (updated != null) reason else null,
+                        modifier = Modifier.padding(top = AfterglowTokens.headerGap),
                     )
                 }
             }

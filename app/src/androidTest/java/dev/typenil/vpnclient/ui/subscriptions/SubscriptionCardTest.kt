@@ -119,4 +119,31 @@ class SubscriptionCardTest {
         compose.onNodeWithText("sub.invalid").assertIsDisplayed()
         compose.onNodeWithText("https://sub.invalid/feed", substring = true).assertDoesNotExist()
     }
+
+    @Test fun failedRefreshShowsNoticeWithAgeAndReason() {
+        show(profile(lastError = "http 500"))
+        compose.onNodeWithText(str(R.string.subs_refresh_failed_notice, "").trim().substringBefore(" —"), substring = true).assertIsDisplayed()
+    }
+
+    @Test fun failedRefreshWithoutPriorDataShowsOnlyTheReason() {
+        show(profile(lastError = "http 500", updated = null))
+        compose.onNodeWithText(str(R.string.subs_refresh_failed_notice, "").trim().substringBefore(" —"), substring = true).assertDoesNotExist()
+    }
+
+    @Test fun longAnnouncementIsClampedAndShowMoreOpensDetails() {
+        val calls = Calls()
+        show(profile(announce = "Synthetic announcement. ".repeat(40)), calls)
+        compose.onNodeWithText(str(R.string.subs_announce_more)).assertHeightIsAtLeast(48.dp).performClick()
+        compose.runOnIdle { assertEquals(1, calls.details) }
+    }
+
+    @Test fun shortAnnouncementHasNoShowMore() {
+        show(profile(announce = "Short"))
+        compose.onNodeWithText(str(R.string.subs_announce_more)).assertDoesNotExist()
+    }
+
+    @Test fun supportButtonIs48dpAndSpeaksTheHost() {
+        show(profile(supportUrl = "https://support.invalid/help"))
+        compose.onNodeWithContentDescription(str(R.string.subs_support_cd, "support.invalid")).assertHeightIsAtLeast(48.dp)
+    }
 }

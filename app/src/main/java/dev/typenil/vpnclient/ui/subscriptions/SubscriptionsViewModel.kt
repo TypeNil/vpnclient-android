@@ -54,7 +54,13 @@ data class SubscriptionsUiState(
     val manualNodes: List<NodeEntity> = emptyList(),
     val refreshingIds: Set<Long> = emptySet(),
     val pendingMessage: PendingMessage? = null,
+    /** The subscription that owns the currently selected server, if any — deleting it clears the selection. */
+    val selectedSubscriptionId: Long? = null,
 )
+
+/** Which subscription the selected node belongs to; null for no selection, an unknown id, or a manual node. */
+internal fun selectedSubscriptionId(selectedNodeId: String?, nodes: List<NodeEntity>): Long? =
+    selectedNodeId?.let { id -> nodes.firstOrNull { it.id == id }?.subscriptionId }
 
 @HiltViewModel
 class SubscriptionsViewModel
@@ -83,12 +89,13 @@ class SubscriptionsViewModel
         val uiState: StateFlow<SubscriptionsUiState> =
             combine(
                 repository.profiles,
-                nodeDao.observeEnabled(),
+                combine(nodeDao.observeEnabled(), settings.selectedNodeId) { nodes, selected -> nodes to selected },
                 refreshing,
                 pendingMessage,
                 repository.manualNodes,
-            ) { profiles, nodes, refreshingIds, message, manualNodes ->
+            ) { profiles, (nodes, selected), refreshingIds, message, manualNodes ->
                 SubscriptionsUiState(
+                    selectedSubscriptionId = selectedSubscriptionId(selected, nodes),
                     profiles = profiles,
                     nodeCounts = profiles.associate { profile ->
                         profile.id to maxOf(profile.nodeCount, nodes.count { it.subscriptionId == profile.id })

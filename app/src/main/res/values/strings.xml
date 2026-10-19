@@ -407,6 +407,10 @@
     <string name="subs_expires">" · expires %1$s"</string>
     <string name="subs_expired">" · expired %1$s"</string>
     <string name="subs_support">Support</string>
+    <string name="subs_support_cd">Support: %1$s</string>
+    <string name="subs_announce_more">Show more</string>
+    <string name="subs_refresh_failed_notice">Refresh failed — showing data from %1$s</string>
+    <string name="subs_delete_confirm_in_use">The selected server is in this subscription. Deleting it clears your selection.</string>
     <string name="subs_add_title">Add subscription</string>
     <string name="subs_add_host">Server: %1$s</string>
     <string name="subs_url_label">Subscription URL or share link</string>
