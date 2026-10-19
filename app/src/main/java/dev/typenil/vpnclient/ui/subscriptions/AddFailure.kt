@@ -14,6 +14,7 @@ enum class AddFailureKind(@StringRes val textRes: Int) {
     Expired(R.string.subs_add_err_expired),
     UsedUp(R.string.subs_add_err_used_up),
     Http(R.string.subs_add_err_http),
+    ServerError(R.string.subs_add_err_server),
     Network(R.string.subs_add_err_network),
     Timeout(R.string.subs_add_err_timeout),
     InvalidResponse(R.string.subs_add_err_invalid),
@@ -31,7 +32,9 @@ data class AddFailure(
 )
 
 fun addFailureOf(e: Throwable): AddFailure = when (e) {
-    is SubscriptionError.Http -> AddFailure(AddFailureKind.Http, e.code, e.announce)
+    is SubscriptionError.Http -> AddFailure(
+        if (e.code >= 500) AddFailureKind.ServerError else AddFailureKind.Http, e.code, e.announce,
+    )
     is SubscriptionError.DeviceIdentificationRejected -> AddFailure(
         when {
             e.reason == HwidRefusal.Ambiguous -> AddFailureKind.HwidUnclear

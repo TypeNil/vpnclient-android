@@ -6,6 +6,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.platform.LocalConfiguration
@@ -92,9 +94,9 @@ fun uptimeParts(totalSeconds: Long): UptimeParts {
     )
 }
 
-/** `2026-05-01` style date for subscription expiry (epoch seconds). */
-fun formatDate(epochSeconds: Long): String =
+/** Localized medium date for subscription expiry (epoch seconds): `May 1, 2026` / `1 мая 2026 г.`. */
+fun formatDate(epochSeconds: Long, locale: Locale = Locale.getDefault()): String =
     Instant.ofEpochSecond(epochSeconds)
         .atZone(ZoneId.systemDefault())
         .toLocalDate()
-        .format(DateTimeFormatter.ISO_LOCAL_DATE)
+        .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale))

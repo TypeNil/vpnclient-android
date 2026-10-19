@@ -17,6 +17,13 @@ class AddFailureTest {
     }
 
     @Test
+    fun `5xx is a provider server error not a refusal of our request`() {
+        assertEquals(AddFailure(AddFailureKind.ServerError, 502, null), addFailureOf(SubscriptionError.Http(502, "host", null)))
+        assertEquals(AddFailureKind.Http, kind(SubscriptionError.Http(499, "host", null)))
+        assertEquals(AddFailureKind.ServerError, kind(SubscriptionError.Http(500, "host", null)))
+    }
+
+    @Test
     fun `hwid refusals map by reason and keep provider text`() {
         fun rej(r: HwidRefusal, off: Boolean) = SubscriptionError.DeviceIdentificationRejected(r, off, "msg")
         assertEquals(AddFailure(AddFailureKind.DeviceLimit, null, "msg"), addFailureOf(rej(HwidRefusal.MaxDevices, false)))
