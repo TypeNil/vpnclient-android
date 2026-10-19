@@ -2,6 +2,8 @@ package dev.typenil.vpnclient.ui.servers
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -13,6 +15,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -22,6 +25,7 @@ import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.data.db.NodeEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -73,6 +77,18 @@ class ServersContentTest {
                 ServersContent(ui, testing = false, progress = null, actions = rec.actions, onSelected = { rec.closed++ })
             }
         }
+    }
+
+    @Test fun favoriteStarIsSolidAndNonFavoriteStarIsAnOutline() {
+        show(state(ServerGroup(1L, "Alpha", listOf(node("a1"), node("a2", favorite = true)))))
+        fun centreAndCorner(desc: Int): Pair<Int, Int> {
+            val img = compose.onNodeWithContentDescription(str(desc)).captureToImage()
+            return img.toPixelMap()[img.width / 2, img.height / 2].toArgb() to img.toPixelMap()[2, 2].toArgb()
+        }
+        val (offCentre, offCorner) = centreAndCorner(R.string.servers_favorite_add)
+        val (onCentre, onCorner) = centreAndCorner(R.string.servers_favorite_remove)
+        assertEquals("outlined star is hollow", offCorner, offCentre)
+        assertNotEquals("filled star is solid", onCorner, onCentre)
     }
 
     @Test fun pickingARowSelectsItAndClosesTheSheet() {

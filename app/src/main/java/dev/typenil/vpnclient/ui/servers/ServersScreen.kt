@@ -22,8 +22,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Star
 import dev.typenil.vpnclient.ui.common.headingSemantics
 import dev.typenil.vpnclient.ui.theme.AfterglowDialog as AlertDialog
 import androidx.compose.material3.Button
@@ -62,6 +60,7 @@ import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.common.relativeTimeText
+import dev.typenil.vpnclient.ui.theme.AfterglowStar
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -183,7 +182,7 @@ internal fun ServersContent(
                         onClick = { actions.setFavoritesOnly(!ui.favoritesOnly) },
                         label = {
                             Icon(
-                                if (ui.favoritesOnly) Icons.Filled.Star else Icons.Outlined.Star,
+                                AfterglowStar.icon(ui.favoritesOnly),
                                 contentDescription = favLabel,
                                 modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)),
                             )
@@ -191,7 +190,7 @@ internal fun ServersContent(
                     )
                     FiltersEntry(ui, actions)
                     if (testing) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(AfterglowTokens.progressSize), strokeWidth = AfterglowTokens.progressStroke)
                         progress?.let {
                             Text(
                                 text = stringResource(R.string.servers_latency_progress, it.done, it.total),
@@ -211,6 +210,7 @@ internal fun ServersContent(
                     text = stringResource(if (ui.connected) R.string.servers_latency_next_proxy else R.string.servers_latency_next_tcp),
                     style = AfterglowType.rowCaption,
                     color = c.muted,
+                    modifier = Modifier.padding(top = AfterglowTokens.headerGap),
                 )
             }
         }
@@ -218,7 +218,7 @@ internal fun ServersContent(
         if (ui.groups.isEmpty()) {
             item(key = "empty") {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp, bottom = AfterglowTokens.cardGap),
+                    modifier = Modifier.fillMaxWidth().padding(top = AfterglowTokens.emptyTop, bottom = AfterglowTokens.cardGap),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (ui.noSubscriptions) {
@@ -230,15 +230,15 @@ internal fun ServersContent(
                                 text = stringResource(R.string.common_no_servers_yet),
                                 style = MaterialTheme.typography.titleMedium,
                             )
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(AfterglowTokens.headerGap))
                             Text(
                                 text = stringResource(R.string.common_add_servers_hint),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = 32.dp),
+                                modifier = Modifier.padding(horizontal = AfterglowTokens.emptyInset),
                             )
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(AfterglowTokens.screenPadding))
                             Button(onClick = onAddServer) {
                                 Text(stringResource(R.string.common_add_server_cta))
                             }
@@ -333,7 +333,7 @@ private fun SortSelector(
                     Icon(
                         Icons.Default.ArrowDropDown,
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp),
+                        modifier = Modifier.size(AfterglowTokens.chipIconSize),
                     )
                 }
             },
@@ -351,7 +351,7 @@ private fun SortSelector(
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(AfterglowTokens.chipIconSize),
                             )
                         }
                     },
@@ -380,7 +380,7 @@ private fun FiltersEntry(
                 Icon(
                     Icons.Default.ArrowDropDown,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(AfterglowTokens.chipIconSize),
                 )
             }
         },
@@ -459,7 +459,7 @@ private fun FilterHeader(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.headingSemantics().padding(top = 8.dp, bottom = 2.dp),
+        modifier = Modifier.headingSemantics().padding(top = AfterglowTokens.headerGap, bottom = AfterglowTokens.headingBottom),
     )
 }
 
@@ -551,7 +551,7 @@ private fun ServerNodeRow(
         actions = {
             IconButton(onClick = onToggleFavorite, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
                 Icon(
-                    imageVector = if (node.favorite) Icons.Filled.Star else Icons.Outlined.Star,
+                    imageVector = AfterglowStar.icon(node.favorite),
                     contentDescription = stringResource(if (node.favorite) R.string.servers_favorite_remove else R.string.servers_favorite_add),
                     tint = if (node.favorite) c.coral else c.muted,
                     modifier = Modifier.size(iconSize),
@@ -707,7 +707,7 @@ private fun NodeTlsDialog(
                     text = stringResource(R.string.servers_tls_note),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = AfterglowTokens.headerGap),
                 )
             }
         },
@@ -725,7 +725,7 @@ private fun TlsDetailRow(
     value: String,
     warning: Boolean = false,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = AfterglowTokens.headerInset)) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
