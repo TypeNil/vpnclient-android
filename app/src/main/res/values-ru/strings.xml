@@ -239,13 +239,8 @@
     <string name="home_error_engine">Сбой ядра VPN: %1$s</string>
     <string name="home_error_tunnel">Сбой туннеля: %1$s</string>
     <string name="home_no_server_selected">Сервер не выбран</string>
-    <string name="picker_title">Серверы</string>
     <string name="picker_group_header">%1$s · %2$d</string>
-    <string name="home_picker_unencrypted_short">Не шифруется</string>
     <string name="picker_latency_unknown">Задержка не измерялась</string>
-    <string name="home_picker_search">Поиск серверов</string>
-    <string name="home_picker_all_servers">Все серверы, фильтры и задержка</string>
-    <string name="home_picker_no_match">Нет серверов по запросу \"%1$s\"</string>
     <string name="home_restart_guard_text">Автоперезапуск VPN остановлен — повторные сбои. Переподключитесь вручную.</string>
     <string name="home_stat_download">Загрузка</string>
     <string name="home_stat_upload">Отправка</string>

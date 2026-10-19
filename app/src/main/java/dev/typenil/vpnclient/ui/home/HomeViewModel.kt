@@ -1,6 +1,5 @@
 package dev.typenil.vpnclient.ui.home
 
-import dev.typenil.vpnclient.ui.servers.favoritesFirstPerGroup
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,10 +11,7 @@ import dev.typenil.vpnclient.core.engine.freshDelayMs
 import dev.typenil.vpnclient.core.engine.pickBestLatency
 import dev.typenil.vpnclient.core.subscription.SubscriptionRepository
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
-import dev.typenil.vpnclient.core.subscription.model.isEncrypted
-import dev.typenil.vpnclient.core.subscription.model.isTunnelAllowed
 import dev.typenil.vpnclient.core.vpn.VpnError
-import dev.typenil.vpnclient.data.toDomain
 import dev.typenil.vpnclient.core.vpn.AppliedSessionConfig
 import dev.typenil.vpnclient.core.vpn.ConnectionManager
 import dev.typenil.vpnclient.core.vpn.PerAppMode
@@ -25,8 +21,6 @@ import dev.typenil.vpnclient.data.NodeLatencyRepository
 import dev.typenil.vpnclient.data.db.NodeDao
 import dev.typenil.vpnclient.data.db.NodePreferenceDao
 import dev.typenil.vpnclient.data.settings.SettingsRepository
-import dev.typenil.vpnclient.data.NodeLatency
-import dev.typenil.vpnclient.ui.theme.LatencyReading
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.delay
@@ -73,12 +67,8 @@ data class HomeUiState(
     val noNodesAtAll: Boolean = true,
     /** Enabled subscription sources, not nodes or live VPN connections. */
     val enabledSubscriptionCount: Int = 0,
-    /** Pickable entries for the server sheet: Auto first, then every
-     *  enabled node. Empty when there are no nodes — the card then shows
-     *  the add prompt instead of a picker. */
-    val serverOptions: List<ServerOption> = emptyList(),
-    /** The persisted pick — used to mark the current option in the sheet. */
-    val selectedOptionId: String? = null,
+    /** Enabled, visible nodes the Servers sheet can offer (Auto is extra). */
+    val serverCount: Int = 0,
     val selectionError: VpnError? = null,
     /** The last finished session, shown on Home only while idle (see [showLastSession]). */
     val lastSession: dev.typenil.vpnclient.core.vpn.LastSession? = null,
@@ -96,31 +86,6 @@ internal fun HomeUiState.withAppliedServerOnRejection(): HomeUiState {
         autoSelected = node.id == NodeSelection.AUTO_ID, selectedDelayMs = null,
         selectedDelayStaleMinutes = null)
 }
-
-/** One row in the Home server picker. [id] is the raw `selected_node_id`
- *  value to persist — [NodeSelection.AUTO_ID] for the Auto row. [searchText]
- *  carries the fields the picker's search matches (name + host) without
- *  widening what the row renders. */
-data class ServerOption(
-    val id: String,
-    /** Literal node name, or null when [titleRes] carries the label (Auto). */
-    val title: String? = null,
-    /** Label resource — non-null only for entries without a real node name. */
-    @param:StringRes val titleRes: Int? = null,
-    /** Wire protocol label ("VLESS"); null for Auto. */
-    val protocol: String? = null,
-    /** Subscription the node came from and its display name (null = profile row gone); null id for Auto. */
-    val groupId: Long? = null,
-    val groupName: String? = null,
-    /** Fresh stored verdict, or null = no data. Read-only; nothing here measures. */
-    val latency: LatencyReading? = null,
-    /** Subtitle resource — non-null only for the localized Auto subtitle. */
-    @param:StringRes val subtitleRes: Int? = null,
-    /** Host + name text the search matches; falls back to the Auto tag. */
-    val searchText: String? = title,
-    val encrypted: Boolean = true,
-    val tunnelAllowed: Boolean = true,
-)
 
 /** Sheet payload — assembled per state emission so it stays in lockstep
  *  with the connection state machine. */
@@ -238,7 +203,6 @@ class HomeViewModel
                     nowMonotonicMs = { System.nanoTime() / 1_000_000 },
                 ),
                 settings.lastSession,
-                latencyRepository.latencies,
             ) { values ->
                 val connection = values[0] as VpnConnectionState
                 val selectedId = values[1] as String?
@@ -266,22 +230,13 @@ class HomeViewModel
                 val prefs =
                     values[11] as List<dev.typenil.vpnclient.data.db.NodePreferenceEntity>
                 val prefById = prefs.associateBy { it.nodeId }
-                val favoriteIds =
-                    prefs
-                        .asSequence()
-                        .filter { it.isFavorite }
-                        .map { it.nodeId }
-                        .toSet()
                 val dnsProfile = values[12] as DnsProfile
                 val nowMs = values[13] as Long
 
-                @Suppress("UNCHECKED_CAST")
-                val storedLatency = values[17] as Map<String, NodeLatency>
-
-                // Picker source: usable + not hidden — the engine can't
+                // Usable + not hidden — the engine can't
                 // select a disabled node, and a hidden one has already left
                 // the user's lists. The prefs join (not just the node row)
-                // decides both. Auto stays first regardless.
+                // decides both.
                 val usableNodes =
                     nodes.filter { node ->
                         val pref = prefById[node.id]
@@ -338,52 +293,7 @@ class HomeViewModel
                     enabledSubscriptionCount = profiles.count {
                         it.enabled && !SubscriptionRepository.isManualSubscription(it.url)
                     },
-                    serverOptions =
-                        if (nodes.isEmpty()) {
-                            emptyList()
-                        } else {
-                            buildList {
-                                add(
-                                    ServerOption(
-                                        id = NodeSelection.AUTO_ID,
-                                        titleRes = R.string.common_auto_fastest,
-                                        subtitleRes = R.string.home_auto_subtitle,
-                                        searchText = NodeSelection.AUTO_ID,
-                                    ),
-                                )
-                                // One card per subscription (the picker groups by
-                                // groupId): favorites first inside each, original
-                                // (subscriptionId, position) order otherwise.
-                                val ordered =
-                                    favoritesFirstPerGroup(usableNodes, { it.subscriptionId }) { it.id in favoriteIds }
-                                ordered.forEach { node ->
-                                    add(
-                                        ServerOption(
-                                            id = node.id,
-                                            // Local override wins over the
-                                            // provider name — same rule as
-                                            // ServersCard.
-                                            title =
-                                                prefById[node.id]
-                                                    ?.customName
-                                                    ?.takeIf { it.isNotBlank() }
-                                                    ?: node.name,
-                                            protocol = node.protocol,
-                                            groupId = node.subscriptionId,
-                                            groupName = subscriptionNames[node.subscriptionId],
-                                            latency = storedLatency[node.id]?.pickerReading(nowMs),
-                                            // Match the host too — a user hunting
-                                            // for a specific server usually
-                                            // knows its address, not its name.
-                                            searchText = "${node.name} ${node.server}",
-                                            encrypted = isEncrypted(node.toDomain()),
-                                            tunnelAllowed = isTunnelAllowed(node.toDomain()),
-                                        ),
-                                    )
-                                }
-                            }
-                        },
-                    selectedOptionId = selectedId,
+                    serverCount = usableNodes.size,
                     subscriptionName = (if (auto) bestNode else selected)?.let { subscriptionNames[it.subscriptionId] },
                     routingMode = if (connection is VpnConnectionState.Connected ||
                         connection is VpnConnectionState.Reconnecting
@@ -463,12 +373,6 @@ class HomeViewModel
                 // frame on a connected session before combine's first emission.
                 initialValue = HomeUiState(connection = connectionManager.state.value),
             )
-
-        /** Persist a pick from the sheet — the same `selected_node_id` slot
-         *  Servers writes; ConnectionManager reconciles a live engine with it. */
-        fun selectServer(id: String) {
-            viewModelScope.launch { settings.setSelectedNodeId(id) }
-        }
 
         /** Dismiss the "pick not applied" notice. */
         fun dismissSelectionNotice() = connectionManager.clearSelectionError()

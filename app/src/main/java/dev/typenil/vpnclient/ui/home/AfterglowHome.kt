@@ -123,7 +123,6 @@ internal fun AfterglowHomeContent(
     modifier: Modifier = Modifier,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onPick: () -> Unit,
     onAddServer: () -> Unit,
     onOpenConnections: () -> Unit,
     onOpenDetails: () -> Unit,
@@ -139,7 +138,7 @@ internal fun AfterglowHomeContent(
 ) {
     val colors = AfterglowTheme.colors
     val state = ui.connection
-    val noServers = ui.serverOptions.isEmpty() && (state is VpnConnectionState.Idle || state is VpnConnectionState.Error)
+    val noServers = ui.noNodesAtAll && (state is VpnConnectionState.Idle || state is VpnConnectionState.Error)
     // Measured, not fixed: the scroll reserve tracks the real action height
     // (+ modest gap) so large fonts can't bury the tail of the content.
     var actionHeightPx by remember { mutableIntStateOf(0) }
@@ -170,7 +169,7 @@ internal fun AfterglowHomeContent(
             }
             // Selected server + routing and live stats carry the session —
             // shortcuts trail them instead of pushing them below the fold.
-            ServerAndRouting(ui.withAppliedServerOnRejection(), onPick, if (ui.noNodesAtAll) onAddServer else onOpenServers, onOpenRouting)
+            ServerAndRouting(ui.withAppliedServerOnRejection(), onOpenServers, onAddServer, onOpenRouting)
             if (state is VpnConnectionState.Connected) {
                 SessionStats(state, onOpenConnections, onOpenDetails)
             } else if (showLastSession(state, ui.lastSession)) {
@@ -182,7 +181,7 @@ internal fun AfterglowHomeContent(
                 AfterglowRow(
                     title = stringResource(R.string.nav_servers),
                     onClick = onOpenServers,
-                    caption = stringResource(R.string.afterglow_servers_available, (ui.serverOptions.size - 1).coerceAtLeast(0)),
+                    caption = stringResource(R.string.afterglow_servers_available, ui.serverCount),
                     leading = { ServerListIcon() },
                 )
                 AfterglowInsetDivider()
@@ -521,9 +520,9 @@ private fun RoutingIcon() {
 
 
 @Composable
-private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> Unit, onRouting: () -> Unit) {
+private fun ServerAndRouting(ui: HomeUiState, onOpenServers: () -> Unit, onAdd: () -> Unit, onRouting: () -> Unit) {
     val colors = AfterglowTheme.colors
-    val noServers = ui.serverOptions.isEmpty() && (ui.connection is VpnConnectionState.Idle || ui.connection is VpnConnectionState.Error)
+    val noServers = ui.noNodesAtAll && (ui.connection is VpnConnectionState.Idle || ui.connection is VpnConnectionState.Error)
     val live = when (val state = ui.connection) {
         is VpnConnectionState.Connected -> state.node
         is VpnConnectionState.Connecting -> state.node
@@ -551,7 +550,7 @@ private fun ServerAndRouting(ui: HomeUiState, onPick: () -> Unit, onAdd: () -> U
     AfterglowCard {
         AfterglowRow(
             title = title,
-            onClick = if (noServers) onAdd else onPick,
+            onClick = if (noServers) onAdd else onOpenServers,
             overline = {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap), verticalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
                     AfterglowOverline(stringResource(R.string.afterglow_selected_server))

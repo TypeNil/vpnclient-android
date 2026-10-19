@@ -38,7 +38,6 @@ import java.time.Instant
 class AfterglowHomeTest {
     @get:Rule val compose = createComposeRule()
 
-    private val testOption = ServerOption(id = "node-1", title = "Test Server")
     private val testNode = NodeSummary("node-1", "Test Server", ProtocolType.VLESS, "1.1.1.1:443")
 
     /** The hero headline is the Polite live region (67abd85 replaced the old stateDescription). */
@@ -49,11 +48,10 @@ class AfterglowHomeTest {
         var imports = 0
         compose.setContent {
             AfterglowHomeContent(
-                ui = HomeUiState(serverOptions = emptyList()),
+                ui = HomeUiState(),
                 onConnect = {},
                 onDisconnect = {},
-                onPick = {},
-                onAddServer = { imports++ },
+                                onAddServer = { imports++ },
                 onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
@@ -73,13 +71,12 @@ class AfterglowHomeTest {
         compose.setContent {
             AfterglowHomeContent(
                 ui = HomeUiState(
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                 ),
                 onConnect = { connects++ },
                 onDisconnect = {},
-                onPick = {},
-                onAddServer = {},
+                                onAddServer = {},
                 onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
@@ -99,13 +96,12 @@ class AfterglowHomeTest {
             AfterglowHomeContent(
                 ui = HomeUiState(
                     connection = VpnConnectionState.Error(VpnError.PermissionDenied, testNode),
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                 ),
                 onConnect = { retries++ },
                 onDisconnect = {},
-                onPick = {},
-                onAddServer = {},
+                                onAddServer = {},
                 onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
@@ -142,13 +138,12 @@ class AfterglowHomeTest {
             AfterglowHomeContent(
                 ui = HomeUiState(
                     connection = connectedState,
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                 ),
                 onConnect = {},
                 onDisconnect = {},
-                onPick = {},
-                onAddServer = {},
+                                onAddServer = {},
                 onOpenConnections = { connectionsOpened++ },
                 onOpenDetails = { detailsOpened++ },
                 onOpenDiagnostics = {},
@@ -183,10 +178,10 @@ class AfterglowHomeTest {
                     connection = VpnConnectionState.Connected(
                         node = testNode, since = Instant.now(), stats = null, statsReceivedAtNanos = System.nanoTime(),
                     ),
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                 ),
-                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
+                onConnect = {}, onDisconnect = {}, onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {}, notices = emptyList(),
             )
         }
@@ -217,13 +212,12 @@ class AfterglowHomeTest {
             AfterglowHomeContent(
                 ui = HomeUiState(
                     connection = connectedState,
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                 ),
                 onConnect = {},
                 onDisconnect = {},
-                onPick = {},
-                onAddServer = {},
+                                onAddServer = {},
                 onOpenConnections = {},
                 onOpenDetails = {},
                 onOpenDiagnostics = {},
@@ -268,13 +262,12 @@ class AfterglowHomeTest {
                 AfterglowHomeContent(
                     ui = HomeUiState(
                         connection = connectedState,
-                        serverOptions = listOf(testOption),
+                        noNodesAtAll = false, serverCount = 1,
                         selectedNodeName = "An extremely long node display name that keeps going",
                     ),
                     onConnect = {},
                     onDisconnect = { disconnects++ },
-                    onPick = {},
-                    onAddServer = {},
+                                        onAddServer = {},
                     onOpenConnections = {},
                     onOpenDetails = {},
                     onOpenDiagnostics = {},
@@ -297,15 +290,12 @@ class AfterglowHomeTest {
         val ui = mutableStateOf(HomeUiState(
             autoSelected = true,
             noNodesAtAll = false,
-            serverOptions = listOf(ServerOption(
-                id = NodeSelection.AUTO_ID,
-                titleRes = R.string.common_auto_fastest,
-            ), testOption),
+            serverCount = 1,
         ))
         compose.setContent {
             AfterglowHomeContent(
                 ui = ui.value,
-                onConnect = {}, onDisconnect = {}, onPick = { picks++ },
+                onConnect = {}, onDisconnect = {}, onOpenServers = { picks++ },
                 onAddServer = {}, onOpenConnections = {}, onOpenDetails = {},
                 onOpenDiagnostics = {}, onOpenRouting = {}, onDismissGuard = {},
                 notices = emptyList(),
@@ -350,41 +340,16 @@ class AfterglowHomeTest {
         compose.onNodeWithText(context.getString(R.string.afterglow_auto)).assertDoesNotExist()
     }
 
-    @Test fun pickerQueryMatchingAutoDoesNotShowNoMatch() {
-        compose.setContent {
-            ServerPickerSheet(
-                options = listOf(
-                    ServerOption(
-                        id = NodeSelection.AUTO_ID,
-                        titleRes = R.string.common_auto_fastest,
-                        subtitleRes = R.string.home_auto_subtitle,
-                        searchText = NodeSelection.AUTO_ID,
-                    ),
-                    ServerOption(id = "node-1", title = "Test Server", searchText = "Test Server 1.1.1.1"),
-                ),
-                selectedId = null,
-                onPick = {},
-                onOpenServers = {},
-                onDismiss = {},
-            )
-        }
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNode(hasSetTextAction()).performTextInput("auto")
-        compose.onNodeWithText(context.getString(R.string.common_auto_fastest), useUnmergedTree = true).assertExists()
-        compose.onNodeWithText(context.getString(R.string.home_picker_no_match, "auto"))
-            .assertDoesNotExist()
-    }
-
     private fun homeWith(connection: VpnConnectionState, session: dev.typenil.vpnclient.core.vpn.LastSession?) {
         compose.setContent {
             AfterglowHomeContent(
                 ui = HomeUiState(
                     connection = connection,
-                    serverOptions = listOf(testOption),
-                    selectedNodeName = testOption.title,
+                    noNodesAtAll = false, serverCount = 1,
+                    selectedNodeName = "Test Server",
                     lastSession = session,
                 ),
-                onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {},
+                onConnect = {}, onDisconnect = {}, onAddServer = {},
                 onOpenConnections = {}, onOpenDetails = {}, onOpenDiagnostics = {}, onOpenRouting = {},
                 onDismissGuard = {}, notices = emptyList(),
             )
@@ -426,9 +391,9 @@ class AfterglowHomeTest {
                 AfterglowHomeContent(
                     ui = HomeUiState(
                         connection = VpnConnectionState.Connected(testNode, Instant.now(), null),
-                        serverOptions = listOf(testOption), selectedNodeName = testOption.title,
+                        noNodesAtAll = false, serverCount = 1, selectedNodeName = "Test Server",
                     ),
-                    onConnect = {}, onDisconnect = {}, onPick = {}, onAddServer = {},
+                    onConnect = {}, onDisconnect = {}, onAddServer = {},
                     onOpenConnections = {}, onOpenDetails = {}, onOpenDiagnostics = {}, onOpenRouting = {},
                     onDismissGuard = {}, notices = emptyList(),
                 )
