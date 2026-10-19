@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.defaultMinSize
@@ -75,6 +77,7 @@ internal fun redactedHost(url: String): String =
  * (servers · updated | traffic · expiry), the provider announcement, Support and the last error.
  * Delete lives only in the menu (last, error tone). Tapping the card opens the detail sheet.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SubscriptionCard(
     profile: SubscriptionProfile,
@@ -114,22 +117,23 @@ internal fun SubscriptionCard(
             }
             CardMeta(profile, nodeCount, Modifier.padding(end = bodyEnd))
             Column(Modifier.padding(end = bodyEnd)) {
+                var announceOverflow by remember(profile.announce) { mutableStateOf(false) }
                 profile.announce?.let { announce ->
-                    var overflow by remember(announce) { mutableStateOf(false) }
                     Text(
                         announce, style = AfterglowType.rowCaption, color = c.muted,
                         maxLines = ANNOUNCE_LINES, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = AfterglowTokens.headerInset),
-                        onTextLayout = { overflow = it.hasVisualOverflow },
+                        onTextLayout = { announceOverflow = it.hasVisualOverflow },
                     )
-                    // The full text lives in the detail sheet; the card only hints that there is more.
-                    if (overflow) {
-                        CardLink(stringResource(R.string.subs_announce_more), null, onOpenDetails)
-                    }
                 }
-                profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
-                    val supportCd = stringResource(R.string.subs_support_cd, redactedHost(url))
-                    CardLink(stringResource(R.string.subs_support), supportCd) { uriHandler.openUri(url) }
+                // One line of links (wrapping only at big fonts) instead of two stacked 48 dp targets.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.sectionGap)) {
+                    // The full announcement lives in the detail sheet; the card only hints that there is more.
+                    if (announceOverflow) CardLink(stringResource(R.string.subs_announce_more), null, onOpenDetails)
+                    profile.supportUrl?.takeIf { it.startsWith("http") }?.let { url ->
+                        val supportCd = stringResource(R.string.subs_support_cd, redactedHost(url))
+                        CardLink(stringResource(R.string.subs_support), supportCd) { uriHandler.openUri(url) }
+                    }
                 }
                 // The notice fades/expands in when a refresh fails and out when one succeeds; it keeps the last
                 // error text while leaving so it doesn't blank out mid-animation.

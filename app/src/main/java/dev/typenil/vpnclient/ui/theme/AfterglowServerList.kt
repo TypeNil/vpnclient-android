@@ -170,7 +170,7 @@ fun ServerRow(
             horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerGap),
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 if (protocol != null || showLatency) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
                         if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)

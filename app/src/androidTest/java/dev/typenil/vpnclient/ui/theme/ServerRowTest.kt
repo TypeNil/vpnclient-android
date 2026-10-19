@@ -12,7 +12,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -71,10 +74,16 @@ class ServerRowTest {
         compose.onNodeWithContentDescription("Local, SOCKS, $ms5, $label").assertExists()
     }
 
-    @Test fun longNameStaysWithinTwoLinesAndTheRowKeepsItsHeight() {
+    // Three lines, not two (WP-12D-5): mixed-script provider names differ in their tail, and two lines cut it off.
+    @Test fun longNameGetsThreeLinesAndTheRowKeepsItsHeight() {
+        val title = "Very long server name ".repeat(20)
         compose.setContent {
-            ServerRow(title = "Very long server name ".repeat(20), selected = false, onClick = {}, protocol = "VLESS", latency = tcp)
+            ServerRow(title = title, selected = false, onClick = {}, protocol = "VLESS", latency = tcp)
         }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText(title, useUnmergedTree = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(3, layouts.single().lineCount)
+        assertTrue("third line is the last visible one", layouts.single().isLineEllipsized(2))
         val row = compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
         val h = row.getUnclippedBoundsInRoot().height
         assertTrue("row grew to $h", h < 140.dp)

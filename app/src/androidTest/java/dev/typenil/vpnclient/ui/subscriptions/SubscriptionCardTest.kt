@@ -156,8 +156,8 @@ class SubscriptionCardTest {
         assertTrue("same order, one column", servers.top < updated.top && updated.top < used.top && used.top < expires.top)
     }
 
-    private fun linkTextStartsWithCardText(link: String, fontScale: Float) {
-        show(profile(announce = "Synthetic announcement. ".repeat(40), supportUrl = "https://support.invalid/help"), fontScale = fontScale)
+    private fun linkTextStartsWithCardText(link: String, fontScale: Float, announce: String? = "Synthetic announcement. ".repeat(40)) {
+        show(profile(announce = announce, supportUrl = "https://support.invalid/help"), fontScale = fontScale)
         val nameLeft = compose.onNodeWithText(name, useUnmergedTree = true).getUnclippedBoundsInRoot().left
         val text = compose.onNodeWithText(link, useUnmergedTree = true).getUnclippedBoundsInRoot()
         assertEquals("$link text aligns with the card text", nameLeft, text.left)
@@ -165,11 +165,19 @@ class SubscriptionCardTest {
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
     }
 
-    @Test fun supportTextAlignsWithTheCardTextAt1() = linkTextStartsWithCardText(str(R.string.subs_support), 1f)
+    @Test fun supportTextAlignsWithTheCardTextAt1() = linkTextStartsWithCardText(str(R.string.subs_support), 1f, announce = null)
 
-    @Test fun supportTextAlignsWithTheCardTextAt2() = linkTextStartsWithCardText(str(R.string.subs_support), 2f)
+    @Test fun supportTextAlignsWithTheCardTextAt2() = linkTextStartsWithCardText(str(R.string.subs_support), 2f, announce = null)
 
     @Test fun showMoreTextAlignsWithTheCardText() = linkTextStartsWithCardText(str(R.string.subs_announce_more), 1f)
+
+    @Test fun showMoreAndSupportShareOneRowInsteadOfStackingTwoTargets() {
+        show(profile(announce = "Synthetic announcement. ".repeat(40), supportUrl = "https://support.invalid/help"), fontScale = 1f)
+        val more = bounds(str(R.string.subs_announce_more))
+        val support = bounds(str(R.string.subs_support))
+        assertEquals("same row", more.top, support.top)
+        assertTrue("support to the right of show more", support.left > more.right)
+    }
 
     @Test fun nameAndHostAreShownAndHostNeverTheFullUrl() {
         show(profile())
