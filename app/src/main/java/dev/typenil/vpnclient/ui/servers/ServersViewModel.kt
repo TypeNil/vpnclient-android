@@ -130,6 +130,8 @@ data class ServersUiState(
      *  shows the "add a subscription" prompt; false when filters merely
      *  excluded everything. */
     val noSubscriptions: Boolean = true,
+    /** At least one subscription row exists (it may own no servers) — tells "nothing added" from "nothing in it". */
+    val hasSubscriptions: Boolean = false,
 )
 
 /** Engine-reported surface: connection state + per-outbound delays and the
@@ -482,6 +484,7 @@ class ServersViewModel
                     protocolOptions = protocolOptions,
                     showHeaders = !flat,
                     noSubscriptions = surface.nodes.isEmpty(),
+                    hasSubscriptions = names.isNotEmpty(),
                 )
             }.stateIn(
                 scope = viewModelScope,
@@ -513,6 +516,35 @@ class ServersViewModel
 
         fun setShowHidden(enabled: Boolean) {
             showHidden.value = enabled
+        }
+
+        /** The empty search state's action: search text and every filter off (the sort order stays). */
+        fun clearFilters() {
+            query.value = ""
+            favoritesOnly.value = false
+            subscriptionFilter.value = null
+            protocolFilter.value = null
+            showHidden.value = false
+        }
+
+        private val _refreshingAll = MutableStateFlow(false)
+
+        /** True while [refreshSubscriptions] runs — the empty state's button spinner. */
+        val refreshingAll: StateFlow<Boolean> = _refreshingAll
+
+        /** The "subscriptions have no servers" action: one refresh of every enabled subscription; failures show on the Subscriptions cards. */
+        fun refreshSubscriptions() {
+            if (_refreshingAll.value) return
+            _refreshingAll.value = true
+            viewModelScope.launch {
+                try {
+                    subscriptions.profiles.first()
+                        .filter { it.enabled && !SubscriptionRepository.isManualSubscription(it.url) }
+                        .forEach { subscriptions.refresh(it.id) }
+                } finally {
+                    _refreshingAll.value = false
+                }
+            }
         }
 
         /**

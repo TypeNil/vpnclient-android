@@ -303,8 +303,12 @@
     <string name="servers_latency_stale">устарело</string>
     <string name="servers_latency_stop">Остановить</string>
     <string name="servers_latency_progress">%1$d / %2$d</string>
-    <string name="servers_no_match">Нет серверов по текущим фильтрам</string>
-    <string name="servers_latency_timeout">тайм-аут</string>
+    <string name="servers_no_match">Нет подходящих серверов</string>
+    <string name="servers_no_match_hint">Измените запрос или сбросьте фильтры.</string>
+    <string name="servers_clear_filters">Сбросить фильтры</string>
+    <string name="servers_no_servers_title">Серверов пока нет</string>
+    <string name="servers_no_servers_hint">Подписки не вернули серверов. Обновите, чтобы повторить.</string>
+    <string name="servers_latency_timeout">недоступен</string>
     <string name="servers_favorite_remove">Убрать из избранного</string>
     <string name="servers_favorite_add">В избранное</string>
     <string name="servers_latency_ms">%1$d мс</string>
@@ -398,6 +402,9 @@
 
     <!-- Subscriptions -->
     <string name="subs_empty">Пока нет подписок</string>
+    <string name="subs_empty_hint">Добавьте ссылку подписки или одну ссылку на сервер, чтобы получить серверы.</string>
+    <string name="subs_add_cta">Добавить подписку</string>
+    <string name="subs_refreshing">Обновление…</string>
     <string name="subs_delete_confirm_title">Удалить подписку?</string>
     <string name="subs_delete_confirm_text">\"%1$s\" и её серверы будут удалены.</string>
     <string name="subs_manual_hint">Вручную — вставьте ссылки, чтобы добавить</string>

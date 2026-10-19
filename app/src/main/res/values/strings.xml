@@ -298,8 +298,12 @@
     <string name="servers_latency_stale">outdated</string>
     <string name="servers_latency_stop">Stop</string>
     <string name="servers_latency_progress">%1$d / %2$d</string>
-    <string name="servers_no_match">No servers match the current filters</string>
-    <string name="servers_latency_timeout">timeout</string>
+    <string name="servers_no_match">No servers match</string>
+    <string name="servers_no_match_hint">Try a different search or clear the filters.</string>
+    <string name="servers_clear_filters">Clear filters</string>
+    <string name="servers_no_servers_title">No servers yet</string>
+    <string name="servers_no_servers_hint">Your subscriptions returned no servers. Refresh to try again.</string>
+    <string name="servers_latency_timeout">unreachable</string>
     <string name="servers_favorite_remove">Remove from favorites</string>
     <string name="servers_favorite_add">Add to favorites</string>
     <string name="servers_latency_ms">%1$d ms</string>
@@ -391,6 +395,9 @@
 
     <!-- Subscriptions -->
     <string name="subs_empty">No subscriptions yet</string>
+    <string name="subs_empty_hint">Add a subscription link or a single share link to get servers.</string>
+    <string name="subs_add_cta">Add subscription</string>
+    <string name="subs_refreshing">Refreshing…</string>
     <string name="subs_delete_confirm_title">Delete subscription?</string>
     <string name="subs_delete_confirm_text">\"%1$s\" and its servers will be removed.</string>
     <string name="subs_manual_hint">Manual — paste share links to add</string>

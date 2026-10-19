@@ -22,6 +22,14 @@ class ServerRowModelTest {
     }
 
     @Test
+    fun `empty list reason picks its own state`() {
+        assertEquals(ServersEmpty.None, serversEmpty(hasGroups = true, noServersAtAll = false, hasSubscriptions = true))
+        assertEquals(ServersEmpty.NoMatch, serversEmpty(hasGroups = false, noServersAtAll = false, hasSubscriptions = true))
+        assertEquals(ServersEmpty.NoServers, serversEmpty(hasGroups = false, noServersAtAll = true, hasSubscriptions = true))
+        assertEquals(ServersEmpty.NoSubscriptions, serversEmpty(hasGroups = false, noServersAtAll = true, hasSubscriptions = false))
+    }
+
+    @Test
     fun `filter count adds subscription, protocol and show hidden, and is zero by default`() {
         assertEquals(0, activeFilterCount(null, null, false))
         assertEquals(1, activeFilterCount(7L, null, false))

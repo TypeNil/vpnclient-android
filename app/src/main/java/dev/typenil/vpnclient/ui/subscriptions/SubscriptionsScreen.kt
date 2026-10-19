@@ -40,6 +40,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.typenil.vpnclient.ui.theme.AfterglowRadioButton as RadioButton
+import dev.typenil.vpnclient.ui.theme.AfterglowEmptyState
+import dev.typenil.vpnclient.ui.theme.EmptyArt
 import dev.typenil.vpnclient.ui.theme.AfterglowSheet
 import dev.typenil.vpnclient.ui.theme.AfterglowSheetHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
@@ -159,7 +161,7 @@ fun SubscriptionsScreen(
         // Sheet-native primary action: a full-width bordered row, easier to
         // hit than a corner TextButton and consistent with the per-app card
         // in the Routing sheet.
-        Row(
+        if (ui.profiles.isNotEmpty()) Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = AfterglowTokens.sectionGap, vertical = AfterglowTokens.headerInset)
@@ -188,13 +190,10 @@ fun SubscriptionsScreen(
             )
         }
         if (ui.profiles.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(AfterglowTokens.emptyListHeight), contentAlignment = Alignment.Center) {
-                Text(
-                    text = stringResource(R.string.subs_empty),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            AfterglowEmptyState(
+                EmptyArt.Subscriptions, stringResource(R.string.subs_empty), stringResource(R.string.subs_empty_hint),
+                actionLabel = stringResource(R.string.subs_add_cta), onAction = { clearAddFailure(); showAddDialog = true },
+            )
         } else {
             // Bound to the sheet's real height (IME-aware), not a raw
             // screen-height fraction.

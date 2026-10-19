@@ -12,6 +12,16 @@ internal fun <T> favoritesFirstPerGroup(nodes: List<T>, groupOf: (T) -> Long, is
 /** Only an enabled, visible node can be picked: a disabled one isn't in the compiled set, a hidden one isn't shown in any list. */
 internal val ServerNode.canSelect: Boolean get() = enabled && !hidden
 
+/** Why the Servers list is empty — each reason has its own text and action. */
+internal enum class ServersEmpty { None, NoSubscriptions, NoServers, NoMatch }
+
+internal fun serversEmpty(hasGroups: Boolean, noServersAtAll: Boolean, hasSubscriptions: Boolean): ServersEmpty = when {
+    hasGroups -> ServersEmpty.None
+    !noServersAtAll -> ServersEmpty.NoMatch
+    hasSubscriptions -> ServersEmpty.NoServers
+    else -> ServersEmpty.NoSubscriptions
+}
+
 /** The number on "Filters · n": how many of subscription, protocol and "show hidden" are on (0 → no number). */
 internal fun activeFilterCount(subscriptionFilter: Long?, protocolFilter: String?, showHidden: Boolean): Int =
     listOfNotNull(subscriptionFilter, protocolFilter).size + if (showHidden) 1 else 0

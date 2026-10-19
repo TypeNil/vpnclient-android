@@ -63,10 +63,15 @@ class ServersContentTest {
         val favorites = mutableListOf<String>()
         var closed = 0
         var autos = 0
+        var cleared = 0
+        var refreshed = 0
+        var added = 0
         val actions = ServersActions(
             selectNode = { picked += it },
             toggleFavorite = { favorites += it },
             selectAuto = { autos++ },
+            clearFilters = { cleared++ },
+            refreshSubscriptions = { refreshed++ },
         )
     }
 
@@ -74,7 +79,7 @@ class ServersContentTest {
         compose.setContent {
             val d = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale ?: d.fontScale)) {
-                ServersContent(ui, testing = false, progress = null, actions = rec.actions, onSelected = { rec.closed++ })
+                ServersContent(ui, testing = false, progress = null, actions = rec.actions, onAddServer = { rec.added++ }, onSelected = { rec.closed++ })
             }
         }
     }
@@ -195,6 +200,28 @@ class ServersContentTest {
     @Test fun noMatchShowsTheMessage() {
         show(ServersUiState(noSubscriptions = false, groups = emptyList()))
         compose.onNodeWithText(str(R.string.servers_no_match)).assertIsDisplayed()
+    }
+
+    @Test fun noMatchOffersToClearTheFilters() {
+        val rec = Recorder()
+        show(ServersUiState(noSubscriptions = false, groups = emptyList()), rec)
+        compose.onNodeWithText(str(R.string.servers_clear_filters)).performClick()
+        compose.runOnIdle { assertEquals(1, rec.cleared) }
+    }
+
+    @Test fun emptySubscriptionsOfferRefresh() {
+        val rec = Recorder()
+        show(ServersUiState(noSubscriptions = true, hasSubscriptions = true, groups = emptyList()), rec)
+        compose.onNodeWithText(str(R.string.servers_no_servers_title)).assertIsDisplayed()
+        compose.onNodeWithText(str(R.string.subs_refresh_now)).performClick()
+        compose.runOnIdle { assertEquals(1, rec.refreshed) }
+    }
+
+    @Test fun noSubscriptionsOfferToAddOne() {
+        val rec = Recorder()
+        show(ServersUiState(noSubscriptions = true, hasSubscriptions = false, groups = emptyList()), rec)
+        compose.onNodeWithText(str(R.string.subs_add_cta)).performClick()
+        compose.runOnIdle { assertEquals(1, rec.added) }
     }
 
     @Test fun noMatchMessageDoesNotTouchTheAutoCard() {

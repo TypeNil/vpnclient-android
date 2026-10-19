@@ -60,6 +60,9 @@ import dev.typenil.vpnclient.core.engine.singbox.NodeTlsSummary
 import dev.typenil.vpnclient.core.subscription.model.NodeSelection
 import dev.typenil.vpnclient.ui.theme.AfterglowTheme
 import dev.typenil.vpnclient.ui.common.relativeTimeText
+import dev.typenil.vpnclient.ui.theme.AfterglowButtonStyle
+import dev.typenil.vpnclient.ui.theme.AfterglowEmptyState
+import dev.typenil.vpnclient.ui.theme.EmptyArt
 import dev.typenil.vpnclient.ui.theme.AfterglowStar
 import dev.typenil.vpnclient.ui.theme.AfterglowTokens
 import dev.typenil.vpnclient.ui.theme.LocalSheetMaxHeight
@@ -93,13 +96,15 @@ internal data class ServersActions(
     val setNodeCustomName: (String, String?) -> Unit = { _, _ -> },
     val setNodeEnabled: (String, Boolean) -> Unit = { _, _ -> },
     val setNodeHidden: (String, Boolean) -> Unit = { _, _ -> },
+    val clearFilters: () -> Unit = {},
+    val refreshSubscriptions: () -> Unit = {},
 )
 
 private fun ServersViewModel.asActions() =
     ServersActions(
         ::setQuery, ::setSortMode, ::setFavoritesOnly, ::setSubscriptionFilter, ::setProtocolFilter, ::setShowHidden,
         ::testLatency, ::cancelLatencyTest, ::selectAuto, ::selectNode, ::toggleFavorite,
-        ::setNodeCustomName, ::setNodeEnabled, ::setNodeHidden,
+        ::setNodeCustomName, ::setNodeEnabled, ::setNodeHidden, ::clearFilters, ::refreshSubscriptions,
     )
 
 @Composable
@@ -119,8 +124,9 @@ fun ServersScreen(
     DisposableEffect(viewModel) {
         onDispose { if (activity?.isChangingConfigurations != true) viewModel.onScreenLeft() }
     }
+    val refreshing by viewModel.refreshingAll.collectAsStateWithLifecycle()
     val actions = remember(viewModel) { viewModel.asActions() }
-    ServersContent(ui, testing, progress, actions, modifier, onAddServer, onSelected)
+    ServersContent(ui, testing, progress, actions, modifier, onAddServer, onSelected, refreshing)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -133,6 +139,7 @@ internal fun ServersContent(
     modifier: Modifier = Modifier,
     onAddServer: () -> Unit = {},
     onSelected: () -> Unit = {},
+    refreshing: Boolean = false,
 ) {
     val c = AfterglowTheme.colors
     val sheetMax = LocalSheetMaxHeight.current
@@ -220,39 +227,22 @@ internal fun ServersContent(
 
         if (ui.groups.isEmpty()) {
             item(key = "empty") {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(top = AfterglowTokens.emptyTop, bottom = AfterglowTokens.cardGap),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (ui.noSubscriptions) {
-                        // Nothing imported at all — offer the way forward,
-                        // not just a dead label. Opens the Subscriptions
-                        // tab's add dialog (URL or share link).
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = stringResource(R.string.common_no_servers_yet),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Spacer(Modifier.height(AfterglowTokens.headerGap))
-                            Text(
-                                text = stringResource(R.string.common_add_servers_hint),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = AfterglowTokens.emptyInset),
-                            )
-                            Spacer(Modifier.height(AfterglowTokens.screenPadding))
-                            Button(onClick = onAddServer) {
-                                Text(stringResource(R.string.common_add_server_cta))
-                            }
-                        }
-                    } else {
-                        Text(
-                            text = stringResource(R.string.servers_no_match),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                when (serversEmpty(hasGroups = false, noServersAtAll = ui.noSubscriptions, hasSubscriptions = ui.hasSubscriptions)) {
+                    // Nothing imported at all: the way forward is the Subscriptions tab's add dialog (URL or share link).
+                    ServersEmpty.NoSubscriptions -> AfterglowEmptyState(
+                        EmptyArt.Subscriptions, stringResource(R.string.common_no_servers_yet), stringResource(R.string.common_add_servers_hint),
+                        actionLabel = stringResource(R.string.subs_add_cta), onAction = onAddServer,
+                    )
+                    ServersEmpty.NoServers -> AfterglowEmptyState(
+                        EmptyArt.NoServers, stringResource(R.string.servers_no_servers_title), stringResource(R.string.servers_no_servers_hint),
+                        actionLabel = stringResource(if (refreshing) R.string.subs_refreshing else R.string.subs_refresh_now),
+                        onAction = { if (!refreshing) actions.refreshSubscriptions() },
+                    )
+                    else -> AfterglowEmptyState(
+                        EmptyArt.Search, stringResource(R.string.servers_no_match), stringResource(R.string.servers_no_match_hint),
+                        actionLabel = stringResource(R.string.servers_clear_filters), actionStyle = AfterglowButtonStyle.Secondary,
+                        onAction = actions.clearFilters,
+                    )
                 }
             }
         }
