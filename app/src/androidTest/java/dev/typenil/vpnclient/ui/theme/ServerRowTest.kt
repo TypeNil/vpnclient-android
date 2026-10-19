@@ -89,6 +89,20 @@ class ServerRowTest {
         assertTrue("row grew to $h", h < 140.dp)
     }
 
+    // A failed probe says "unreachable"; a server never probed shows the dash — never the same text.
+    @Test fun unreachableChipIsTextAndDiffersFromNotMeasured() {
+        val unreachable = context.getString(R.string.servers_latency_timeout)
+        compose.setContent {
+            Column {
+                ServerRow(title = "Dead", selected = false, onClick = {}, protocol = "VLESS", latency = LatencyReading(null, R.string.servers_latency_method_tcp))
+                ServerRow(title = "Fresh", selected = false, onClick = {}, protocol = "VLESS", latency = null)
+            }
+        }
+        compose.onNodeWithText(unreachable, useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Fresh, VLESS").assertExists()
+        assertTrue(unreachable != context.getString(R.string.common_none))
+    }
+
     @Test fun outdatedChipKeepsTheValueAndTheRowSpeaksIt() {
         compose.setContent {
             ServerRow(
