@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,7 +30,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import dev.typenil.vpnclient.R
 import dev.typenil.vpnclient.ui.common.headingSemantics
 
@@ -61,7 +60,7 @@ fun AfterglowSheet(
         containerColor = colors.paper,
         contentColor = colors.ink,
         shape = AfterglowTokens.sheetShape,
-        tonalElevation = 0.dp,
+        tonalElevation = AfterglowTokens.noElevation,
         scrimColor =
             androidx.compose.ui.graphics.Color.Black
                 .copy(alpha = .55f),
@@ -72,9 +71,9 @@ fun AfterglowSheet(
                     // Material makes the handle a focusable expand/dismiss target;
                     // without a label TalkBack announces an unnamed control.
                     .semantics { contentDescription = handleLabel }
-                    .padding(top = 12.dp, bottom = 16.dp)
-                    .size(width = 32.dp, height = 4.dp)
-                    .background(colors.border, RoundedCornerShape(4.dp)),
+                    .padding(top = AfterglowTokens.cardGap, bottom = AfterglowTokens.screenPadding)
+                    .size(width = AfterglowTokens.handleWidth, height = AfterglowTokens.handleHeight)
+                    .background(colors.border, CircleShape),
             )
         },
     ) {
@@ -94,7 +93,7 @@ fun AfterglowSheetHeader(
 ) {
     val colors = AfterglowTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = AfterglowTokens.sectionGap, end = AfterglowTokens.headerGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -107,9 +106,10 @@ fun AfterglowSheetHeader(
             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).headingSemantics(),
         )
-        IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
-            Icon(Icons.Default.Close, contentDescription = closeLabel, tint = colors.ink)
+        IconButton(onClick = onDismiss, modifier = Modifier.size(AfterglowTokens.touchTarget)) {
+            // Scales with the font like the other sheet glyphs; the 48 dp target holds up to 2.0.
+            Icon(Icons.Default.Close, contentDescription = closeLabel, tint = colors.ink, modifier = Modifier.size(scaledDp(AfterglowTokens.iconSize)))
         }
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(AfterglowTokens.headerGap))
 }

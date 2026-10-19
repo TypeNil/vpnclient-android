@@ -26,6 +26,12 @@ class ServerListModelTest {
     }
 
     @Test
+    fun `an outdated reading is muted whatever its value, a fresh one keeps its tone`() {
+        for (ms in listOf(5, 300, 900, null)) assertEquals(LatencyTone.None, latencyTone(LatencyReading(ms, 0, stale = true)))
+        assertEquals(LatencyTone.Good, latencyTone(LatencyReading(5, 0, stale = false)))
+    }
+
+    @Test
     fun `chip colours come from the palette and only failures are red`() {
         for (p in listOf(LightAfterglow, DarkAfterglow)) {
             assertEquals(p.jade, p.latencyChipColors(LatencyTone.Good).background.copy(alpha = 1f))

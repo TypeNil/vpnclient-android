@@ -80,6 +80,18 @@ class ServerRowTest {
         assertTrue("row grew to $h", h < 140.dp)
     }
 
+    @Test fun outdatedChipKeepsTheValueAndTheRowSpeaksIt() {
+        compose.setContent {
+            ServerRow(
+                title = "Demo", selected = false, onClick = {}, protocol = "SOCKS",
+                latency = LatencyReading(5, R.string.servers_latency_method_tcp, stale = true),
+                spoken = "outdated, 2 days ago",
+            )
+        }
+        compose.onNodeWithText(ms5, useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("outdated, 2 days ago", substring = true).assertIsDisplayed()
+    }
+
     @Test fun largestFontKeepsChipVisibleAndRowClickable() {
         var clicks = 0
         compose.setContent {

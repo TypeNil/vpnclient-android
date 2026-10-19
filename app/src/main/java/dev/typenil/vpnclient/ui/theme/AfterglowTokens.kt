@@ -17,6 +17,9 @@ object AfterglowTokens {
     val tileSize = 44.dp
     val iconSize = 20.dp
     val chipIconSize = 18.dp
+    val noElevation = 0.dp
+    val handleWidth = 32.dp
+    val handleHeight = 4.dp
     val progressSize = 16.dp
     val progressStroke = 2.dp
     val emptyTop = 48.dp

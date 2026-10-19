@@ -48,13 +48,13 @@ const val LATENCY_FAIR_MAX_MS = 400
 
 enum class LatencyTone { Good, Fair, Poor, None }
 
-/** A stored verdict as the chip shows it: [ms] null = the probe failed; [methodRes] names what was measured. */
-data class LatencyReading(val ms: Int?, @param:StringRes val methodRes: Int)
+/** A stored verdict as the chip shows it: [ms] null = the probe failed; [methodRes] names what was measured; [stale] = outdated, shown muted. */
+data class LatencyReading(val ms: Int?, @param:StringRes val methodRes: Int, val stale: Boolean = false)
 
 fun latencyTone(reading: LatencyReading?): LatencyTone {
     val ms = reading?.ms
     return when {
-        reading == null -> LatencyTone.None
+        reading == null || reading.stale -> LatencyTone.None
         ms == null -> LatencyTone.Poor
         ms <= LATENCY_GOOD_MAX_MS -> LatencyTone.Good
         ms <= LATENCY_FAIR_MAX_MS -> LatencyTone.Fair
@@ -101,7 +101,11 @@ fun LatencyChip(reading: LatencyReading?, modifier: Modifier = Modifier) {
         if (reading == null) {
             stringResource(R.string.picker_latency_unknown)
         } else {
-            "${latencyText(reading)}, ${stringResource(reading.methodRes)}"
+listOfNotNull(
+                latencyText(reading),
+                if (reading.stale) stringResource(R.string.servers_latency_stale) else null,
+                stringResource(reading.methodRes),
+            ).joinToString(", ")
         }
     Text(
         text = latencyText(reading),

@@ -336,7 +336,7 @@ private fun SortSelector(
                     Icon(
                         Icons.Default.ArrowDropDown,
                         contentDescription = null,
-                        modifier = Modifier.size(AfterglowTokens.chipIconSize),
+                        modifier = Modifier.size(scaledDp(AfterglowTokens.chipIconSize)),
                     )
                 }
             },
@@ -354,7 +354,7 @@ private fun SortSelector(
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = null,
-                                modifier = Modifier.size(AfterglowTokens.chipIconSize),
+                                modifier = Modifier.size(scaledDp(AfterglowTokens.chipIconSize)),
                             )
                         }
                     },
@@ -383,7 +383,7 @@ private fun FiltersEntry(
                 Icon(
                     Icons.Default.ArrowDropDown,
                     contentDescription = null,
-                    modifier = Modifier.size(AfterglowTokens.chipIconSize),
+                    modifier = Modifier.size(scaledDp(AfterglowTokens.chipIconSize)),
                 )
             }
         },
@@ -513,27 +513,21 @@ private fun ServerNodeRow(
     val c = AfterglowTheme.colors
     val iconSize = scaledDp(AfterglowTokens.iconSize)
 
-    // Method and age live in the row's spoken description; only an outdated verdict earns a visible line.
+    // Method and age live in the row's spoken description; an outdated chip is only muted.
     val history = latency.history
     val historyAge = history?.let { relativeTimeText(maxOf(0L, nowMs - it.checkedAtMs)) }
     val freshness = stringResource(if (latency.stale) R.string.servers_latency_stale else R.string.servers_latency_earlier)
     val spoken =
         listOfNotNull(
             latency.reading?.let { stringResource(it.methodRes) },
-            history?.takeIf { !latency.stale }?.let { "$freshness, $historyAge" },
+            history?.let { "$freshness, $historyAge" },
         ).joinToString(" · ").ifEmpty { null }
-    val staleLine =
-        history?.takeIf { latency.stale }?.let {
-            val value = it.latencyMs?.let { ms -> stringResource(R.string.servers_latency_ms, ms) } ?: stringResource(R.string.servers_latency_timeout)
-            "$value · $freshness, $historyAge"
-        }
     // Disabled / hidden are honest state — the row stays rendered (the user manages it), but neither is engine-pickable.
     val caption =
         listOfNotNull(
             if (!node.encrypted && node.tunnelAllowed) stringResource(R.string.servers_local_sidecar) else null,
             if (!node.enabled) stringResource(R.string.servers_disabled_label) else null,
             if (node.hidden) stringResource(R.string.servers_hidden_label) else null,
-            staleLine,
         ).joinToString("\n").ifEmpty { null }
     // An insecure TLS config is a risk the user must see even before connecting — the details dialog carries the full picture.
     val warning =

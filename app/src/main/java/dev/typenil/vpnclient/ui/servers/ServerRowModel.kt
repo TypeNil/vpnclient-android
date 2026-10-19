@@ -18,7 +18,7 @@ internal fun activeFilterCount(subscriptionFilter: Long?, protocolFilter: String
 
 /**
  * What a row shows for latency. [reading] feeds the chip; [history] is the persisted verdict behind
- * it (fresh → the chip shows it, [stale] → the chip stays empty and only a muted line mentions it).
+ * it (fresh → the chip shows it; [stale] → the chip shows the value muted, no tint — age rides on the spoken description).
  */
 internal data class NodeLatencyView(val reading: LatencyReading?, val history: NodeLatency? = null, val stale: Boolean = false)
 
@@ -29,15 +29,15 @@ internal fun nodeLatencyView(delayMs: Int?, tested: Boolean, stored: NodeLatency
         tested -> NodeLatencyView(LatencyReading(null, live))
         stored == null -> NodeLatencyView(null)
         stored.isFresh(nowMs) -> NodeLatencyView(
-            LatencyReading(
-                stored.latencyMs,
-                when (stored.method) {
-                    LatencyMethod.Tcp -> R.string.servers_latency_method_tcp
-                    LatencyMethod.Proxy -> R.string.servers_latency_method_proxy
-                },
-            ),
+            LatencyReading(stored.latencyMs, storedMethodRes(stored)),
             history = stored,
         )
-        else -> NodeLatencyView(null, history = stored, stale = true)
+        else -> NodeLatencyView(LatencyReading(stored.latencyMs, storedMethodRes(stored), stale = true), history = stored, stale = true)
     }
 }
+
+private fun storedMethodRes(stored: NodeLatency): Int =
+    when (stored.method) {
+        LatencyMethod.Tcp -> R.string.servers_latency_method_tcp
+        LatencyMethod.Proxy -> R.string.servers_latency_method_proxy
+    }

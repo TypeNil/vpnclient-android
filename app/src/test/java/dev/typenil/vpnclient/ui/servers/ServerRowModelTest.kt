@@ -48,15 +48,21 @@ class ServerRowModelTest {
     }
 
     @Test
-    fun `a fresh stored verdict fills the chip with its own method, an outdated one only leaves history`() {
+    fun `a fresh stored verdict fills the chip with its own method, an outdated one keeps its value but is flagged stale`() {
         val fresh = nodeLatencyView(null, false, NodeLatency(7, now - 1_000, LatencyMethod.Proxy), connected = false, nowMs = now)
         assertEquals(7, fresh.reading?.ms)
         assertEquals(R.string.servers_latency_method_proxy, fresh.reading?.methodRes)
         assertFalse(fresh.stale)
         val old = nodeLatencyView(null, false, NodeLatency(7, now - LATENCY_TTL_MS - 1, LatencyMethod.Tcp), connected = false, nowMs = now)
-        assertNull(old.reading)
+        assertEquals(7, old.reading?.ms)
+        assertEquals(true, old.reading?.stale)
+        assertEquals(R.string.servers_latency_method_tcp, old.reading?.methodRes)
         assertTrue(old.stale)
         assertEquals(7, old.history?.latencyMs)
+        assertEquals(false, fresh.reading?.stale)
+        val oldTimeout = nodeLatencyView(null, false, NodeLatency(null, now - LATENCY_TTL_MS - 1, LatencyMethod.Tcp), connected = false, nowMs = now)
+        assertNull(oldTimeout.reading?.ms)
+        assertEquals(true, oldTimeout.reading?.stale)
     }
 
     private fun serverNode(enabled: Boolean = true, hidden: Boolean = false) =
