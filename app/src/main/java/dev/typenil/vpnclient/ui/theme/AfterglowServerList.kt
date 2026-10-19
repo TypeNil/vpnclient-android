@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +22,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -180,15 +186,33 @@ fun ServerRow(
     }
 }
 
-/** One card per provider: optional [header] ("Provider · N"), then [content] rows split by thin dividers. Not sticky. [selectedOutline] = the card itself is the selection (Auto). */
+/**
+ * One row's slice of a provider card. A lazy list can't wrap its rows in one Column, so every row draws its own part of the card:
+ * rounded top on the [first], rounded bottom on the [last], the border down both sides. [header] ("Provider · N") rides on the first slice. Not sticky.
+ */
 @Composable
-fun ProviderGroupCard(header: String?, modifier: Modifier = Modifier, selectedOutline: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
-    AfterglowCard(modifier, outline = AfterglowTheme.colors.cardOutline(selectedOutline)) {
+fun ProviderCardSlice(first: Boolean, last: Boolean, header: String?, content: @Composable () -> Unit) {
+    val c = AfterglowTheme.colors
+    val r = AfterglowTokens.cardRadius
+    val shape = RoundedCornerShape(topStart = if (first) r else 0.dp, topEnd = if (first) r else 0.dp, bottomStart = if (last) r else 0.dp, bottomEnd = if (last) r else 0.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(c.surfaceElevated)
+            .drawBehind {
+                // The card's rounded border, pushed past the slice edge where the card continues; the clip cuts the overshoot.
+                val w = AfterglowTokens.border.toPx()
+                val top = if (first) w / 2 else -2 * r.toPx()
+                val bottom = if (last) size.height - w / 2 else size.height + 2 * r.toPx()
+                drawRoundRect(c.border, Offset(w / 2, top), Size(size.width - w, bottom - top), CornerRadius(r.toPx()), Stroke(w))
+            },
+    ) {
         if (header != null) {
             Text(
                 header,
                 style = AfterglowType.statLabel,
-                color = AfterglowTheme.colors.muted,
+                color = c.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
@@ -196,6 +220,7 @@ fun ProviderGroupCard(header: String?, modifier: Modifier = Modifier, selectedOu
                     .padding(start = AfterglowTokens.rowPaddingH, end = AfterglowTokens.rowPaddingH, top = AfterglowTokens.headerGap),
             )
         }
+        if (!first) ServerRowDivider()
         content()
     }
 }

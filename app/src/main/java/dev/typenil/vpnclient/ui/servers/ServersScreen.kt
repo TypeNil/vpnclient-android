@@ -68,9 +68,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import dev.typenil.vpnclient.ui.theme.ProviderGroupCard
+import dev.typenil.vpnclient.ui.theme.ProviderCardSlice
+import dev.typenil.vpnclient.ui.theme.AfterglowCard
+import dev.typenil.vpnclient.ui.theme.cardOutline
+import androidx.compose.foundation.lazy.itemsIndexed
 import dev.typenil.vpnclient.ui.theme.ServerRow
-import dev.typenil.vpnclient.ui.theme.ServerRowDivider
 import dev.typenil.vpnclient.ui.theme.scaledDp
 import dev.typenil.vpnclient.ui.theme.showProviderHeader
 import dev.typenil.vpnclient.ui.theme.AfterglowType
@@ -137,14 +139,14 @@ internal fun ServersContent(
         ?: LocalConfiguration.current.screenHeightDp.dp
     val showHeaders = ui.showHeaders && showProviderHeader(ui.groups.size)
     val now = System.currentTimeMillis()
-    // ponytail: one non-lazy card per provider; 300 nodes measured in the 12D-3 report. Go per-row lazy if a single provider reaches thousands.
+    // Rows are lazy items (a provider card is drawn slice by slice): one non-lazy card per provider took ~2.4 s to first frame on 300 nodes.
     LazyColumn(
         modifier = modifier.fillMaxWidth().heightIn(max = sheetMax * .78f),
         contentPadding = PaddingValues(start = AfterglowTokens.screenPadding, top = AfterglowTokens.cardGap, end = AfterglowTokens.screenPadding, bottom = AfterglowTokens.screenPadding),
-        verticalArrangement = Arrangement.spacedBy(AfterglowTokens.cardGap),
+        // No spacedBy: rows of one provider card touch; the last slice and the other items carry the gap.
     ) {
         item(key = "controls") {
-            Column(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(bottom = AfterglowTokens.cardGap)) {
                 OutlinedTextField(
                     value = ui.query,
                     onValueChange = actions.setQuery,
@@ -258,47 +260,54 @@ internal fun ServersContent(
         // selection that cannot connect.
         if (!ui.noSubscriptions) {
             item(key = "auto") {
-                val auto = nodeLatencyView(ui.delays[NodeSelection.AUTO_ID], tested = false, stored = null, connected = ui.connected, nowMs = now)
-                ProviderGroupCard(header = null, selectedOutline = ui.autoSelected) {
-                    ServerRow(
-                        title = stringResource(R.string.common_auto_fastest),
-                        selected = ui.autoSelected,
-                        onClick = {
-                            actions.selectAuto()
-                            onSelected()
-                        },
-                        latency = auto.reading,
-                        showLatency = auto.reading != null,
-                        caption = stringResource(R.string.home_auto_subtitle),
-                    )
+                Box(Modifier.padding(bottom = AfterglowTokens.cardGap)) {
+                    val auto = nodeLatencyView(ui.delays[NodeSelection.AUTO_ID], tested = false, stored = null, connected = ui.connected, nowMs = now)
+                    AfterglowCard(outline = AfterglowTheme.colors.cardOutline(ui.autoSelected)) {
+                        ServerRow(
+                            title = stringResource(R.string.common_auto_fastest),
+                            selected = ui.autoSelected,
+                            onClick = {
+                                actions.selectAuto()
+                                onSelected()
+                            },
+                            latency = auto.reading,
+                            showLatency = auto.reading != null,
+                            caption = stringResource(R.string.home_auto_subtitle),
+                        )
+                    }
                 }
             }
         }
 
-        items(ui.groups, key = { "group-${it.subscriptionId}" }) { group ->
-            val name = group.subscriptionName?.takeIf { it.isNotBlank() }
-                ?: stringResource(R.string.common_subscription_numbered, group.subscriptionId)
-            ProviderGroupCard(header = if (showHeaders) stringResource(R.string.picker_group_header, name, group.nodes.size) else null) {
-                group.nodes.forEachIndexed { index, node ->
-                    if (index > 0) ServerRowDivider()
-                    ServerNodeRow(
-                        node = node,
-                        selected = node.id == ui.selectedNodeId,
-                        latency = nodeLatencyView(ui.delays[node.id], node.id in ui.testedNodeIds, ui.storedLatency[node.id], ui.connected, now),
-                        nowMs = now,
-                        // A disabled or hidden node stays rendered (the user manages it) but tapping it must
-                        // not persist a selection the engine can't honor / the lists don't show — keep the row, drop the click.
-                        onClick = {
-                            if (node.canSelect) {
-                                actions.selectNode(node.id)
-                                onSelected()
-                            }
-                        },
-                        onToggleFavorite = { actions.toggleFavorite(node.id) },
-                        onRename = { newName -> actions.setNodeCustomName(node.id, newName) },
-                        onSetEnabled = { enabled -> actions.setNodeEnabled(node.id, enabled) },
-                        onSetHidden = { hidden -> actions.setNodeHidden(node.id, hidden) },
-                    )
+        ui.groups.forEach { group ->
+            itemsIndexed(group.nodes, key = { _, node -> "node-${group.subscriptionId}-${node.id}" }) { index, node ->
+                val last = index == group.nodes.lastIndex
+                val header = if (index == 0 && showHeaders) {
+                    val name = group.subscriptionName?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.common_subscription_numbered, group.subscriptionId)
+                    stringResource(R.string.picker_group_header, name, group.nodes.size)
+                } else null
+                Box(if (last) Modifier.padding(bottom = AfterglowTokens.cardGap) else Modifier) {
+                    ProviderCardSlice(first = index == 0, last = last, header = header) {
+                        ServerNodeRow(
+                            node = node,
+                            selected = node.id == ui.selectedNodeId,
+                            latency = nodeLatencyView(ui.delays[node.id], node.id in ui.testedNodeIds, ui.storedLatency[node.id], ui.connected, now),
+                            nowMs = now,
+                            // A disabled or hidden node stays rendered (the user manages it) but tapping it must
+                            // not persist a selection the engine can't honor / the lists don't show — keep the row, drop the click.
+                            onClick = {
+                                if (node.canSelect) {
+                                    actions.selectNode(node.id)
+                                    onSelected()
+                                }
+                            },
+                            onToggleFavorite = { actions.toggleFavorite(node.id) },
+                            onRename = { newName -> actions.setNodeCustomName(node.id, newName) },
+                            onSetEnabled = { enabled -> actions.setNodeEnabled(node.id, enabled) },
+                            onSetHidden = { hidden -> actions.setNodeHidden(node.id, hidden) },
+                        )
+                    }
                 }
             }
         }

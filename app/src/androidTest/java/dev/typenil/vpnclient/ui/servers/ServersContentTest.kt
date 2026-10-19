@@ -194,4 +194,11 @@ class ServersContentTest {
         compose.onAllNodesWithContentDescription(str(R.string.servers_node_menu))[0]
             .assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
     }
+
+    @Test fun rowsAreLazyAndTheCardKeepsItsHeaderOnTheFirstRow() {
+        show(state(ServerGroup(1L, "Alpha", (0 until 300).map { node("n%03d".format(it)) }), ServerGroup(2L, "Beta", listOf(node("b1")))))
+        compose.onNodeWithText(str(R.string.picker_group_header, "Alpha", 300)).assertIsDisplayed()
+        compose.onNodeWithContentDescription("n000, VLESS", substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("n299, VLESS", substring = true).assertDoesNotExist()
+    }
 }

@@ -50,7 +50,8 @@ object AfterglowTokens {
     val chipShape = RoundedCornerShape(8.dp)
     val tileShape = RoundedCornerShape(12.dp)
     val inputShape = RoundedCornerShape(12.dp)
-    val cardShape = RoundedCornerShape(16.dp)
+    val cardRadius = 16.dp
+    val cardShape = RoundedCornerShape(cardRadius)
     val barShape = RoundedCornerShape(20.dp)
     val actionTileShape = RoundedCornerShape(14.dp)
     val dialogShape = RoundedCornerShape(20.dp)
