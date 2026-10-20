@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -130,6 +132,7 @@ fun scaledDp(size: Dp): Dp = with(LocalDensity.current) { size.value.sp.toDp() }
  * [warning] are lines under the title; [spoken] is extra text for the row's accessibility
  * description only (latency method and age).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ServerRow(
     title: String,
@@ -172,7 +175,8 @@ fun ServerRow(
             Column(Modifier.weight(1f)) {
                 Text(title, style = AfterglowType.rowTitle, color = c.ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 if (protocol != null || showLatency) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
+                    // FlowRow: at large font scale the chip wraps under the protocol instead of being clipped.
+                    FlowRow(itemVerticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AfterglowTokens.headerInset)) {
                         if (protocol != null) Text(protocol, style = AfterglowType.rowCaption, color = c.muted, maxLines = 1)
                         if (protocol != null && showLatency) Text("·", style = AfterglowType.rowCaption, color = c.muted)
                         if (showLatency) LatencyChip(latency)

@@ -129,6 +129,23 @@ class ServerRowTest {
         compose.runOnIdle { assertEquals(1, clicks) }
     }
 
+    // Regression (WP-12D-5): at 2x font the "unreachable" chip was clipped to "unreachab" beside a narrow title column.
+    @Test fun unreachableChipIsNeverClippedAtLargestFont() {
+        val unreachable = context.getString(R.string.servers_latency_timeout)
+        compose.setContent {
+            val d = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(d.density, fontScale = 2f)) {
+                Column(Modifier.size(230.dp, 600.dp)) {
+                    ServerRow(title = "Demo Amsterdam", selected = false, onClick = {}, protocol = "VLESS", latency = LatencyReading(null, R.string.servers_latency_method_tcp), actions = actionBox)
+                }
+            }
+        }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText(unreachable, useUnmergedTree = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue("chip text is clipped", !layouts.single().didOverflowWidth)
+        compose.onNodeWithText(unreachable, useUnmergedTree = true).assertIsDisplayed()
+    }
+
     private val actionBox: @Composable () -> Unit = { Spacer(Modifier.size(96.dp, 48.dp)) }
 
     private val longTitle = "Long server name ".repeat(12)
